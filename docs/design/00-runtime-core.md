@@ -1240,31 +1240,184 @@ enum class Reliability : uint8_t {
 ### 14.3 theseed 的实现策略
 
 ```
-BigWorld 的做法：自己用 UDP + 自建可靠性层（Mercury）
-  优势：极致性能，同一通道混用可靠/不可靠
-  代价：实现复杂度极高（序列号/ACK/窗口/重传/分片/Piggyback）
+三种方案对比：
 
-KBEngine 的做法：全部走 TCP
-  优势：实现简单，操作系统保证可靠性
-  代价：位置更新也走 TCP 可靠传输，浪费带宽和延迟
+┌──────────┬──────────────┬──────────────┬──────────────┐
+│          │ Mercury      │ KCP          │ Aeron        │
+│          │ (BigWorld)   │              │ (theseed 选) │
+├──────────┼──────────────┼──────────────┼──────────────┤
+│ 传输层   │ UDP + 自建    │ UDP + 自建   │ UDP + 媒体驱动│
+│ 可靠/不可靠│ 同通道混用    │ 同通道混用   │ 同通道混用    │
+│          │              │              │ reliable=true/false │
+│ 零拷贝   │ 否           │ 否           │ 是（memory-mapped）│
+│ 背压     │ 无           │ 无           │ 有（publisher flow control）│
+│ 多播     │ 无           │ 无           │ 有（UDP multicast）│
+│ 同机 IPC  │ 无           │ 无           │ 有（aeron:ipc shared memory）│
+│ 分片重组  │ 手动         │ 手动         │ 内建（fragment assembler）│
+│ 延迟     │ 极低         │ 低           │ 极低（同机 IPC sub-μs）│
+│ C++ SDK  │ 无           │ C            │ C++（官方）   │
+│ 实现复杂度│ 极高         │ 低           │ 中            │
+│ 运维工具  │ 无           │ 无           │ 驱动监控、统计、归档│
+│ 成熟度   │ BigWorld 内部 │ 游戏行业广泛  │ 金融/HFT 验证  │
+└──────────┴──────────────┴──────────────┴──────────────┘
 
-theseed 的折中：
-  进程间内部通信：
-    方案 A（推荐）：KCP over UDP
-      - KCP 提供 Mercury 类似的能力：可靠/不可靠混用
-      - 比 Mercury 实现简单得多（开源成熟库）
-      - 延迟接近原生 UDP（比 TCP 低 30-40%）
-      - 支持 KCP 的各种模式（快速/普通/低速）
+theseed 选择 Aeron 的理由：
 
-    方案 B（简单部署）：TCP + 可靠性标记
-      - 仍然走 TCP
-      - 可靠性标记作为元数据保留
-      - 位置更新走独立 UDP 端口（不可靠通道）
-      - 实现简单，但不如方案 A 干净
+  1. Mercury 级能力，但不用自己写可靠性层
+     - Aeron 内建 reliable=true/false：同一条连接混用
+     - 等价于 Mercury 的 RELIABLE_NO / RELIABLE_CRITICAL
+     - 不用维护序列号/ACK/窗口/重传/分片
 
-  客户端通信：
-    TCP（可靠）+ 可选 UDP（不可靠位置更新）
-    或 WebSocket（Web 客户端）
+  2. 零拷贝——比 Mercury 和 KCP 都快
+     - Aeron 使用 memory-mapped buffer（AtomicBuffer）
+     - 发送方直接写入共享内存区域，接收方直接读取
+     - 无需 send()/recv() 系统调用拷贝
+     - 同机 IPC 路径可达 sub-microsecond 延迟
+
+  3. 内建背压——游戏服务器最需要但最难做对的
+     - Publication.offer() 在缓冲区满时返回流控错误
+     - 发送方必须处理（不阻塞、不丢消息）
+     - 这正好适配 tick 模型：tick 内发不完就留到下个 tick
+
+  4. 多播——EntityCall 广播场景天然适配
+     - 属性同步广播：一个 Publication → 多个 Subscription
+     - AOI 进入/离开通知：多播给所有相关 CellApp
+     - 配置变更广播：一次发送所有进程收到
+
+  5. 同机 IPC——同机房部署的杀手级优化
+     - aeron:ipc 走共享内存，不经过网络栈
+     - CellApp 和 BaseApp 在同一台机器时，延迟 sub-μs
+     - Mercury 和 KCP 都做不到这点
+
+  6. 成熟的 C++ SDK——不用自己写
+     - 官方维护的 aeron-cpp 客户端
+     - FragmentAssembler 处理大消息分片
+     - SleepingIdleStrategy / BusySpinIdleStrategy 可选
+
+Aeron 与 Mercury 的映射：
+  Mercury RELIABLE_NO     → Aeron reliable=false（位置更新）
+  Mercury RELIABLE_DRIVER → Aeron reliable=false + best-effort（属性同步）
+  Mercury RELIABLE_PASSENGER → Aeron reliable=true（EntityCall）
+  Mercury RELIABLE_CRITICAL  → Aeron reliable=true（实体创建/迁移/销毁）
+  Mercury isLocalRegular  → Aeron IdleStrategy（tick 驱动发送）
+  Mercury Piggyback ACK   → Aeron NAK-based 重传（内建）
+  Mercury SendingStats    → Aeron Counters（内建）
+```
+
+### 14.4 Aeron 在 theseed 中的集成
+
+```
+架构：
+
+┌─────────────────────────────────────────────────────────┐
+│ theseed Runtime                                         │
+│                                                          │
+│  IReliableTransport（theseed 抽象接口）                   │
+│       │                                                  │
+│       ├── AeronTransport（推荐，内网进程间）               │
+│       │     ├── EntityCall: aeron:udp?reliable=true      │
+│       │     ├── 属性同步: aeron:udp?reliable=false       │
+│       │     ├── 位置更新: aeron:udp?reliable=false       │
+│       │     └── 同机 IPC: aeron:ipc（共享内存）           │
+│       │                                                  │
+│       └── TCPTransport（备选，简单部署/跨机房）            │
+│             └── 全走 TCP，可靠性标记保留为元数据            │
+│                                                          │
+│  Aeron Media Driver（每台机器一个）                       │
+│       ├── UDP Transport                                  │
+│       ├── IPC Transport（共享内存）                       │
+│       ├── 多播路由                                       │
+│       └── 流控 + 重传 + 分片                              │
+└─────────────────────────────────────────────────────────┘
+
+Stream ID 分配（Aeron 用 streamId 区分同一连接上的不同流）：
+
+  Stream ID    用途                    可靠性
+  ──────────   ──────────────          ────────
+  1001         EntityCall              reliable=true
+  1002         属性同步（real→ghost）   reliable=true
+  1003         位置/朝向更新            reliable=false
+  1004         实体创建/销毁            reliable=true
+  1005         迁移数据                reliable=true
+  1006         AOI 进入/离开           reliable=false
+  2001         控制面消息              reliable=true
+  2002         心跳                    reliable=false
+
+可靠性由 subscription 端决定（不是 publication 端）：
+  - 发送方统一用 Publication.offer()
+  - 接收方根据 streamId 选择 reliable=true/false 的 Subscription
+  - reliable=false 的 Subscription 丢帧时用 padding 填充，不等待重传
+```
+
+### 14.5 Aeron 使用示例
+
+```cpp
+// runtime/AeronTransport.h
+
+#include <Aeron.h>
+#include <FragmentAssembler.h>
+
+class AeronTransport : public IReliableTransport {
+public:
+    void init(const AeronConfig& config) {
+        aeron::Context ctx;
+        ctx.errorHandler([](const std::exception& ex) {
+            LOG_ERROR("aeron error", {{"what", ex.what()}});
+        });
+
+        aeron_ = aeron::Aeron::connect(ctx);
+
+        // 进程间通信：UDP
+        // 同机自动走 aeron:ipc（共享内存），跨机走 UDP
+        const std::string channel = config.useIPC
+            ? "aeron:ipc"
+            : "aeron:udp?endpoint=" + config.endpoint;
+
+        // 创建可靠 Publication（EntityCall、实体创建等）
+        reliablePub_ = getPublication(channel, STREAM_ENTITYCALL);
+
+        // 创建不可靠 Publication（位置更新等）
+        unreliablePub_ = getPublication(channel, STREAM_POSITION_UPDATE);
+
+        // 创建对应 Subscription
+        reliableSub_ = getSubscription(channel, STREAM_ENTITYCALL, /*reliable=*/true);
+        unreliableSub_ = getSubscription(channel, STREAM_POSITION_UPDATE, /*reliable=*/false);
+    }
+
+    void send(const Address& target,
+              const Message& msg,
+              Reliability reliability) override {
+        auto& pub = (reliability >= Reliability::HIGH)
+            ? *reliablePub_ : *unreliablePub_;
+
+        // 零拷贝写入
+        aeron::concurrent::AtomicBuffer buffer(msg.data(), msg.size());
+
+        std::int64_t result;
+        do {
+            result = pub.offer(buffer, 0, msg.size());
+            if (result == aeron::Publication::BACK_PRESSURED) {
+                // 背压：tick 模型下不阻塞，记录到下个 tick 发送
+                METRIC_COUNTER("transport.backpressure", 1);
+                return;  // 留到下个 tick
+            }
+        } while (result < 0 && result != aeron::Publication::NOT_CONNECTED);
+    }
+
+    void tick() override {
+        // 处理接收到的消息（tick 驱动，不阻塞）
+        reliableSub_->poll(messageHandler_, 100);     // 最多处理 100 条
+        unreliableSub_->poll(messageHandler_, 200);   // 位置更新量更大
+    }
+
+private:
+    std::shared_ptr<aeron::Aeron> aeron_;
+    std::shared_ptr<aeron::Publication> reliablePub_;
+    std::shared_ptr<aeron::Publication> unreliablePub_;
+    std::shared_ptr<aeron::Subscription> reliableSub_;
+    std::shared_ptr<aeron::Subscription> unreliableSub_;
+    aeron::FragmentAssembler assembler_;
+};
 ```
 
 ### 14.4 核心接口
@@ -1324,14 +1477,19 @@ Bundle 消息头格式（theseed）：
 
 ### 14.6 与 KBEngine/BigWorld 的对比
 
-| 维度 | BigWorld Mercury | KBEngine TCP | theseed |
-|------|-----------------|-------------|---------|
-| 内部协议 | UDP + 自建可靠性 | TCP | KCP over UDP（推荐）/ TCP（备选） |
-| 可靠性分级 | 4 级（同一通道混用） | 无（全可靠） | 4 级（同一通道混用） |
-| 位置更新 | RELIABLE_NO（不重传） | TCP（全重传） | NONE（不重传） |
-| EntityCall | RELIABLE_CRITICAL | TCP | CRITICAL |
-| 延迟 | 最低 | 较高 | 接近 Mercury |
-| 实现复杂度 | 极高 | 最低 | 中等（复用 KCP） |
+| 维度 | BigWorld Mercury | KBEngine TCP | theseed Aeron |
+|------|-----------------|-------------|---------------|
+| 内部协议 | UDP + 自建可靠性 | TCP | UDP + Aeron Media Driver |
+| 可靠性分级 | 4 级（同一通道混用） | 无（全可靠） | reliable=true/false（同一连接混用） |
+| 位置更新 | RELIABLE_NO（不重传） | TCP（全重传） | reliable=false（不重传） |
+| EntityCall | RELIABLE_CRITICAL | TCP | reliable=true |
+| 零拷贝 | 否 | 否 | 是（memory-mapped buffer） |
+| 背压 | 无 | TCP 内建（但不可控） | Publication.offer() 返回流控状态 |
+| 多播 | 无 | 无 | UDP multicast（属性同步广播） |
+| 同机优化 | 无（UDP loopback） | 无（TCP loopback） | aeron:ipc（共享内存，sub-μs） |
+| 延迟 | 极低 | 较高 | 极低（同机 IPC < 1μs） |
+| 实现复杂度 | 极高（自建） | 最低 | 中等（复用 Aeron SDK） |
+| 运维可观测 | 无 | 无 | Aeron Counters + 驱动统计 |
 
 ---
 

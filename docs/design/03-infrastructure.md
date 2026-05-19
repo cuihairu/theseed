@@ -197,12 +197,20 @@ gateway:
 
 | 后端 | 优势 | 劣势 | 适用场景 |
 |------|------|------|---------|
-| NATS | 超低延迟（sub-ms）、轻量、At-Most-Once | 不支持 Exactly-Once | 实时游戏消息 |
-| NATS JetStream | 在 NATS 基础上加持久化 | 比 NATS 稍慢 | 需要持久化的消息 |
-| Aeron | 零拷贝、极致性能 | 重量级、学习曲线高 | 超高频交易级 |
+| Aeron | 零拷贝、极致性能、内建可靠/不可靠、背压、多播、同机 IPC | 重量级、学习曲线高 | 内网进程间实时消息 |
+| NATS | 超低延迟（sub-ms）、轻量、At-Most-Once | 不支持 Exactly-Once | 跨服桥接、控制面 |
 | Redis Streams | 复用已有 Redis | 延迟较高（ms 级） | 已有 Redis 的项目 |
 
-**theseed 默认选择 NATS**：性能足够、部署简单、社区活跃、支持集群。
+**theseed 默认选择 Aeron**：
+  - 进程间 EntityCall 和属性同步已用 Aeron（见 00-runtime-core.md Section 14）
+  - 控制面消息复用同一个 Aeron Media Driver，不走 NATS
+  - 跨服桥接用 NATS（跨机房 Aeron 集群管理复杂，NATS 更适合跨域）
+  - Aeron Archive 可选做持久化消息（离线消息队列等）
+
+**Aeron 在 theseed 中承担双重角色**：
+  1. Runtime Transport（EntityCall、属性同步、位置更新）
+  2. MessageBus（控制面、事件广播、异步任务分发）
+  同一个 Media Driver，不同 streamId 区分用途。
 
 ### 3.3 核心接口
 
