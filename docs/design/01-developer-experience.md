@@ -486,125 +486,160 @@ public:
 
 ### 6.1 设计目标
 
-- 一份定义文件同时描述：内存布局、网络协议、持久化 schema
+- 一份 XML 定义文件同时描述：内存布局、网络协议、持久化 schema
+- XSD Schema 校验：保存即校验，IDE 实时报错
+- XInclude 文件拆分：按关注点分离，主文件简洁
 - 支持多种存储后端（MySQL、PostgreSQL、MongoDB、Redis、内存）
 - 定义变更时有明确的迁移路径
-- 人类可读、工具可解析、版本可 diff
+- 工具可解析、版本可 diff
 
-### 6.2 定义语言设计
+### 6.2 定义语言设计（XML + XSD + XInclude）
 
-```yaml
-# defs/entities/Player.def.yaml
+```xml
+<!-- entities/Player/Player.def — 主文件 -->
+<Entity name="Player" sides="base,cell" description="玩家实体"
+        xmlns="https://theseed.dev/schema/entity"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="https://theseed.dev/schema/entity ../../schemas/entity.xsd"
+        xmlns:xi="http://www.w3.org/2001/XInclude">
 
-entity Player:
-  description: "玩家实体"
-  sides: [base, cell]          # 在哪些侧存在
+    <Properties>
+        <xi:include href="properties.xml"/>
+        <xi:include href="db_mapping.xml"/>
+        <xi:include href="client_sync.xml"/>
+    </Properties>
 
-  properties:
-    # 基础属性（base + cell + client + db）
-    name:
-      type: STRING
-      size: 64
-      flags: [base, cell, persistent]
-      index: true              # 数据库索引
+    <CellMethods>
+        <xi:include href="cell_methods.xml"/>
+    </CellMethods>
 
-    level:
-      type: UINT32
-      default: 1
-      flags: [base, cell, client, persistent]
+    <BaseMethods>
+        <xi:include href="base_methods.xml"/>
+    </BaseMethods>
+</Entity>
+```
 
-    hp:
-      type: FLOAT32
-      default: 100.0
-      flags: [cell, client]
-      detail_level: 0          # 高精度同步
+```xml
+<!-- entities/Player/properties.xml — 属性定义 -->
+<xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
 
-    position:
-      type: VECTOR3
-      flags: [cell, client]
-      detail_level: 1          # 低精度（远处玩家）
+    <property name="name" type="STRING" size="64"
+              flags="BASE_AND_CLIENT" persistent="true"/>
 
-    gold:
-      type: UINT64
-      flags: [base, persistent]
-      shard_key: true          # 分片键
+    <property name="level" type="UINT32" flags="ALL_CLIENTS" persistent="true">
+        <Default>1</Default>
+    </property>
 
-    # 嵌套结构
-    equipment:
-      type: FIXED_DICT
-      fields:
-        weapon: { type: UINT32, default: 0 }
-        armor: { type: UINT32, default: 0 }
-        accessory: { type: UINT32, default: 0 }
-      flags: [base, cell, persistent]
+    <property name="hp" type="FLOAT32" flags="OWN_CLIENT">
+        <Default>100.0</Default>
+    </property>
 
-  # 方法定义
-  methods:
-    onLevelUp:
-      side: base
-      args: [newLevel: UINT32]
-      exposed: false           # 客户端不可直接调用
+    <property name="position" type="VECTOR3" flags="ALL_CLIENTS"/>
 
-    attack:
-      side: cell
-      args: [targetId: ENTITY_ID, skillId: UINT32]
-      exposed: true            # 客户端可直接调用
+    <property name="gold" type="UINT64" flags="BASE" persistent="true"/>
 
-    onDamaged:
-      side: cell
-      args: [damage: FLOAT32, attacker: ENTITY_ID]
-      exposed: false
+    <property name="equipment" type="FIXED_DICT" flags="BASE_AND_CLIENT" persistent="true">
+        <Fields>
+            <field name="weapon" type="UINT32"><Default>0</Default></field>
+            <field name="armor" type="UINT32"><Default>0</Default></field>
+            <field name="accessory" type="UINT32"><Default>0</Default></field>
+        </Fields>
+    </property>
 
-  # 定时器
-  timers:
-    - name: saveTimer
-      interval: 30s
-      method: onSave
+</xi:include>
+```
 
-  # 存储策略
-  storage:
-    backend: mysql             # 主存储
-    cache: redis               # 缓存层
-    sharding:
-      strategy: hash           # 分片策略
-      key: gold                # 分片键
-      count: 16                # 分片数
+```xml
+<!-- entities/Player/db_mapping.xml — 数据库映射（按关注点分离） -->
+<xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <property name="name">
+        <Storage columnType="VARCHAR" length="64" index="unique"/>
+    </property>
+
+    <property name="level">
+        <Storage index="btree"/>
+    </property>
+
+    <property name="equipment">
+        <Storage columnType="JSON">
+            <jsonIndex path="$.weapon" name="idx_weapon"/>
+        </Storage>
+    </property>
+
+</xi:include>
+```
+
+```xml
+<!-- entities/Player/client_sync.xml — 客户端同步配置 -->
+<xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <property name="hp" detailLevel="0" sendLatestOnly="true"/>
+    <property name="position" detailLevel="1" volatile="true" sendLatestOnly="true"/>
+
+</xi:include>
+```
+
+```xml
+<!-- entities/Player/cell_methods.xml — Cell 方法 -->
+<xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <Method name="attack" exposed="true" rateLimit="5/1s">
+        <Arg name="targetId" type="ENTITY_ID"/>
+        <Arg name="skillId" type="UINT32"/>
+    </Method>
+
+    <Method name="onDamaged">
+        <Arg name="damage" type="FLOAT32"/>
+        <Arg name="attacker" type="ENTITY_ID"/>
+    </Method>
+
+</xi:include>
+```
+
+```xml
+<!-- entities/Player/base_methods.xml — Base 方法 -->
+<xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
+
+    <Method name="onLevelUp">
+        <Arg name="newLevel" type="UINT32"/>
+    </Method>
+
+</xi:include>
 ```
 
 ### 6.3 类型系统
 
-```yaml
-# defs/types.yaml — 自定义类型
+```xml
+<!-- defs/types.xml — 自定义类型定义 -->
+<Types xmlns="https://theseed.dev/schema/entity">
 
-types:
-  # 基础类型
-  UINT8:   { size: 1, network: "uint8" }
-  UINT16:  { size: 2, network: "uint16" }
-  UINT32:  { size: 4, network: "uint32" }
-  UINT64:  { size: 8, network: "uint64" }
-  INT8:    { size: 1, network: "int8" }
-  INT16:   { size: 2, network: "int16" }
-  INT32:   { size: 4, network: "int32" }
-  INT64:   { size: 8, network: "int64" }
-  FLOAT32: { size: 4, network: "float32" }
-  FLOAT64: { size: 8, network: "float64" }
-  STRING:  { size: var, network: "string", max: 65535 }
-  BLOB:    { size: var, network: "bytes", max: 1048576 }
-  BOOL:    { size: 1, network: "uint8" }
+    <!-- 基础类型 -->
+    <type name="UINT8"     size="1" network="uint8"/>
+    <type name="UINT16"    size="2" network="uint16"/>
+    <type name="UINT32"    size="4" network="uint32"/>
+    <type name="UINT64"    size="8" network="uint64"/>
+    <type name="INT8"      size="1" network="int8"/>
+    <type name="INT16"     size="2" network="int16"/>
+    <type name="INT32"     size="4" network="int32"/>
+    <type name="INT64"     size="8" network="int64"/>
+    <type name="FLOAT32"   size="4" network="float32"/>
+    <type name="FLOAT64"   size="8" network="float64"/>
+    <type name="STRING"    size="var" network="string" max="65535"/>
+    <type name="BLOB"      size="var" network="bytes" max="1048576"/>
+    <type name="BOOL"      size="1" network="uint8"/>
 
-  # 复合类型
-  VECTOR2: { fields: [x: FLOAT32, y: FLOAT32] }
-  VECTOR3: { fields: [x: FLOAT32, y: FLOAT32, z: FLOAT32] }
-  VECTOR4: { fields: [x: FLOAT32, y: FLOAT32, z: FLOAT32, w: FLOAT32] }
-  ENTITY_ID: { base: UINT64 }
+    <!-- 复合类型 -->
+    <type name="VECTOR2"   fields="x:FLOAT32,y:FLOAT32"/>
+    <type name="VECTOR3"   fields="x:FLOAT32,y:FLOAT32,z:FLOAT3"/>
+    <type name="VECTOR4"   fields="x:FLOAT32,y:FLOAT32,z:FLOAT3,w:FLOAT32"/>
+    <type name="ENTITY_ID" base="UINT64"/>
 
-  # 容器类型
-  FIXED_DICT: { kind: dict }
-  FIXED_ARRAY: { kind: array, max_elements: 65536 }
+    <!-- 用户自定义类型 -->
+    <type name="ITEM_ID"   base="UINT32"/>
+    <type name="SKILL_ID"  base="UINT32"/>
 
-  # 用户自定义类型
-  ITEM_ID: { base: UINT32 }
-  SKILL_ID: { base: UINT32 }
+</Types>
 ```
 
 ### 6.4 存储后端抽象
@@ -645,8 +680,8 @@ public:
 ```
 storage/
 ├── IStorageBackend.h           # 抽象接口
-├── MySQLBackend.cpp            # MySQL / MariaDB
-├── PostgreSQLBackend.cpp       # PostgreSQL（JSON 支持）
+├── MySQLBackend.cpp            # MySQL / MariaDB（JSON 支持）
+├── PostgreSQLBackend.cpp       # PostgreSQL（JSONB + GIN 索引）
 ├── MongoDBBackend.cpp          # MongoDB（文档模型）
 ├── RedisBackend.cpp            # Redis（缓存 + 热数据）
 └── MemoryBackend.cpp           # 纯内存（测试 / 临时实体）
@@ -654,39 +689,41 @@ storage/
 
 ### 6.6 自动 Schema 迁移
 
-```yaml
-# 当 def 变更时，自动生成迁移计划
-# 例如：给 Player 添加新属性 "vip_level"
+```xml
+<!-- def 变更时自动生成的迁移计划 -->
+<!-- 例如：给 Player 添加新属性 "vip_level" -->
 
-migration:
-  from_version: "1.5"
-  to_version: "1.6"
-  changes:
-    - type: add_property
-      entity: Player
-      property: vip_level
-      type: UINT32
-      default: 0
-      safe: true                # 有默认值，可在线执行
+<migration fromVersion="1.5" toVersion="1.6">
+    <change type="add_property" entity="Player" property="vip_level"
+            type="UINT32" safe="true">
+        <Default>0</Default>
+    </change>
 
-  # 自动生成的 SQL
-  auto_sql:
-    mysql: "ALTER TABLE tbl_Player ADD COLUMN vip_level INT UNSIGNED NOT NULL DEFAULT 0"
-    postgresql: "ALTER TABLE tbl_Player ADD COLUMN vip_level INTEGER NOT NULL DEFAULT 0"
-    mongodb: "db.tbl_Player.updateMany({}, {$set: {vip_level: 0}})"
+    <!-- 自动生成的 SQL -->
+    <autoSql dialect="mysql">
+        ALTER TABLE tbl_Player ADD COLUMN vip_level INT UNSIGNED NOT NULL DEFAULT 0
+    </autoSql>
+    <autoSql dialect="postgresql">
+        ALTER TABLE tbl_Player ADD COLUMN vip_level INTEGER NOT NULL DEFAULT 0
+    </autoSql>
+    <autoSql dialect="mongodb">
+        db.tbl_Player.updateMany({}, {$set: {vip_level: 0}})
+    </autoSql>
+</migration>
 ```
 
 ### 6.7 与 KBEngine 的对比
 
 | 能力 | KBEngine | theseed |
 |------|---------|---------|
-| 定义格式 | XML (.def) | YAML（人类可读） |
-| 定义合一 | 脚本+协议+持久化分别定义 | 一份 YAML 三合一 |
+| 定义格式 | XML (.def) 无 XSD | XML (.def) + XSD 校验 + XInclude 拆分 |
+| 定义合一 | 脚本+协议+持久化分别定义 | 一份 XML 三合一 |
 | 存储后端 | MySQL + Redis | MySQL/PG/Mongo/Redis/Memory |
 | Schema 迁移 | 无自动支持 | 自动 diff + 迁移计划 |
 | 分片 | 无内建 | 声明式分片策略 |
-| 类型安全 | 运行时检查 | 编译期 + 运行时双重检查 |
+| 类型安全 | 运行时检查 | XSD 结构校验 + defcheck 语义校验 |
 | 工具支持 | 无 | def lint / def diff / def migrate |
+| 文件拆分 | 无 | XInclude 按关注点拆分 |
 
 ---
 

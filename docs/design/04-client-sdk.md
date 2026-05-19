@@ -9,7 +9,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Def 文件 (YAML)                                                 │
+│  Def 文件 (XML + XSD)                                            │
 │  "一份定义，四处生成"                                             │
 ├──────────────────────────────────────────────────────────────────┤
 │  Code Generator (theseed-codegen)                                │
@@ -30,80 +30,69 @@
 
 ## 2. 协议生成器 (theseed-codegen)
 
-### 2.1 输入：YAML 定义
+### 2.1 输入：XML 定义
 
-```yaml
-# defs/entities/Avatar.def.yaml
-entity Avatar:
-  sides: [base, cell]
+```xml
+<!-- entities/Avatar/Avatar.def -->
+<Entity name="Avatar" sides="base,cell"
+        xmlns="https://theseed.dev/schema/entity"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="https://theseed.dev/schema/entity ../../schemas/entity.xsd"
+        xmlns:xi="http://www.w3.org/2001/XInclude">
 
-  properties:
-    name:
-      type: STRING
-      size: 64
-      flags: [base, cell, client, persistent]
+    <Properties>
+        <property name="name" type="STRING" size="64"
+                  flags="BASE_AND_CLIENT" persistent="true"/>
 
-    level:
-      type: UINT32
-      default: 1
-      flags: [base, cell, client, persistent]
+        <property name="level" type="UINT32" flags="ALL_CLIENTS" persistent="true">
+            <Default>1</Default>
+        </property>
 
-    hp:
-      type: FLOAT32
-      default: 100.0
-      flags: [cell, client]
-      detail_level: 0              # detail_level=0: 高精度，始终同步
-      interpolate: true            # 客户端插值
-      interpolate_speed: 5.0       # 插值速度
+        <property name="hp" type="FLOAT32" flags="OWN_CLIENT"
+                  detailLevel="0" sendLatestOnly="true">
+            <Default>100.0</Default>
+        </property>
 
-    position:
-      type: VECTOR3
-      flags: [cell, client]
-      detail_level: 1              # detail_level=1: 低精度，远距离同步
-      interpolate: true
-      interpolate_speed: 10.0      # 位置插值速度（单位/秒）
+        <property name="position" type="VECTOR3" flags="ALL_CLIENTS"
+                  detailLevel="1" volatile="true" sendLatestOnly="true"/>
 
-    rotation:
-      type: VECTOR3
-      flags: [cell, client]
-      detail_level: 1
-      interpolate: true
+        <property name="rotation" type="VECTOR3" flags="ALL_CLIENTS"
+                  detailLevel="1" volatile="true" sendLatestOnly="true"/>
 
-    mp:
-      type: FLOAT32
-      default: 50.0
-      flags: [cell, client]
-      interpolate: false           # 不插值，直接跳变
+        <property name="mp" type="FLOAT32" flags="OWN_CLIENT">
+            <Default>50.0</Default>
+        </property>
+    </Properties>
 
-  methods:
-    # 客户端可调用（exposed）
-    attack:
-      side: cell
-      args: [targetId: ENTITY_ID, skillId: UINT32]
-      exposed: true
+    <CellMethods>
+        <Method name="attack" exposed="true" rateLimit="5/1s">
+            <Arg name="targetId" type="ENTITY_ID"/>
+            <Arg name="skillId" type="UINT32"/>
+        </Method>
 
-    useItem:
-      side: base
-      args: [itemId: UINT32, count: UINT32]
-      exposed: true
+        <Method name="move" exposed="true" rateLimit="20/1s">
+            <Arg name="position" type="VECTOR3"/>
+            <Arg name="rotation" type="VECTOR3"/>
+        </Method>
+    </CellMethods>
 
-    move:
-      side: cell
-      args: [position: VECTOR3, rotation: VECTOR3]
-      exposed: true
+    <ClientMethods>
+        <Method name="onLevelUp">
+            <Arg name="newLevel" type="UINT32"/>
+        </Method>
 
-    # 服务器推送到客户端
-    onLevelUp:
-      side: client
-      args: [newLevel: UINT32]
+        <Method name="onDamaged">
+            <Arg name="damage" type="FLOAT32"/>
+            <Arg name="attackerId" type="ENTITY_ID"/>
+        </Method>
 
-    onDamaged:
-      side: client
-      args: [damage: FLOAT32, attackerId: ENTITY_ID]
-
-    onSkillEffect:
-      side: client
-      args: [skillId: UINT32, targetId: ENTITY_ID, effectData: BLOB]
+        <Method name="onSkillEffect">
+            <Arg name="skillId" type="UINT32"/>
+            <Arg name="targetId" type="ENTITY_ID"/>
+            <Arg name="effectData" type="BLOB"/>
+        </Method>
+    </ClientMethods>
+</Entity>
 ```
 
 ### 2.2 输出：各引擎代码
