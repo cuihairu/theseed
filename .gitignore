@@ -67,3 +67,8 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Node.js
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
