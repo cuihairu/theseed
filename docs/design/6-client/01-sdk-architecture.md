@@ -1,9 +1,26 @@
 # Client SDK — 客户端引擎支持
 
-> theseed 客户端 SDK：一份 XML 定义 → 自动生成 Unity/UE5/Cocos 客户端代码。
-> 开发者不需要手写同步逻辑。
+> theseed 客户端 SDK：一份 XML 定义 → 生成服务端与客户端协议代码。
+> 但 `MVP` 不追求三端一次到位，而是先保证 Unity 全链路跑通。
 >
-> 来源：KBEngine 有 Unity 插件（维护不活跃），theseed 新增三大引擎全覆盖 + 代码生成。
+> 来源：KBEngine 有 Unity 插件（维护不活跃），theseed 新增多引擎代码生成目标。
+> 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
+
+---
+
+## 0. MVP 边界
+
+```
+MVP 客户端只保证 Unity 端全链路可用：
+  - 登录
+  - 断线重连
+  - 实体创建 / 销毁
+  - 属性同步
+  - 位置插值
+  - exposed 方法调用
+
+UE5 / Cocos 保留为 Phase 2 目标，不作为 MVP 完成条件。
+```
 
 ---
 
@@ -11,30 +28,45 @@
 
 ```
 Def 文件 (XML + XSD)
-  "一份定义，四处生成"
+  "一份定义，多处生成"
     ├── Server C++ Entity 类
-    ├── Client C# (Unity) 类
-    ├── Client C++ (UE5) 类
-    └── Client TypeScript (Cocos) 类
+    ├── Client C# (Unity) 类      ← MVP 主路径
+    ├── Client C++ (UE5) 类       ← Phase 2
+    └── Client TypeScript (Cocos) 类 ← Phase 2
 
-Runtime SDK (每个引擎的运行时库)
-  ├── Network Layer (TCP / WebSocket)
-  ├── Entity Sync Engine (属性同步、插值、预测)
-  ├── Event System (消息收发)
-  └── Debug Tools (编辑器内嵌)
+Runtime SDK
+  ├── Network Layer
+  ├── Entity Sync Engine
+  ├── Event System
+  └── Debug / Inspect Tools
 ```
 
 ---
 
 ## 2. 代码生成
 
+### 2.1 MVP 输出
+
 ```bash
 theseed-codegen \
   --defs ./defs/ \
   --output-unity ./client/unity/Assets/Theseed/Generated/ \
-  --output-ue5 ./client/ue5/Plugins/Theseed/Source/Generated/ \
-  --output-cocos ./client/cocos/assets/theseed/generated/ \
   --output-server ./src/generated/
+```
+
+### 2.2 Phase 2 预留
+
+```bash
+theseed-codegen \
+  --defs ./defs/ \
+  --output-ue5 ./client/ue5/Plugins/Theseed/Source/Generated/ \
+  --output-cocos ./client/cocos/assets/theseed/generated/
+```
+
+```
+说明：
+  - “支持 UE5 / Cocos” 现在是产品方向，不是 MVP 交付定义
+  - 不应让多端生成阻塞 Runtime Core 和 Unity 主链路
 ```
 
 ### Unity / C# 示例
@@ -53,39 +85,9 @@ public partial class Avatar : EntityBase {
 }
 ```
 
-### UE5 / C++ 示例
-
-```cpp
-UCLASS(BlueprintType, Blueprintable)
-class THESEED_API AAvatar : public ATheseedEntity {
-    GENERATED_BODY()
-public:
-    UPROPERTY(BlueprintReadOnly) FString name;
-    UPROPERTY(BlueprintReadOnly) int32 level;
-    UPROPERTY(BlueprintReadOnly) float hp;
-
-    UFUNCTION(BlueprintImplementableEvent) void OnLevelUp(int32 newLevel);
-    UFUNCTION(BlueprintCallable) void Attack(int64 targetId, int32 skillId);
-};
-```
-
-### Cocos / TypeScript 示例
-
-```typescript
-export class Avatar extends EntityBase {
-    readonly hp = new InterpolatedProperty<number>(5.0);
-    readonly position = new InterpolatedProperty<Vec3>(10.0);
-
-    protected onLevelUp(newLevel: number): void {}
-    public attack(targetId: number, skillId: number): void {
-        this.callServer('attack', targetId, skillId);
-    }
-}
-```
-
 ---
 
-## 3. Runtime SDK
+## 3. Unity Runtime SDK
 
 ### 网络层
 
@@ -109,8 +111,8 @@ public class EntitySyncEngine {
 }
 
 public class InterpolatedProperty<T> {
-    public T current { get; }   // 当前插值后的值（渲染用）
-    public T target { get; }    // 服务器最新值
+    public T current { get; }
+    public T target { get; }
     public void SetTarget(T value);
     public void Update(float dt);
 }
@@ -150,14 +152,37 @@ level/name       不插值（直接跳变）
 
 ---
 
-## 6. 与 KBEngine 的对比
+## 6. Phase 2 方向
+
+```
+UE5 方向：
+  - 代码生成
+  - Blueprint 可调用 API
+  - 与 Unity 对齐的实体同步语义
+
+Cocos 方向：
+  - TypeScript 代码生成
+  - 轻量运行时 SDK
+  - WebSocket 优先接入
+```
+
+```
+但在 Phase 2 之前，不承诺：
+  - UE5 Blueprint 深度集成
+  - 三端编辑器工具等价
+  - 三端网络栈完全同构
+```
+
+---
+
+## 7. 与 KBEngine 的对比
 
 | 能力 | KBEngine | theseed |
 |------|---------|---------|
-| Unity | 有插件（维护不活跃） | 自动生成 + 编辑器集成 |
-| UE5 | 无 | Blueprint 全集成 |
-| Cocos | 无 | TypeScript 自动生成 |
-| 协议生成 | 无（手写客户端） | theseed-codegen 自动生成 |
+| Unity | 有插件（维护不活跃） | MVP 主支持 |
+| UE5 | 无 | Phase 2 目标 |
+| Cocos | 无 | Phase 2 目标 |
+| 协议生成 | 无（手写客户端） | theseed-codegen |
 | 属性插值 | 无 | InterpolatedProperty |
 | 断线重连 | 有限 | 自动重连 + 服务器保持 |
-| 编辑器工具 | 无 | Entity Viewer + Profiler |
+| 编辑器工具 | 无 | Unity 主路径优先 |

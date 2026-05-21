@@ -1,9 +1,29 @@
-# Observability — 可观测性与运维
+# Observability — 遥测、调试与 Profiling
 
 > 基于开源遥测作为可观测性基础设施，不造轮子。
 > 千台集群的全链路可观测，从代码执行到跨服 EntityCall 的完整追踪。
 >
 > 来源：KBEngine Watcher（有限手动），theseed 全面基于 OTel。
+> 本篇只讨论 Telemetry / Debug / Profiling，不展开运维控制面；后者见 [02-ops-control-plane](02-ops-control-plane.md)。
+
+---
+
+## 0. 边界
+
+```
+本篇负责：
+  - traces
+  - metrics
+  - logs
+  - debug hooks
+  - profiling
+
+本篇不负责：
+  - 分布式状态树查询
+  - 在线命令执行
+  - challenge / ban / shutdown 运维入口
+  - 配置热改审计
+```
 
 ---
 
@@ -145,6 +165,9 @@ class IDebugProvider {
 
 ## 7. Profiling
 
+> 这里的 Profiling 只讨论 Telemetry / flamegraph / slow tick 诊断。
+> BigWorld 式 `EntityProfiler / EntityTypeProfiler → loadBalance / overload gate` 反馈链不在本篇，见 [../3-infrastructure/06-runtime-profiler-and-load-feedback](../3-infrastructure/06-runtime-profiler-and-load-feedback.md)。
+
 ### 7.1 设计
 
 ```
@@ -199,3 +222,4 @@ autoscaling:
 | 告警 | 无 | Alertmanager |
 | Debug | Telnet pyExec | DAP 协议，IDE 原生 |
 | Profiling | 手动 | 零成本 probe + 火焰图 |
+| 运维控制面 | Watcher 混合承载 | 拆到 `02-ops-control-plane` |

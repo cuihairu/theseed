@@ -82,6 +82,14 @@ Future<PlayerData> loadPlayer(EntityId id) {
 }
 ```
 
+```
+线程约束：
+  - 后台线程可以执行 I/O
+  - 完成结果必须投递回 owning tick thread
+  - 不允许后台线程直接修改 Entity
+  - 不允许 tick 线程阻塞等待 Future.get()
+```
+
 ### 2.2 脚本层异步
 
 ```python
@@ -96,6 +104,13 @@ class Avatar(theseed.BaseEntity):
     @theseed.timer(interval=30)
     def onSave(self):
         yield theseed.async_.db_save(self)
+```
+
+```
+脚本约束：
+  - yield 恢复点必须回到实体所属 tick 线程
+  - 异步恢复前必须校验 entity epoch / 存活状态
+  - 迁移后迟到回调可以丢弃或重试，但不能直接写旧实体
 ```
 
 ### 2.3 后台任务队列
@@ -140,7 +155,13 @@ theseed:
       - protocol: websocket
         port: 20001
 
+  runtime_transport:
+    backend: aeron
+    endpoint: "127.0.0.1:30123"
+    use_ipc: true
+
   message_bus:
+    # 只承载 Control Plane / Cross-Realm Async Plane
     backend: nats
     endpoints:
       - "nats://nats-1:4222"
@@ -173,7 +194,7 @@ theseed:
 | 基础设施 | KBEngine | theseed |
 |---------|---------|---------|
 | 网关 | LoginApp（简单 TCP） | 内建 Gateway（TLS/限流/路由/WS） |
-| 消息队列 | 无（直连 TCP） | Aeron + NATS |
+| 消息队列 | 无（直连 TCP） | Runtime Transport + NATS |
 | Redis | 基础支持 | 完整封装（缓存/锁/排行/限流） |
 | 异步 | CallbackMgr（回调） | Future/Promise + yield |
 | 跨服 | 无 | Realm Bridge + 统一 API |

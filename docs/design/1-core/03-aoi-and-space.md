@@ -133,126 +133,58 @@ private:
 
 ---
 
-## 4. 可插拔 AOI 策略
+## 4. AOI 更新优先级策略
 
 > 来源：BigWorld `aoi_update_schemes`。
-> KBEngine 把 AOI 更新逻辑硬编码在 Witness/Entity 中。
-> theseed 取 BigWorld 的可扩展设计。
+> 这里要特别注意：BigWorld 的原义不是“整套 AOI 插件系统”，而是“每个可见实体的更新优先级曲线配置”。
+> 详细边界见 [11-aoi-update-schemes-and-load-bounds](11-aoi-update-schemes-and-load-bounds.md)。
 
 ### 4.1 为什么需要可插拔
 
 ```
-不同游戏类型对 AOI 的需求不同：
-
-MMO（千人同屏）：
-  - 需要严格的 detailLevel 分级
-  - 需要带宽预算管理
-  - 远处实体降频同步
-
-MOBA/射击（低延迟）：
-  - 需要高频率位置同步
-  - 不需要 detailLevel（视野范围固定）
-  - 可靠性要求更高
-
-房间制（小规模）：
-  - 不需要 AOI（所有人互相可见）
-  - 全量广播即可
+核心问题不是“是否可见”，而是：
+  - 视野内哪些实体本 tick 先更新
+  - 远近实体的 priority delta 如何变化
+  - 如何在 packet budget 内保持近处更细、远处更疏
 ```
 
-### 4.2 AOI 策略接口
+### 4.2 更新优先级策略接口
 
 ```cpp
-// runtime/aoi/IAOIScheme.h
+// runtime/aoi/IAoIUpdatePolicy.h
 
-class IAOIScheme {
+class IAoIUpdatePolicy {
 public:
-    virtual ~IAOIScheme() = default;
+    virtual ~IAoIUpdatePolicy() = default;
 
     virtual const char* name() const = 0;
-
-    virtual void onEntityEnterView(Witness* witness,
-                                    Entity* entity,
-                                    float distance) = 0;
-    virtual void onEntityLeaveView(Witness* witness,
-                                    Entity* entity) = 0;
-
-    virtual void updateView(Witness* witness,
-                            Duration tickBudget,
-                            Bundle& outBundle) = 0;
-
-    virtual float calculatePriority(const Witness* witness,
-                                     const Entity* entity) const = 0;
-
-    virtual int calculateDetailLevel(float distance) const = 0;
-
-    virtual size_t estimateBundleSize(const Witness* witness) const = 0;
+    virtual double priorityDelta(float distanceMeters) const = 0;
+    virtual bool treatAsCoincident() const = 0;
 };
 ```
 
-### 4.3 内建策略
+### 4.3 关键约束
 
-```cpp
-// runtime/aoi/schemes/MMOScheme.h
-// 默认策略：来自 BigWorld + KBEngine 的融合
-class MMOScheme : public IAOIScheme {
-    // detailLevel 分级（来自 KBEngine 3 级 + BigWorld 4 级）
-    // 带宽预算管理（来自 BigWorld EntityCache 优先级队列）
-    // Hysteresis 防抖（来自 BigWorld DataLoDLevels）
-    // volatile threshold（来自两边的 VolatileInfo）
-};
-
-// runtime/aoi/schemes/ActionScheme.h
-// 动作游戏策略：高频同步，无 detailLevel
-class ActionScheme : public IAOIScheme {
-    // 固定视野范围
-    // 所有可见实体全量同步
-    // 高频位置更新（每 tick）
-    // 无带宽预算（视野内实体数有限）
-};
-
-// runtime/aoi/schemes/RoomScheme.h
-// 房间制策略：无 AOI，全量广播
-class RoomScheme : public IAOIScheme {
-    // 所有实体互相可见
-    // 所有变更广播给所有人
-    // 不需要 CoordinateSystem
-};
+```
+1. policy 控制 priority，不直接控制 visibility
+2. policy 粒度是“某个 witness 视角下某个目标实体的更新节奏”
+3. coincident 是特殊语义，不是普通 detailLevel
+4. detailLevel / payload 选择仍应和 policy 分层
 ```
 
-### 4.4 配置
+### 4.4 配置占位
 
 ```yaml
 # config/aoi.yaml
 
 aoi:
-  default_scheme: mmo
+  update_policies:
+    - name: default
+      min_priority_delta: 1.0
+      max_priority_delta: 5.0
 
-  space_overrides:
-    - space_type: "BattleRoyale"
-      scheme: action
-    - space_type: "ChatRoom"
-      scheme: room
-
-  mmo:
-    detail_levels:
-      - level: 0
-        distance: 30
-        sync_props: all
-      - level: 1
-        distance: 80
-        sync_props: [position, rotation, name, equipment_visual]
-      - level: 2
-        distance: 200
-        sync_props: [position, rotation]
-    bandwidth_budget: 8192
-    hysteresis: 5.0
-    volatile_position_threshold: 0.5
-    volatile_rotation_threshold: 0.1
-
-  action:
-    view_radius: 100
-    sync_frequency: every_tick
-    sync_props: all
+    - name: coincident
+      treat_as_coincident: true
 ```
 
 ---
@@ -324,3 +256,7 @@ class BSPTopology : public ISpaceTopology {
     // BigWorld 风格的 BSP 树，动态 grow/shrink
 };
 ```
+
+BigWorld 的 `load bounds / range update` 系统边界见：
+
+`./11-aoi-update-schemes-and-load-bounds.md`

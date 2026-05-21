@@ -2,7 +2,37 @@
 
 > 合服是游戏运营的刚需，但 KBEngine 没有任何合服工具。
 > BigWorld 有 consolidate_dbs / transfer_db / sync_db。
-> theseed 提供完整的合服工具链：ID 重映射 + 冲突解决 + 关联修复。
+> theseed 需要完整的合服工具链：ID 重映射 + 冲突解决 + 关联修复。
+> 但本篇只谈“多服业务数据合并”，不覆盖 SecondaryDB 搬运与归并。
+
+---
+
+## 0. 范围边界
+
+```
+本篇负责：
+  - 多 Realm / 多服业务数据合并
+  - EntityID / 唯一索引 / 关联关系修复
+  - 合并前分析、预览、执行、回滚
+
+本篇不负责：
+  - BaseApp 本地 SecondaryDB snapshot / transfer
+  - generation consolidate
+  - Schema 同步与修复平台
+```
+
+BigWorld 的几类工具在设计上应拆开：
+
+| 工具 | 目标 | 是否属于本篇 |
+|------|------|------|
+| merge | 多服业务数据合并 | 是 |
+| transfer_db | SecondaryDB 文件搬运 | 否 |
+| consolidate_dbs | SecondaryDB 归并 | 否 |
+| sync_db | Schema / 数据同步修复 | 否 |
+
+相关边界见：
+
+`[04-secondary-db](04-secondary-db.md)`
 
 ---
 
@@ -124,3 +154,27 @@ theseed-merge execute --config config/merge.xml --output merge_result.json
 # 回滚
 theseed-merge rollback --config config/merge.xml --from merge_result.json
 ```
+
+---
+
+## 5. 与其他数据运维能力的关系
+
+合服不是数据运维面的全部。
+
+theseed 需要显式拆开四条线：
+
+```
+1. 主持久化
+   - load / save / remove / query
+
+2. 合服
+   - merge analyze / preview / execute / rollback
+
+3. 本地归档暂存
+   - snapshot / transfer / consolidate / cleanup
+
+4. 同步修复
+   - schema diff / data repair / consistency check
+```
+
+如果把这四类能力混成一个“全能工具”，后期边界会非常混乱。

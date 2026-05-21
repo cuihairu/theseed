@@ -1,8 +1,28 @@
 # Persistence — 持久化与查询
 
-> theseed 持久化层：多后端存储抽象、JSON 查询、聚合统计。
+> theseed 持久化层：实体存储、查询扩展、Schema 管理。
 >
 > 来源：KBEngine 只有 EntityTable CRUD，BigWorld 有 Archiver + SecondaryDB。
+> 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
+> 本篇只讨论主持久化与查询，不展开本地归档暂存层；后者见 [04-secondary-db](04-secondary-db.md)。
+
+---
+
+## 0. MVP 边界
+
+```
+MVP 先解决：
+  - Entity load / save / remove
+  - 基础结构化查询
+  - MySQL 后端
+  - JSON 列查询
+
+MVP 不要求一次解决：
+  - 所有后端的统一高级查询语义
+  - 聚合与原始 SQL 的跨后端等价抽象
+  - Schema 迁移、合服、查询平台能力全部塞进一个接口
+  - BaseApp 本地 SecondaryDB / LocalArchiveStore
+```
 
 ---
 
@@ -38,7 +58,7 @@ results = theseed.db.query("Player") \
     .limit(100) \
     .execute()
 
-# 自定义 SQL
+# 自定义 SQL（仅 MySQL/PG 适用）
 results = theseed.db.execute("""
     SELECT id, name, JSON_EXTRACT(equipment, '$.weapon') as weapon_id
     FROM tbl_Player
@@ -46,129 +66,239 @@ results = theseed.db.execute("""
     ORDER BY level DESC
     LIMIT :limit
 """, min_level=50, limit=100)
-
-# 聚合查询
-count = theseed.db.query("Player") \
-    .filter(theseed.db.json_path("stats.guild_id") == guild_id) \
-    .count()
-```
-
-### 1.3 自定义查询的安全机制
-
-```cpp
-class CustomQuery {
-public:
-    // 参数化查询（防 SQL 注入）
-    QueryResult execute(const std::string& entity,
-                        const std::string& sql,
-                        const QueryParams& params);
-
-    // 查询白名单
-    void registerNamedQuery(const std::string& name,
-                            const std::string& sqlTemplate);
-
-    QueryResult executeNamed(const std::string& name,
-                             const QueryParams& params);
-};
 ```
 
 ---
 
-## 2. 存储后端抽象
+## 2. 最小职责接口
+
+> 核心原则：运行时只依赖最小接口，不让 `IStorageBackend` 变成“数据库平台总入口”。
+
+### 2.1 Entity 存储接口
 
 ```cpp
-// storage/IStorageBackend.h
+// storage/IEntityStore.h
 
-class IStorageBackend {
+class IEntityStore {
 public:
-    // 基本 CRUD
+    virtual ~IEntityStore() = default;
+
     virtual Future<EntityData> load(EntityId id, const EntityDef& def) = 0;
-    virtual Future<void> save(EntityId id, const EntityData& data, const EntityDef& def) = 0;
+    virtual Future<void> save(EntityId id,
+                              const EntityData& data,
+                              const EntityDef& def) = 0;
     virtual Future<void> remove(EntityId id) = 0;
+};
+```
 
-    // 查询
+### 2.2 结构化查询接口
+
+```cpp
+// storage/IEntityQueryStore.h
+
+class IEntityQueryStore {
+public:
+    virtual ~IEntityQueryStore() = default;
+
     virtual Future<std::vector<EntityId>> query(const StorageQuery& q) = 0;
-
-    // 自定义查询
-    virtual Future<QueryResult> executeRaw(const std::string& sql,
-                                           const QueryParams& params) = 0;
-    virtual Future<QueryResult> executeNamed(const std::string& queryName,
-                                             const QueryParams& params) = 0;
-
-    // JSON 查询
     virtual Future<std::vector<EntityId>> queryJsonPath(
         const std::string& entityType,
         const std::string& jsonPath,
         const std::string& op,
         const QueryParam& value) = 0;
+};
+```
 
-    // 聚合
-    virtual Future<AggregateResult> aggregate(
-        const std::string& entityType,
-        const std::string& field,
-        AggregateOp op,
-        const StorageQuery& filter) = 0;
+### 2.3 后端特定查询接口
 
-    // Schema 管理
+```cpp
+// storage/IRawQueryExecutor.h
+
+class IRawQueryExecutor {
+public:
+    virtual ~IRawQueryExecutor() = default;
+
+    virtual Future<QueryResult> executeRaw(const std::string& sql,
+                                           const QueryParams& params) = 0;
+    virtual Future<QueryResult> executeNamed(const std::string& queryName,
+                                             const QueryParams& params) = 0;
+};
+```
+
+### 2.4 Schema 管理接口
+
+```cpp
+// storage/ISchemaMigrator.h
+
+class ISchemaMigrator {
+public:
+    virtual ~ISchemaMigrator() = default;
+
     virtual Future<void> createTable(const EntityDef& def) = 0;
     virtual Future<MigrationPlan> planMigration(const EntityDef& oldDef,
-                                                 const EntityDef& newDef) = 0;
+                                                const EntityDef& newDef) = 0;
     virtual Future<void> executeMigration(const MigrationPlan& plan) = 0;
+};
+```
 
-    // 合服
-    virtual Future<MergeReport> mergeFrom(const IStorageBackend& source,
+### 2.5 合服接口（非 MVP 主路径）
+
+```cpp
+// storage/IMergeBackend.h
+
+class IMergeBackend {
+public:
+    virtual ~IMergeBackend() = default;
+
+    virtual Future<MergeReport> mergeFrom(const IMergeBackend& source,
                                           const MergeConfig& config) = 0;
+};
+```
 
-    // 后端能力
-    virtual std::string backendName() const = 0;
-    virtual std::vector<std::string> capabilities() const = 0;
+### 2.6 本地归档暂存接口（非 Runtime Core 主依赖）
+
+```cpp
+// storage/ILocalArchiveStore.h
+
+class ILocalArchiveStore {
+public:
+    virtual ~ILocalArchiveStore() = default;
+
+    virtual Future<void> append(const ArchiveSnapshot& snapshot) = 0;
+    virtual Future<void> flush() = 0;
+    virtual Future<ArchiveGenerationMeta> rotate() = 0;
+};
+```
+
+说明：
+
+```
+ILocalArchiveStore 属于：
+  - Archiver 增强
+  - 数据运维工具链
+
+ILocalArchiveStore 不属于：
+  - Runtime Core 的主持久化依赖
+  - IEntityStore 的职责范围
+```
+
+---
+
+## 3. 为什么要拆接口
+
+```
+如果把 CRUD、原始 SQL、命名查询、JSON Path、聚合、Schema 迁移、合服、
+本地归档暂存、consolidate 全部塞进一个 IStorageBackend，会出现三个问题：
+
+1. SRP 被破坏
+   - 一个接口承载太多职责
+   - Runtime、工具链、运维平台都被迫依赖同一个“大接口”
+
+2. ISP 被破坏
+   - 内核只想 load/save，却被迫知道 mergeFrom / executeRaw / aggregate
+
+3. 最小公分母设计
+   - 为了兼容所有后端，抽象会越来越虚
+   - 最后不是 everywhere if(capabilities)，就是一堆不可验证的承诺
+```
+
+拆分后的依赖关系：
+
+```
+Runtime Core
+  → IEntityStore
+
+业务查询层
+  → IEntityQueryStore
+
+运维/数据工具
+  → IRawQueryExecutor / ISchemaMigrator / IMergeBackend
+
+归档增强
+  → ILocalArchiveStore / IArchiveConsolidator
+```
+
+---
+
+## 4. MVP 后端策略
+
+### 4.1 MySQL 后端（首选）
+
+```cpp
+class MySQLEntityStore : public IEntityStore,
+                         public IEntityQueryStore,
+                         public IRawQueryExecutor,
+                         public ISchemaMigrator {
+    // MVP 的默认组合
+};
+```
+
+```
+MySQL 作为 MVP 默认后端的原因：
+  - 和现有 BigWorld / KBEngine 用户习惯接近
+  - JSON 支持已经足够实用
+  - 运维成本低
+  - 适合先跑通实体生命周期闭环
+```
+
+### 4.2 PostgreSQL / MongoDB（Phase 2）
+
+```cpp
+class PostgreSQLEntityStore : public IEntityStore,
+                              public IEntityQueryStore,
+                              public IRawQueryExecutor,
+                              public ISchemaMigrator {
+    // Phase 2
 };
 
-enum class AggregateOp { COUNT, SUM, AVG, MIN, MAX };
+class MongoEntityStore : public IEntityStore,
+                         public IEntityQueryStore {
+    // Phase 2
+};
+```
+
+```
+说明：
+  - PG 和 MongoDB 仍然是合理方向
+  - 但不应该阻塞 MySQL MVP
+  - 也不应该要求三者首版就具备完全等价的高级能力
 ```
 
 ---
 
-## 3. 多后端实现
+## 5. 能力分层
 
-### 3.1 MySQL 后端
+```
+Level 1: 核心运行时必须依赖
+  - load
+  - save
+  - remove
 
-```cpp
-Future<std::vector<EntityId>>
-MySQLBackend::queryJsonPath(const std::string& entityType,
-                             const std::string& jsonPath,
-                             const std::string& op,
-                             const QueryParam& value) {
-    // MySQL 5.7+: JSON_EXTRACT
-    // MySQL 8.0+: -> 操作符 + 多值索引
-}
+Level 2: 业务开发高频使用
+  - query
+  - queryJsonPath
+
+Level 3: 平台和运维增强
+  - executeRaw
+  - executeNamed
+  - schema migration
+  - merge
+  - local archive store
+  - consolidate / transfer / sync
 ```
 
-### 3.2 PostgreSQL 后端
-
-```cpp
-// JSONB: @> 包含、? key存在、->/->> 路径、GIN 索引
-Future<std::vector<EntityId>>
-PostgreSQLBackend::queryJsonPath(...) {
-    // WHERE {} @> '{"weapon": 500}'
-}
 ```
-
-### 3.3 MongoDB 后端
-
-```cpp
-// 天然文档模型：FIXED_DICT → 嵌套文档，ARRAY → 数组
-Future<std::vector<EntityId>>
-MongoDBBackend::queryJsonPath(...) {
-    // db.tbl_Player.find({"equipment.weapon": 500})
-}
+设计要求：
+  - Level 1 必须稳定、简单、可测
+  - Level 2 可以按后端逐步增强
+  - Level 3 不得反向污染 Runtime Core
 ```
 
 ---
 
-## 4. 开发时校验
+## 6. 开发时校验
 
-### 4.1 XSD 结构校验（第一层）
+### 6.1 XSD 结构校验（第一层）
 
 ```
 XSD 自动校验（编辑器保存时）：
@@ -180,7 +310,7 @@ XSD 自动校验（编辑器保存时）：
   ✅ column_type 枚举：VARCHAR | JSON | SUBTABLE 等
 ```
 
-### 4.2 defcheck 语义校验（第二层）
+### 6.2 defcheck 语义校验（第二层）
 
 ```
 典型校验规则：
@@ -192,7 +322,7 @@ XSD 自动校验（编辑器保存时）：
   - type_change_breaks_storage (error): 类型变更需要数据迁移
 ```
 
-### 4.3 校验流程
+### 6.3 校验流程
 
 ```
 def 变更时自动执行：

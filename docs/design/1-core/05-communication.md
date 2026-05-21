@@ -1,9 +1,9 @@
 # Communication — 跨进程通信与传输
 
-> EntityCall 是 theseed 进程间通信的核心抽象，Transport 负责底层消息可靠传输。
+> EntityCall 是 theseed 进程间通信的核心抽象，Transport 负责底层消息传输。
 >
 > 来源：BigWorld Mailbox + Mercury，KBEngine EntityCall + TCP。
-> theseed 选择 Aeron 作为传输层，融合 BigWorld 的可靠性分级思想。
+> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
@@ -30,33 +30,37 @@ entity.base.onLevelUp(35)
   gRPC 是无状态的——它只绑定到服务端点
 ```
 
-### 1.2 核心设计决策：EntityCall 必须走 Runtime Transport
+### 1.2 核心设计决策：EntityCall 必须走 Runtime Data Plane
 
 ```
 重要：EntityCall 不走 MessageBus！
 
 原因：
-  1. 顺序保证：同一 Channel 上的消息必须保序
-     MessageBus（NATS）不保证消息顺序
-     Runtime Transport（TCP 直连）保证 FIFO
+  1. 顺序保证
+     EntityCall 属于实体权威路径
+     同一实体的消息必须具备明确顺序语义
 
-  2. 延迟：EntityCall 是 tick 内同步操作
-     NATS 中间层增加至少 1-2ms 延迟
-     TCP 直连是 sub-ms
+  2. 延迟要求
+     EntityCall 处于 tick 内关键路径
+     不应经过额外 broker 跳数
 
-  3. 所有权敏感：EntityCall 涉及实体权威
-     消息路由需要知道实体当前在哪个进程
-     这个路由信息在 Runtime 内部维护，不在 MQ 中
+  3. 路由敏感
+     Runtime 需要知道实体当前在哪个进程
+     这个路由信息属于引擎内部状态，不属于 MQ 主题路由
 
-  4. 背压：tick 内不能无限发消息
-     Runtime Transport 有 Channel 水位控制
-     MQ 通常不做 tick 级背压
+  4. 背压控制
+     tick 内不能无限发消息
+     Runtime Data Plane 需要有可观测、可控制的发送水位
 
 结论：
-  EntityCall → Runtime Transport（进程间 TCP 直连）
-  控制面消息 → MessageBus（NATS）
-  异步任务 → MessageBus
-  跨服桥接 → MessageBus
+  EntityCall / Ghost 同步 / 迁移数据
+    → Runtime Data Plane
+
+  控制面消息
+    → MessageBus / Control Plane
+
+  跨服异步与桥接
+    → Cross-Realm Async Plane
 ```
 
 ### 1.3 EntityCall 接口
@@ -124,10 +128,11 @@ Cell → Base:
 
 ---
 
-## 2. Transport Reliability — 消息可靠性分级
+## 2. Runtime Delivery Classes — MVP 传输语义
 
-> 来源：BigWorld Mercury UDP 四级可靠性。
-> KBEngine 选 TCP，简单但一刀切。theseed 取两者之长：同一连接上支持可靠性分级。
+> 来源：BigWorld Mercury 的分级思想 + KBEngine 的简单路径。
+> 但 MVP 不直接承诺“四级都已实现”，只定义当前可落地的两类运行时语义。
+> BigWorld 原始的 `driver / passenger / critical / none` 语义与 piggyback / overflow / inactivity 边界，见 [../3-infrastructure/07-runtime-transport-reliability](../3-infrastructure/07-runtime-transport-reliability.md)。
 
 ### 2.1 为什么需要分级
 
@@ -137,33 +142,55 @@ Cell → Base:
 必须可靠（丢了就崩）：
   - EntityCall 方法调用
   - 实体创建 / 销毁
-  - 属性持久化写入
   - 迁移序列化数据
+  - Base ↔ Cell 控制消息
 
 丢了无所谓（下帧覆盖）：
   - 位置更新（每 tick 都有新位置）
   - 朝向更新
   - 速度同步
 
-尽量可靠但不致命：
-  - 属性同步（可以容忍偶尔丢一帧，下帧补上）
-  - AOI 进入/离开通知（丢了会在下个 tick 重算）
+可重算：
+  - 视野辅助通知
+  - 过期状态刷新
 ```
 
-### 2.2 四级可靠性（来自 BigWorld Mercury）
+### 2.2 MVP 两类语义
 
-```
-theseed 的可靠性分级：
-
-enum class Reliability : uint8_t {
-    NONE        = 0,   // 不保证送达，不重传（位置/朝向）
-    LOW         = 1,   // 尽力送达，丢了不重传（属性同步）
-    HIGH        = 2,   // 保证送达，重传直到 ACK（EntityCall）
-    CRITICAL    = 3,   // 保证送达 + 保证顺序（实体创建/迁移/销毁）
+```cpp
+enum class DeliveryClass : uint8_t {
+    ORDERED_RELIABLE = 0,   // 保序 + 可靠送达
+    UNORDERED_LOSSY  = 1,   // 可合并、可丢弃、被新状态覆盖
 };
 ```
 
-### 2.3 Aeron 作为传输层
+```
+ORDERED_RELIABLE 用于：
+  - EntityCall
+  - 实体创建 / 销毁
+  - Base ↔ Cell 控制消息
+  - 迁移数据
+  - Ghost 核心状态同步
+
+UNORDERED_LOSSY 用于：
+  - 位置 / 朝向等 volatile 更新
+  - 可重算的视野辅助事件
+  - 过期即无意义的状态刷新
+```
+
+```
+远期可以演进到 BigWorld 风格的更细粒度分级，
+但前提是 Runtime 先具备明确的确认、重放、排队和监控机制。
+在此之前，文档不把四级抽象写成既成实现。
+```
+
+```
+也就是说：
+  当前 theseed 文档覆盖的是“业务可见的最小送达语义”
+  不是 BigWorld Mercury 在 Bundle / Channel 层的全部可靠性角色
+```
+
+### 2.3 为什么推荐 Aeron
 
 ```
 三种方案对比：
@@ -172,92 +199,83 @@ enum class Reliability : uint8_t {
 │          │ Mercury      │ KCP          │ Aeron        │
 │          │ (BigWorld)   │              │ (theseed 选) │
 ├──────────┼──────────────┼──────────────┼──────────────┤
-│ 传输层   │ UDP + 自建    │ UDP + 自建   │ UDP + 媒体驱动│
-│ 可靠/不可靠│ 同通道混用    │ 同通道混用   │ 同通道混用    │
-│ 零拷贝   │ 否           │ 否           │ 是（memory-mapped）│
-│ 背压     │ 无           │ 无           │ 有（publisher flow control）│
-│ 多播     │ 无           │ 无           │ 有（UDP multicast）│
-│ 同机 IPC  │ 无           │ 无           │ 有（aeron:ipc shared memory）│
-│ 分片重组  │ 手动         │ 手动         │ 内建（fragment assembler）│
-│ 延迟     │ 极低         │ 低           │ 极低（同机 IPC sub-μs）│
+│ 传输层   │ UDP + 自建    │ UDP + 自建   │ UDP / IPC     │
+│ 零拷贝   │ 否           │ 否           │ 是            │
+│ 背压     │ 无           │ 无           │ 有            │
+│ 多播     │ 无           │ 无           │ 有            │
+│ 同机 IPC │ 无           │ 无           │ 有            │
+│ 分片重组 │ 手动         │ 手动         │ 内建          │
+│ 延迟     │ 极低         │ 低           │ 极低          │
 │ C++ SDK  │ 无           │ C            │ C++（官方）   │
-│ 成熟度   │ BigWorld 内部 │ 游戏行业广泛  │ 金融/HFT 验证  │
 └──────────┴──────────────┴──────────────┴──────────────┘
 
-theseed 选择 Aeron 的理由：
+theseed 推荐 Aeron 的理由：
 
-  1. Mercury 级能力，但不用自己写可靠性层
-     - Aeron 内建 reliable=true/false：同一条连接混用
-     - 等价于 Mercury 的 RELIABLE_NO / RELIABLE_CRITICAL
+  1. 作为 Runtime Data Plane 的实现基础很合适
+     - 官方支持高性能 UDP 单播、组播和 IPC
+     - 同机 IPC 路径对 BaseApp / CellApp 很友好
 
-  2. 零拷贝——比 Mercury 和 KCP 都快
+  2. 零拷贝
      - memory-mapped buffer（AtomicBuffer）
-     - 同机 IPC 路径可达 sub-microsecond 延迟
+     - 同机 IPC 延迟很低
 
-  3. 内建背压——游戏服务器最需要但最难做对的
-     - Publication.offer() 在缓冲区满时返回流控错误
-     - 适配 tick 模型：tick 内发不完就留到下个 tick
+  3. 背压能力
+     - Publication.offer() 能暴露发送压力
+     - 适合 tick 模型做丢弃、合并和重试策略
 
-  4. 多播——EntityCall 广播场景天然适配
-     - 属性同步广播：一个 Publication → 多个 Subscription
+  4. 多播和旁路订阅扩展性好
 
-  5. 同机 IPC——同机房部署的杀手级优化
-     - aeron:ipc 走共享内存，不经过网络栈
-     - CellApp 和 BaseApp 在同一台机器时，延迟 sub-μs
+  5. 成熟的 C++ SDK
 
-  6. 成熟的 C++ SDK——不用自己写
-     - 官方维护的 aeron-cpp 客户端
+  6. theseed 的 "lossy" 语义由 Runtime 决定
+     - 过期的 volatile 更新可以在发送前合并或丢弃
+     - 不要求把所有语义都下沉为底层协议开关
 ```
 
-### 2.4 Aeron 集成架构
+### 2.4 Runtime Transport 架构
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ theseed Runtime                                         │
 │                                                          │
-│  IReliableTransport（theseed 抽象接口）                   │
+│  IRuntimeTransport（theseed 抽象接口）                   │
 │       │                                                  │
-│       ├── AeronTransport（推荐，内网进程间）               │
-│       │     ├── EntityCall: aeron:udp?reliable=true      │
-│       │     ├── 属性同步: aeron:udp?reliable=false       │
-│       │     ├── 位置更新: aeron:udp?reliable=false       │
-│       │     └── 同机 IPC: aeron:ipc（共享内存）           │
+│       ├── AeronTransport（推荐，内网进程间）              │
+│       │     ├── Ordered Stream: EntityCall / 迁移        │
+│       │     ├── State Delta Stream: Ghost / Witness      │
+│       │     ├── Volatile Stream: 位置 / 朝向             │
+│       │     └── 同机 IPC: aeron:ipc（共享内存）          │
 │       │                                                  │
-│       └── TCPTransport（备选，简单部署/跨机房）            │
-│                                                          │
-│  Aeron Media Driver（每台机器一个）                       │
-│       ├── UDP Transport                                  │
-│       ├── IPC Transport（共享内存）                       │
-│       ├── 多播路由                                       │
-│       └── 流控 + 重传 + 分片                              │
+│       └── TCPTransport（备选，简单部署）                 │
 └─────────────────────────────────────────────────────────┘
 
-Stream ID 分配：
+建议的 Stream 划分：
 
-  Stream ID    用途                    可靠性
-  ──────────   ──────────────          ────────
-  1001         EntityCall              reliable=true
-  1002         属性同步（real→ghost）   reliable=true
-  1003         位置/朝向更新            reliable=false
-  1004         实体创建/销毁            reliable=true
-  1005         迁移数据                reliable=true
-  1006         AOI 进入/离开           reliable=false
-  2001         控制面消息              reliable=true
-  2002         心跳                    reliable=false
+  Stream ID    用途                            DeliveryClass
+  ──────────   ───────────────────────────     ────────────────
+  1001         EntityCall                      ORDERED_RELIABLE
+  1002         状态同步（real→ghost / witness） ORDERED_RELIABLE
+  1003         位置/朝向 volatile 更新          UNORDERED_LOSSY
+  1004         实体创建/销毁                    ORDERED_RELIABLE
+  1005         迁移数据                        ORDERED_RELIABLE
+
+说明：
+  - 控制面消息不在 Runtime Transport 文档中定义
+  - MessageBus 自己维护 subject / queue / request-reply 语义
 ```
 
 ### 2.5 核心接口
 
 ```cpp
-// runtime/ReliableTransport.h
+// runtime/RuntimeTransport.h
 
-class IReliableTransport {
+class IRuntimeTransport {
 public:
-    virtual ~IReliableTransport() = default;
+    virtual ~IRuntimeTransport() = default;
 
     virtual void send(const Address& target,
                       const Message& msg,
-                      Reliability reliability) = 0;
+                      DeliveryClass deliveryClass) = 0;
 
     virtual void registerHandler(MessageId id,
                                  MessageHandler handler) = 0;
@@ -276,7 +294,7 @@ public:
 ```cpp
 // runtime/AeronTransport.h
 
-class AeronTransport : public IReliableTransport {
+class AeronTransport : public IRuntimeTransport {
 public:
     void init(const AeronConfig& config) {
         aeron::Context ctx;
@@ -290,18 +308,22 @@ public:
             ? "aeron:ipc"
             : "aeron:udp?endpoint=" + config.endpoint;
 
-        reliablePub_ = getPublication(channel, STREAM_ENTITYCALL);
-        unreliablePub_ = getPublication(channel, STREAM_POSITION_UPDATE);
+        orderedPub_ = getPublication(channel, STREAM_ORDERED);
+        stateDeltaPub_ = getPublication(channel, STREAM_STATE_DELTA);
+        volatilePub_ = getPublication(channel, STREAM_VOLATILE);
 
-        reliableSub_ = getSubscription(channel, STREAM_ENTITYCALL, /*reliable=*/true);
-        unreliableSub_ = getSubscription(channel, STREAM_POSITION_UPDATE, /*reliable=*/false);
+        orderedSub_ = getSubscription(channel, STREAM_ORDERED);
+        stateDeltaSub_ = getSubscription(channel, STREAM_STATE_DELTA);
+        volatileSub_ = getSubscription(channel, STREAM_VOLATILE);
     }
 
     void send(const Address& target,
               const Message& msg,
-              Reliability reliability) override {
-        auto& pub = (reliability >= Reliability::HIGH)
-            ? *reliablePub_ : *unreliablePub_;
+              DeliveryClass deliveryClass) override {
+        auto& pub =
+            deliveryClass == DeliveryClass::ORDERED_RELIABLE
+                ? *orderedPub_
+                : *volatilePub_;
 
         aeron::concurrent::AtomicBuffer buffer(msg.data(), msg.size());
 
@@ -310,22 +332,31 @@ public:
             result = pub.offer(buffer, 0, msg.size());
             if (result == aeron::Publication::BACK_PRESSURED) {
                 METRIC_COUNTER("transport.backpressure", 1);
-                return;  // 留到下个 tick
+
+                if (deliveryClass == DeliveryClass::ORDERED_RELIABLE) {
+                    enqueueRetry(target, msg);
+                } else {
+                    coalesceVolatile(target, msg);
+                }
+                return;
             }
         } while (result < 0 && result != aeron::Publication::NOT_CONNECTED);
     }
 
     void tick() override {
-        reliableSub_->poll(messageHandler_, 100);
-        unreliableSub_->poll(messageHandler_, 200);
+        orderedSub_->poll(messageHandler_, 100);
+        stateDeltaSub_->poll(messageHandler_, 200);
+        volatileSub_->poll(messageHandler_, 200);
     }
 
 private:
     std::shared_ptr<aeron::Aeron> aeron_;
-    std::shared_ptr<aeron::Publication> reliablePub_;
-    std::shared_ptr<aeron::Publication> unreliablePub_;
-    std::shared_ptr<aeron::Subscription> reliableSub_;
-    std::shared_ptr<aeron::Subscription> unreliableSub_;
+    std::shared_ptr<aeron::Publication> orderedPub_;
+    std::shared_ptr<aeron::Publication> stateDeltaPub_;
+    std::shared_ptr<aeron::Publication> volatilePub_;
+    std::shared_ptr<aeron::Subscription> orderedSub_;
+    std::shared_ptr<aeron::Subscription> stateDeltaSub_;
+    std::shared_ptr<aeron::Subscription> volatileSub_;
     aeron::FragmentAssembler assembler_;
 };
 ```
@@ -337,22 +368,22 @@ Bundle 消息头格式（theseed）：
 
 ┌─────────────────────────────────────────┐
 │ Message ID (2 bytes)                    │
-│ Reliability (2 bits)                    │  ← 新增
+│ DeliveryClass (1 bit)                   │
 │ Compressed (1 bit)                      │
-│ Reserved (5 bits)                       │
+│ Reserved (6 bits)                       │
 │ Payload Length (2 bytes)                │
 ├─────────────────────────────────────────┤
 │ Payload ...                             │
 └─────────────────────────────────────────┘
 
 发送端：
-  1. 根据 MessageDescription 的可靠性配置设置标记
-  2. CRITICAL/HIGH 消息进入可靠发送队列（等待 ACK）
-  3. LOW/NONE 消息直接发送（不等待）
+  1. 根据消息类型选择 DeliveryClass
+  2. ORDERED_RELIABLE 消息进入保序发送队列
+  3. UNORDERED_LOSSY 消息允许被合并或丢弃
 
 接收端：
-  1. CRITICAL/HIGH 消息回复 ACK
-  2. LOW/NONE 消息不回复 ACK
+  1. ORDERED_RELIABLE 路径按流内顺序处理
+  2. UNORDERED_LOSSY 路径按最新状态覆盖旧状态
 ```
 
 ### 2.8 与两套引擎的对比
@@ -360,7 +391,7 @@ Bundle 消息头格式（theseed）：
 | 维度 | BigWorld Mercury | KBEngine TCP | theseed Aeron |
 |------|-----------------|-------------|---------------|
 | 内部协议 | UDP + 自建可靠性 | TCP | UDP + Aeron Media Driver |
-| 可靠性分级 | 4 级（同一通道混用） | 无（全可靠） | reliable=true/false |
+| 运行时语义 | 4 级（同一通道混用） | 无（全可靠） | MVP 先实现 2 类语义 |
 | 零拷贝 | 否 | 否 | 是 |
 | 背压 | 无 | TCP 内建 | Publication.offer() 流控 |
 | 多播 | 无 | 无 | UDP multicast |

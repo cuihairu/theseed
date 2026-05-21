@@ -155,13 +155,43 @@
 - 脚本安全四层模型
 - 运维自动化（滚动更新/热更分级）
 
-**问题**：自己加的部分太多，BigWorld/BigWorld 的部分集中在 00-runtime-core.md。其他 5 篇几乎全是"云原生扩展"。
+**问题**：自己加的部分太多，BigWorld/KBEngine 的部分集中在 00-runtime-core.md。其他 5 篇几乎全是"云原生扩展"。
 
-**应该补的 BigWorld 参考**：
-1. BigWorld 的 `BackupSender` 灾备机制（01 文档缺失）
-2. BigWorld 的 `aoi_update_schemes` 可插拔策略（00 文档缺失）
-3. BigWorld 的 BSP 树动态拓扑（00 文档只提了简化版）
-4. BigWorld 的三级 Profiler 数据驱动负载均衡（02 文档缺失）
-5. BigWorld 的 Mercury UDP 四级可靠性（EntityCall 传输层选型未参考）
-6. BigWorld 的 `consolidate_dbs / transfer_db / sync_db` 迁移工具（01 文档可参考）
-7. BigWorld 的 `LoginApp Challenge` 认证机制（03 Gateway 可参考）
+**仍需继续补的 BigWorld 参考**：
+1. BigWorld 的运行时世界/空间编辑与部署工具链细节（目前只覆盖服务端运行时边界，不覆盖 WorldEditor UI）
+
+## 本轮补齐
+
+本轮已单独补出的 BigWorld 系统级边界：
+
+```
+1. 10-backup-hash-and-ha.md
+   - BackupHash / BackupHashChain
+   - newBackupHash 切换期
+   - retire 时备份链冻结
+
+2. 05-data-ops-toolchain.md
+   - snapshot / transfer / consolidate / sync / repair
+   - 与 merge / persistence / secondary-db 分层
+
+3. 07-world-streaming-and-compiled-space.md
+   - geometry mapping / chunk / compiled space
+   - 世界资产离线编译与运行时边界
+
+4. 11-aoi-update-schemes-and-load-bounds.md
+   - per-entity AoI update priority curve
+   - load bounds / range update
+
+5. 06-runtime-profiler-and-load-feedback.md
+   - entity / type / space load signal
+   - profiler → balance / overload gate 反馈链
+
+6. 12-bsp-rebalance-and-offload.md
+   - BSP grow / shrink
+   - chunk-aware rebalance
+   - offload / retireCell 关系
+
+7. 07-runtime-transport-reliability.md
+   - driver / passenger / critical / none
+   - piggyback / overflow / inactivity
+```

@@ -3,6 +3,25 @@
 > 属性同步是 theseed 最核心的数据流：实体属性变更如何高效传播到所有相关方。
 >
 > 来源：BigWorld DataLoDLevels + VolatileInfo，KBEngine onDefDataChanged + Witness::update。
+> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
+
+---
+
+## 0. MVP 同步总则
+
+```
+MVP 下的统一规则：
+
+  属性变更
+    → 只标记 dirty
+    → 不在脚本执行中立即外发
+    → tick 末统一构造同步 Bundle
+    → tick 末统一 flush
+
+例外只有：
+  - 明确的 RPC / 事件消息
+  - 生命周期控制消息（创建 / 销毁 / 迁移控制）
+```
 
 ---
 
@@ -14,15 +33,15 @@
 Path 1: Real → Ghost（CellApp 内部同步）
   触发：属性变更 onDefDataChanged
   条件：isReal() && hasGhost() && 属性标记 CELL_PUBLIC
-  方式：立即发 Bundle 给 ghost CellApp
+  方式：标记 ghost dirty，tick 末统一构造 state-delta Bundle
 
 Path 2: Real → Witness（服务端到客户端）
   触发：属性变更 onDefDataChanged
   条件：属性标记 OTHER_CLIENTS 或 OWN_CLIENT
   方式：
-    OWN_CLIENT: 直接发给自己客户端
-    OTHER_CLIENTS: 遍历 witnesses 发送
-    注意：非 volatile 属性是立即发送，不是 tick 末批量
+    OWN_CLIENT: 标记 own-client dirty
+    OTHER_CLIENTS: 标记 witness dirty
+    注意：MVP 下不在属性 setter 中直接发客户端消息
 
 Path 3: Witness → Client（tick 末批量）
   触发：Witness::tick()
@@ -63,7 +82,6 @@ public:
 
     void clear() { mask_ = 0; }
 
-    // 遍历所有脏属性
     template<typename Func>
     void foreachDirty(Func&& fn) const {
         uint64_t m = mask_;
@@ -80,12 +98,39 @@ private:
 };
 ```
 
+```
+说明：
+  - PropertyBlock 的 dirty 只表示“本 tick 内变更过”
+  - 它不等价于“已经发给所有观察者”
+  - 不同目标（ghost / witness / db）可以有各自的发送游标或过滤逻辑
+```
+
 ---
 
-## 3. 同步 Bundle 构造
+## 3. Sync Build & Flush
 
 ```
-tick 末 Witness::tick() 构造同步 Bundle 的逻辑：
+tick 末统一构造同步 Bundle 的逻辑：
+
+1. 收集本 tick 的生命周期事件
+   - create / leave / destroy
+   - detailLevel 变更
+
+2. 构造 Ghost state-delta Bundle
+   - 只序列化 ghost 可见属性
+   - 按实体和属性脏位图输出
+
+3. 构造 Witness / Client Bundle
+   - 先输出视野进出
+   - 再输出属性 delta
+   - 最后附加 volatile 数据
+
+4. 统一 flush
+   - Runtime Data Plane: real → ghost
+   - Client Channel: witness → client
+
+说明：
+  onDefDataChanged 的职责是“标脏”，不是“立即发包”。
 
 Bundle layout:
 ┌─────────────────────────────────────────────────────────┐
@@ -103,11 +148,12 @@ Bundle layout:
 ├─────────────────────────────────────────────────────────┤
 │ Tail: 结束标记                                           │
 └─────────────────────────────────────────────────────────┘
+```
 
 带宽优化手段（来自 KBEngine）：
-  1. aliasID: 属性数 < 255 时用 1 字节代替 2 字节 utype
-  2. detailLevel: 远处实体只同步部分属性
-  3. 脏属性 bitmap: 只发送变化的属性
-  4. volatile threshold: 位置/朝向变化超过阈值才同步
-  5. entity alias: 首次发送 entity type string，后续用 1 字节 alias
-```
+
+1. aliasID: 属性数 < 255 时用 1 字节代替 2 字节 utype
+2. detailLevel: 远处实体只同步部分属性
+3. 脏属性 bitmap: 只发送变化的属性
+4. volatile threshold: 位置/朝向变化超过阈值才同步
+5. entity alias: 首次发送 entity type string，后续用 1 字节 alias

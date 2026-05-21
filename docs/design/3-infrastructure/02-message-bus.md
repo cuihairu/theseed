@@ -1,9 +1,10 @@
 # MessageBus — 消息总线与跨服
 
-> theseed 消息总线：Aeron 统一 Runtime Transport 和控制面消息。
-> 跨服桥接用 NATS。
+> theseed 的 MessageBus 负责 Control Plane 和 Cross-Realm Async Plane。
+> Runtime Data Plane 由独立的 Runtime Transport 负责，不走 MessageBus。
 >
 > 来源：KBEngine 无消息队列（直连 TCP），theseed 新增。
+> 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
@@ -11,32 +12,46 @@
 
 ```
 没有消息总线的世界：
-  BaseApp_A ←→ CellApp_3, CellApp_7 ...（N×M 连接）
+  控制面和跨服能力都依赖点对点连接
+  发现、广播、桥接很快失控
 
 有消息总线的世界：
-  所有进程只连 MessageBus（拓扑清晰）
+  Control Plane / Cross-Realm Async Plane 拥有统一入口
 
 额外好处：
+  - 进程发现和广播简单
   - 跨服消息天然支持
-  - 广播消息一条到达所有进程
-  - 持久化消息（离线队列）
-  - 异步任务分发
+  - 请求/响应模式统一
+  - 异步任务分发更清晰
+
+注意：
+  MessageBus 不替代 Runtime Transport。
+  实体主路径仍然由 Runtime Data Plane 负责。
 ```
 
 ---
 
 ## 2. 后端选择
 
-**theseed 选择 Aeron 作为默认**：
-- 进程间 EntityCall 和属性同步已用 Aeron（见 1-core/05-communication）
-- 控制面消息复用同一个 Media Driver
-- 跨服桥接用 NATS（跨机房 Aeron 集群管理复杂）
-- Aeron Archive 可选做持久化消息
+**MVP 下 theseed 选择 NATS 作为 MessageBus 默认后端**：
 
-**Aeron 双重角色**：
-1. Runtime Transport（EntityCall、属性同步、位置更新）
-2. MessageBus（控制面、事件广播、异步任务分发）
-同一个 Media Driver，不同 streamId 区分用途。
+- 运行时主路径已由 Runtime Transport 解决
+- MessageBus 更看重 subject、request-reply、queue group、跨机房桥接
+- NATS 在控制面和跨服异步上更贴合需求
+- 运维和部署模型也更成熟
+
+边界如下：
+
+1. Runtime Transport
+   - EntityCall
+   - Ghost / Witness 同步
+   - 迁移数据
+
+2. MessageBus
+   - 控制面消息
+   - 跨 Realm 异步调用
+   - 后台任务分发
+   - 广播 / 通知 / 离线队列
 
 ---
 
@@ -77,20 +92,28 @@ public:
 
 ```
 MessageBus 用途
-├── 实时消息
-│   ├── EntityCall 跨进程转发
-│   ├── 属性同步广播
-│   ├── AOI 更新通知
-│   └── 跨服路由
 ├── 控制面消息
 │   ├── 进程上下线通知
 │   ├── 路由表更新
 │   ├── 配置变更广播
 │   └── 热更命令下发
-└── 持久化消息
-    ├── 离线消息队列
-    ├── 异步任务分发
-    └── 审计日志
+├── 异步任务
+│   ├── 后台任务分发
+│   ├── 离线通知
+│   └── 审计日志
+└── 跨服消息
+    ├── 匹配
+    ├── 查询
+    ├── 邮件 / 通知
+    └── Bridge 转发
+```
+
+```
+MessageBus 禁止承载：
+  - EntityCall 主路径
+  - real → ghost 状态同步
+  - 迁移快照数据
+  - tick 内实时 AOI / 属性复制
 ```
 
 ---
@@ -109,9 +132,7 @@ Bridge 配置：
   - 只转发 cross-realm 前缀的消息
   - OTLP 兼容（trace context 传播）
   - 支持请求/响应
-
-脚本层：
-  entity.call_remote("realm_b", "Player.onCrossRealmEvent", args)
+  - 不承载实体本地权威路径
 ```
 
 ### 跨服脚本 API

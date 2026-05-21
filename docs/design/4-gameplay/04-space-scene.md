@@ -7,12 +7,42 @@
 
 ---
 
+## 0. 分阶段边界
+
+```
+MVP / Phase 1：
+  - 只支持 single_cell
+  - 不承诺 BigWorld 级 BSP 动态拓扑
+  - 不承诺 chunk 级动态流送
+
+Phase 2：
+  - 支持 static_partition
+  - 支持固定边界多 Cell
+
+Phase 3：
+  - 才考虑 BSP / grow-shrink / auto rebalance
+  - 才考虑真正的 chunk stream
+```
+
+因此本文所有 `bsp` 相关概念都应理解为：
+
+```
+远期设计占位
+不是当前可兑现能力
+```
+
+世界资产映射、chunk stream、compiled space 的边界见：
+
+`./07-world-streaming-and-compiled-space.md`
+
+---
+
 ## 1. 概念对比
 
 ```
 BigWorld:  Space → 多个 Cell → Chunk 动态加载/卸载 → BSP 动态拓扑
 KBEngine:  Space = Entity → 单 Cell → 全量加载
-theseed:   Space = 独立管理单元 → ISpaceTopology 可插拔 → 按需加载
+theseed:   Phase 1 单 Cell → Phase 2 静态分区 → Phase 3 动态拓扑
 ```
 
 ---
@@ -92,7 +122,8 @@ private:
 
 ```xml
 <spaces>
-    <space name="main_world" topology="bsp">
+    <!-- MVP / Phase 1 -->
+    <space name="main_world" topology="single_cell">
         <navmesh layer="ground" path="navmesh/main_ground.nav"/>
         <collision path="collision/main.col"/>
         <bounds minX="-5000" maxX="5000" minZ="-5000" maxZ="5000"/>
@@ -105,6 +136,20 @@ private:
 </spaces>
 ```
 
+未来配置占位：
+
+```xml
+<!-- Phase 2 -->
+<space name="main_world" topology="static_partition">
+    <partition rows="2" cols="2"/>
+</space>
+
+<!-- Phase 3 -->
+<space name="continent_01" topology="bsp">
+    <rebalance policy="auto"/>
+</space>
+```
+
 ---
 
 ## 5. 对比
@@ -112,7 +157,7 @@ private:
 | 能力 | BigWorld | KBEngine | theseed |
 |------|----------|----------|---------|
 | Space 本质 | 独立管理单元 | 继承 Entity | 独立管理单元 |
-| Cell 分配 | BSP 动态拓扑 | 单 Cell | ISpaceTopology 可插拔 |
-| Chunk 加载 | 动态加载/卸载 | 无 | 按需加载 |
+| Cell 分配 | BSP 动态拓扑 | 单 Cell | Phase 1 单 Cell / Phase 2 静态分区 / Phase 3 BSP |
+| Chunk 加载 | 动态加载/卸载 | 无 | MVP 不承诺，Phase 3 再评估 |
 | NavMesh 绑定 | per-Space | per-Space | per-Space |
 | 动态创建 | 支持 | 支持 | 支持 |

@@ -22,6 +22,13 @@ export default defineConfig({
     sidebar: {
       '/design/': [
         {
+          text: '0-foundation 设计基线',
+          collapsed: false,
+          items: [
+            { text: '01 MVP 架构总纲', link: '/design/0-foundation/01-mvp-architecture-baseline' },
+          ],
+        },
+        {
           text: '1-core 核心运行时',
           collapsed: false,
           items: [
@@ -34,6 +41,9 @@ export default defineConfig({
             { text: '07 Entity 迁移', link: '/design/1-core/07-entity-migration' },
             { text: '08 定时器与对象池', link: '/design/1-core/08-timer-and-pool' },
             { text: '09 容错', link: '/design/1-core/09-fault-tolerance' },
+            { text: '10 Backup Hash 与 HA', link: '/design/1-core/10-backup-hash-and-ha' },
+            { text: '11 AoI Update 与 Load Bounds', link: '/design/1-core/11-aoi-update-schemes-and-load-bounds' },
+            { text: '12 BSP Rebalance 与 Offload', link: '/design/1-core/12-bsp-rebalance-and-offload' },
           ],
         },
         {
@@ -43,6 +53,8 @@ export default defineConfig({
             { text: '01 数据定义', link: '/design/2-data/01-data-definition' },
             { text: '02 持久化', link: '/design/2-data/02-persistence' },
             { text: '03 合服', link: '/design/2-data/03-server-merge' },
+            { text: '04 SecondaryDB / 本地归档暂存', link: '/design/2-data/04-secondary-db' },
+            { text: '05 Data Ops Toolchain', link: '/design/2-data/05-data-ops-toolchain' },
           ],
         },
         {
@@ -52,6 +64,10 @@ export default defineConfig({
             { text: '01 Gateway', link: '/design/3-infrastructure/01-gateway' },
             { text: '02 消息总线', link: '/design/3-infrastructure/02-message-bus' },
             { text: '03 Redis / 异步 / 配置', link: '/design/3-infrastructure/03-redis-async-config' },
+            { text: '04 Login Service', link: '/design/3-infrastructure/04-login-service' },
+            { text: '05 集群生命周期', link: '/design/3-infrastructure/05-cluster-lifecycle' },
+            { text: '06 Runtime Profiler 与 Load Feedback', link: '/design/3-infrastructure/06-runtime-profiler-and-load-feedback' },
+            { text: '07 Runtime Transport Reliability', link: '/design/3-infrastructure/07-runtime-transport-reliability' },
           ],
         },
         {
@@ -64,6 +80,7 @@ export default defineConfig({
             { text: '04 Space / Scene', link: '/design/4-gameplay/04-space-scene' },
             { text: '05 内置实体', link: '/design/4-gameplay/05-built-in-entities' },
             { text: '06 生命周期与脚本绑定', link: '/design/4-gameplay/06-lifecycle' },
+            { text: '07 World Streaming / Compiled Space', link: '/design/4-gameplay/07-world-streaming-and-compiled-space' },
           ],
         },
         {
@@ -86,6 +103,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: '01 OTel 集成', link: '/design/7-observability/01-otel-integration' },
+            { text: '02 运维控制面', link: '/design/7-observability/02-ops-control-plane' },
           ],
         },
         {

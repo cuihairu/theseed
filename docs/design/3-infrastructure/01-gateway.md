@@ -37,7 +37,32 @@ Client
 
 ---
 
-## 2. 核心接口
+## 2. 边界说明
+
+```
+Gateway 负责：
+  - 外部连接接入
+  - TLS 终结
+  - 基础认证握手
+  - 限流与路由
+
+Gateway 不负责：
+  - 登录统计平台
+  - 封禁列表运营策略
+  - 在线运维命令
+  - 分布式状态观察
+```
+
+也就是说：
+
+```
+Challenge 握手属于 Gateway / Login 接入边界
+challenge 配置热改、ban 清理、状态检查属于 Ops Control Plane
+```
+
+---
+
+## 3. 核心接口
 
 ```cpp
 class IGateway {
@@ -63,7 +88,7 @@ public:
 
 ---
 
-## 3. 配置示例
+## 4. 配置示例
 
 ```yaml
 gateway:
@@ -97,13 +122,13 @@ gateway:
 
 ---
 
-## 4. 登录安全
+## 5. 登录安全
 
 > 来源：BigWorld Login Challenge (Cuckoo Cycle PoW)。
 > KBEngine 只有 Blowfish + rndUUID。
 > theseed 借鉴 BigWorld 的 PoW 反 DDoS 思路。
 
-### 4.1 多层防护
+### 5.1 多层防护
 
 ```
 Layer 1: 网络层 — TLS 终结 + IP 限流 + 黑白名单
@@ -112,7 +137,7 @@ Layer 3: Token 认证 — JWT token + 过期时间
 Layer 4: 会话绑定 — IP/设备指纹绑定（可选）
 ```
 
-### 4.2 Challenge 机制
+### 5.2 Challenge 机制
 
 ```cpp
 class ILoginChallenge {
@@ -129,7 +154,7 @@ class HashPoW : public ILoginChallenge {
 };
 ```
 
-### 4.3 对比
+### 5.3 对比
 
 | 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
