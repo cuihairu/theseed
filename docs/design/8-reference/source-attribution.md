@@ -57,6 +57,26 @@ theseed 这份来源追溯文档的任务，
   - 哪些只是边界，不是当前承诺
 ```
 
+## 2.1 新增基础设施边界
+
+### 仓库布局与构建
+
+```
+monorepo / vcpkg / C++23 这组约束主要是 theseed 自己的设计选择，
+BigWorld 和 KBEngine 只提供组织形态上的参考，不提供现成的现代仓库模型。
+```
+
+### MachineAgent / Host Ops
+
+```
+这部分的参考来源是 BigWorld bwmachined + KBEngine machine。
+theseed 的收敛方式是：
+  - 保留节点代理
+  - 保留本机进程编排
+  - 保留节点摘要上报
+  - 但把全局控制面和诊断面分离出去
+```
+
 ---
 
 ## 1. 总判断

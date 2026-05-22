@@ -53,6 +53,7 @@
 |------|------|
 | [01-mvp-architecture-baseline](0-foundation/01-mvp-architecture-baseline.md) | MVP 范围、运行时边界、同步时序、迁移与热更约束 |
 | [02-audit-scope-and-layering](0-foundation/02-audit-scope-and-layering.md) | 审计口径、BigWorld/KBEngine 对照与新分层原则 |
+| [03-repository-and-build-layout](0-foundation/03-repository-and-build-layout.md) | monorepo 目录、vcpkg、C++23 工具链边界 |
 
 ### 1-runtime-model
 
@@ -103,6 +104,7 @@
 | [03-redis-async-and-config](5-access-and-control-plane/03-redis-async-and-config.md) | Redis、异步任务框架、统一配置 |
 | [04-ops-control-plane](5-access-and-control-plane/04-ops-control-plane.md) | 分布式观察、在线命令、配置热改、审计 |
 | [05-telemetry-and-debug](5-access-and-control-plane/05-telemetry-and-debug.md) | Telemetry、Debug、Diagnostics 与 OTel 边界 |
+| [06-machine-agent-and-host-ops](5-access-and-control-plane/06-machine-agent-and-host-ops.md) | machine / host ops / 节点摘要 / 资源上报 |
 
 ### 6-world-and-game-framework
 
@@ -165,3 +167,15 @@
 → `7-scripting-and-client/02-hot-update`
 → `7-scripting-and-client/03-script-debug`
 → `3-cluster-and-availability/03-cluster-lifecycle`
+
+**仓库与工具链**
+
+`0-foundation/03-repository-and-build-layout`
+→ `0-foundation/01-mvp-architecture-baseline`
+→ `1-runtime-model/04-io-runtime-and-backend-abstraction`
+
+**主机运维**
+
+`5-access-and-control-plane/06-machine-agent-and-host-ops`
+→ `5-access-and-control-plane/04-ops-control-plane`
+→ `5-access-and-control-plane/05-telemetry-and-debug`
