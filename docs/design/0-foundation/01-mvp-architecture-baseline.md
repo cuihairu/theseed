@@ -5,6 +5,60 @@
 
 ---
 
+## 0.5 引擎实现对照与取舍
+
+### BigWorld 是怎么实现的
+
+```
+BigWorld 的做法是“先把运行时和系统层都做厚”：
+  - runtime 主干强
+  - HA / 数据 / 登录 / 控制面体系完整
+  - 但整体偏重，MVP 复刻成本高
+```
+
+### KBEngine 是怎么实现的
+
+```
+KBEngine 的做法是“先把运行时主干跑通”：
+  - tick / entity / AOI / EntityCall 简洁
+  - 运行时落地强
+  - 但系统层能力偏薄
+```
+
+### 优缺点
+
+```
+BigWorld 优点：
+  - 系统边界完整
+  - 运行时与运维链条成体系
+
+BigWorld 缺点：
+  - 重
+  - 复杂
+  - MVP 复制成本高
+
+KBEngine 优点：
+  - 轻
+  - 易落地
+  - 适合做 runtime core 起点
+
+KBEngine 缺点：
+  - 系统级能力薄
+  - 运维、HA、工具链要自己补
+```
+
+### theseed 的取舍
+
+```
+theseed 先取 KBEngine 的可落地性，
+再按 BigWorld 的系统面补长期边界。
+
+因此 MVP 不追求全量 BigWorld 复刻，
+但文档边界要保留 BigWorld 级系统能力的方向。
+```
+
+---
+
 ## 1. 文档目的
 
 当前设计文档覆盖范围很大，已经包含：
@@ -12,7 +66,7 @@
 - Base/Cell、Ghost/Witness、AOI、迁移、容错
 - XML/XSD 数据定义、多后端存储、合服
 - Gateway、消息总线、Redis、异步任务
-- 热更新、客户端 SDK、OTel、DAP、自动扩缩
+- 热更新、客户端 SDK、OTel、脚本调试、自动扩缩
 
 这些方向本身没有问题，但在进入实现阶段前，必须先明确：
 
@@ -382,7 +436,7 @@ UE5/Cocos 在文档中可以保留为目标，但实现优先级晚于 Unity。
 不承诺首版就完成：
 
 - Blueprint 深度集成
-- 三端编辑器调试工具等价支持
+- 三端编辑器与脚本调试工具等价支持
 - 复杂预测回滚框架
 
 ---
@@ -406,7 +460,7 @@ MVP 可观测性只要求三件事：
 
 MVP 可选项：
 
-- 全量 DAP 调试
+- 全量脚本断点调试
 - 自动扩缩容
 - 火焰图导出
 
@@ -455,13 +509,14 @@ MVP 可选项：
 
 本文档对现有设计的约束如下：
 
-- `1-core/05-communication` 中 Runtime Transport 的边界优先于 MessageBus 扩展表述
-- `1-core/06-property-sync` 以 tick 末统一 flush 为准
-- `1-core/07-entity-migration` 不承诺脚本栈迁移
-- `2-data/02-persistence` 的多能力接口应按实现阶段拆分
-- `3-infrastructure/02-message-bus` 不再承载 EntityCall 主路径
-- `5-scripting/02-hot-update` 的 MVP 仅支持 L1 + 受限 L2
-- `6-client/01-sdk-architecture` 的 MVP 以 Unity 为主
-- `7-observability/01-otel-integration` 的 MVP 只要求 logs + metrics + key traces
+- `2-replication-and-space/03-runtime-communication-and-transport` 中 Runtime Data Plane 的边界优先于 MessageBus 扩展表述
+- `2-replication-and-space/04-property-replication` 以 tick 末统一 flush 为准
+- `2-replication-and-space/05-entity-migration` 不承诺脚本栈迁移
+- `4-data-and-ops/02-persistence` 的多能力接口应按实现阶段拆分
+- `5-access-and-control-plane/02-message-bus-and-cross-realm` 不再承载 EntityCall 主路径
+- `7-scripting-and-client/02-hot-update` 的 MVP 仅支持 L1 + 受限 L2
+- `7-scripting-and-client/03-script-debug` 的 MVP 只要求 traceback / stack dump / Entity 上下文 inspect
+- `7-scripting-and-client/04-client-sdk` 的 MVP 以 Unity 为主
+- `5-access-and-control-plane/05-telemetry-and-debug` 的 MVP 只要求 logs + metrics + key traces
 
 如果后续分篇文档与本页冲突，以本页为当前实现基线，直到对应分篇被修订。
