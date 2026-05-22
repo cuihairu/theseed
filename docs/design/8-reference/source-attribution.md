@@ -105,6 +105,8 @@ theseed 自己定义
 |------|------|------|
 | Tick 5 阶段分段 | KBEngine | `EventDispatcher::processUntilBreak` 风格最清晰 |
 | Base / Cell 双体 | BigWorld | KBEngine 是完整继承者 |
+| IORuntime / Reactor-Completion 分层 | theseed | 老引擎只有事件循环/ poller 语义，没有这层总抽象 |
+| Merkle diff / semantic compatibility | theseed | 老引擎多为单 digest 对比，缺少分层差异定位 |
 | PropertyBlock 连续内存 | theseed | 用于替代 Python dict 属性布局 |
 | DirtyMask 位图 | KBEngine 思想 + theseed 实现 | 脏标记概念来自现有引擎，位图化是 theseed 收敛 |
 | TimerWheel | 通用算法 + theseed 选型 | 非 BigWorld / KBEngine 原生 |

@@ -1,6 +1,7 @@
 # Client SDK — 客户端引擎支持
 
 > theseed 客户端 SDK：一份 XML 定义 → 生成服务端与客户端协议代码。
+> 同时保留一条“SDK 运行时元数据导入/更新”链路，用来对照 KBEngine 的混合式客户端方案。
 > 但 `MVP` 不追求三端一次到位，而是先保证 Unity 全链路跑通。
 >
 > 来源：KBEngine 有 Unity 插件（维护不活跃），theseed 新增多引擎代码生成目标。
@@ -23,11 +24,14 @@ BigWorld 有成熟客户端协议和完整生态，
 ### KBEngine 是怎么实现的
 
 ```
-KBEngine 提供过 Unity 插件与客户端接入样板，
-但整体更偏：
-  - 手写客户端逻辑
-  - 协议生成较弱
-  - 多端能力不成体系
+KBEngine 不是纯“运行时动态、完全不生成代码”：
+  - Unity / UE4 走离线 SDK 生成链
+  - 运行时再导入 entitydef / messages 摘要
+  - 通过 EntityDef.moduledefs + 反射把脚本类绑定起来
+  - JS 路径还有运行时 moduledefs 导入链
+
+它的特点是“生成 + 运行时绑定”混合在一起，
+而不是 theseed 想要的“编译期主生成、运行期只做受控导入”分层。
 ```
 
 ### 优缺点
@@ -38,9 +42,9 @@ BigWorld / KBEngine 的优点：
   - 实体同步路径清楚
 
 BigWorld / KBEngine 的缺点：
-  - 现代 codegen 弱
-  - 多端统一差
-  - 客户端工程化能力不够统一
+  - KBEngine 的生成链和运行时绑定耦合偏强
+  - 多端统一能力不够
+  - 现代化 SDK 分发/更新边界不够清晰
 ```
 
 ### theseed 的取舍
@@ -53,6 +57,7 @@ theseed 不追求一开始就复制 BigWorld 的完整客户端生态，
   - 先保证 Unity 主路径
   - 把 UE5 / Cocos 放到后续阶段
   - 用 codegen 换取一致性
+  - 同时预留 SDK 元数据导入/更新链，作为后续兼容与工具链能力
 ```
 
 ---
@@ -88,6 +93,11 @@ Runtime SDK
   ├── Entity Sync Engine
   ├── Event System
   └── Runtime Inspect Helpers
+
+SDK Delivery / Import
+  ├── 生成产物分发
+  ├── 元数据摘要校验
+  └── 受控导入/替换（Phase 2 预留）
 ```
 
 ---
@@ -110,6 +120,93 @@ theseed-codegen \
   --defs ./defs/ \
   --output-ue5 ./client/ue5/Plugins/Theseed/Source/Generated/ \
   --output-cocos ./client/cocos/assets/theseed/generated/
+```
+
+### 2.3 运行时 SDK 更新预留
+
+```
+参考 KBEngine 的做法，theseed 预留客户端 SDK 分发与导入链：
+  - 服务端下发 def / digest / package 摘要
+  - 客户端校验版本与兼容性
+  - 按受控流程替换生成产物
+
+注意：
+  这不是 MVP 主路径；
+  MVP 仍然以离线 codegen + 正常发布为主。
+```
+
+### 2.4 用于差异定位的摘要树
+
+```
+如果只用单个 MD5 / digest，
+它只能回答：
+  - “整体是否发生变化”
+
+却不能快速回答：
+  - “是哪个 entity / message / property 变了”
+  - “需要重建哪一部分缓存”
+  - “客户端是否可以只增量拉取一部分元数据”
+```
+
+```
+因此 theseed 可以把摘要结构升级为 Merkle tree：
+  - leaf：entity / property / method / message / schema node
+  - branch：聚合后的局部摘要
+  - root：对外发布的整体版本摘要
+```
+
+```
+收益：
+  - 快速定位变更子树
+  - 便于增量同步与局部重新校验
+  - 比单个 digest 更适合大协议面
+```
+
+### 2.5 兼容性不由 hash 单独决定
+
+```
+Merkle tree 只能回答“哪里变了”，
+不能单独回答“是否兼容”。
+```
+
+兼容性仍然要靠语义规则：
+
+```
+可兼容候选：
+  - 新增字段，且有默认值
+  - 新增非必需方法
+  - 新增可选消息
+
+通常不兼容：
+  - 删除字段
+  - 修改字段类型
+  - 修改协议编号 / method id / alias id
+  - 修改序列化顺序
+  - 修改客户端必须理解的枚举语义
+```
+
+### 2.6 推荐判定流程
+
+```
+1. 先做 canonicalization
+   - 避免仅仅重排文本就改变摘要
+
+2. 再做 Merkle diff
+   - 快速定位变更子树
+
+3. 最后做 semantic compatibility check
+   - 判定 backward / forward / incompatible
+```
+
+### 2.7 theseed 的取舍
+
+```
+theseed 不应继续停留在 KBEngine / BigWorld 风格的“单个 digest 比较”。
+
+更合理的边界是：
+  - 对外仍可暴露 root digest 作为快速握手摘要
+  - 内部使用 Merkle tree 做 diff、缓存、增量分发
+  - 最终兼容性结论由 schema / protocol 规则引擎给出
 ```
 
 ```
@@ -228,10 +325,10 @@ Cocos 方向：
 
 | 能力 | KBEngine | theseed |
 |------|---------|---------|
-| Unity | 有插件（维护不活跃） | MVP 主支持 |
+| Unity | 有插件 + 离线生成 SDK + 运行时导入 | MVP 主支持 |
 | UE5 | 无 | Phase 2 目标 |
 | Cocos | 无 | Phase 2 目标 |
-| 协议生成 | 无（手写客户端） | theseed-codegen |
+| 协议生成 | 部分存在（客户端 SDK 生成链） | theseed-codegen |
 | 属性插值 | 无 | InterpolatedProperty |
 | 断线重连 | 有限 | 自动重连 + 服务器保持 |
-| 编辑器工具 | 无 | Unity 主路径优先 |
+| SDK 更新链 | 有限但存在 | Phase 2 预留 |

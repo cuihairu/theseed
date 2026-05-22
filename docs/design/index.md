@@ -61,6 +61,7 @@
 | [01-tick-model](1-runtime-model/01-tick-model.md) | 单线程 tick、阶段时序、主循环约束 |
 | [02-entity-system](1-runtime-model/02-entity-system.md) | Base/Cell 双体模型、PropertyBlock、生命周期、对象池 |
 | [03-timer-and-memory](1-runtime-model/03-timer-and-memory.md) | TimerWheel、对象池、运行时内存管理 |
+| [04-io-runtime-and-backend-abstraction](1-runtime-model/04-io-runtime-and-backend-abstraction.md) | IORuntime、Reactor/Completion 后端、跨平台 I/O 抽象 |
 
 ### 2-replication-and-space
 
