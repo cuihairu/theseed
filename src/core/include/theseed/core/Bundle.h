@@ -1,0 +1,41 @@
+#pragma once
+
+#include "theseed/core/MessageHeader.h"
+#include "theseed/core/MemoryStream.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace theseed::core {
+
+class Bundle final {
+public:
+    Bundle() = default;
+
+    Bundle(const Bundle&) = delete;
+    Bundle& operator=(const Bundle&) = delete;
+    Bundle(Bundle&&) = default;
+    Bundle& operator=(Bundle&&) = default;
+
+    void beginMessage(std::uint16_t messageId, DeliveryFlag delivery = DeliveryFlag::OrderedReliable);
+    void endMessage();
+
+    MemoryStream& stream();
+    const MemoryStream& stream() const;
+
+    std::size_t messageCount() const;
+
+    void clear();
+
+private:
+    MemoryStream stream_;
+    std::size_t messageCount_ = 0;
+
+    // Tracks where the current message header was written for backfill
+    std::size_t headerPos_ = 0;
+    std::uint32_t nextSequence_ = 0;
+    bool inMessage_ = false;
+};
+
+}  // namespace theseed::core

@@ -24,3 +24,21 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_object_pool_test COMMAND theseed_object_pool_test)
+
+add_executable(theseed_bundle_test BundleTest.cpp)
+
+target_link_libraries(
+    theseed_bundle_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_bundle_test COMMAND theseed_bundle_test)
+
+add_executable(theseed_channel_test ChannelTest.cpp)
+
+target_link_libraries(
+    theseed_channel_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_channel_test COMMAND theseed_channel_test)
