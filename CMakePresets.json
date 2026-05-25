@@ -34,6 +34,14 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "g++"
       }
+    },
+    {
+      "name": "msvc-debug",
+      "hidden": false,
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "displayName": "MSVC Debug",
+      "description": "Debug build with MSVC via Visual Studio generator"
     }
   ],
   "buildPresets": [
@@ -44,6 +52,11 @@
     {
       "name": "gcc-debug",
       "configurePreset": "gcc-debug"
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
@@ -57,6 +70,14 @@
     {
       "name": "gcc-debug",
       "configurePreset": "gcc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
