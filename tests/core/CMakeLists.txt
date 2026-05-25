@@ -42,3 +42,21 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_channel_test COMMAND theseed_channel_test)
+
+add_executable(theseed_entity_data_test EntityDataTest.cpp)
+
+target_link_libraries(
+    theseed_entity_data_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_data_test COMMAND theseed_entity_data_test)
+
+add_executable(theseed_entity_def_loader_test EntityDefLoaderTest.cpp)
+
+target_link_libraries(
+    theseed_entity_def_loader_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_def_loader_test COMMAND theseed_entity_def_loader_test)

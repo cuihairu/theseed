@@ -12,15 +12,44 @@ const std::string& EntityDef::entityType() const {
     return entityType_;
 }
 
+std::size_t EntityDef::fixedSizeOfType(PropertyType type) {
+    switch (type) {
+        case PropertyType::Int8:    return 1;
+        case PropertyType::Int16:   return 2;
+        case PropertyType::Int32:   return 4;
+        case PropertyType::Int64:   return 8;
+        case PropertyType::UInt8:   return 1;
+        case PropertyType::UInt16:  return 2;
+        case PropertyType::UInt32:  return 4;
+        case PropertyType::UInt64:  return 8;
+        case PropertyType::Float32: return 4;
+        case PropertyType::Float64: return 8;
+        case PropertyType::Bool:    return 1;
+        case PropertyType::Vector3: return 12; // 3 * float
+        case PropertyType::String:  return 0;
+        case PropertyType::Blob:    return 0;
+    }
+    return 0;
+}
+
+bool EntityDef::isVariableSized(PropertyType type) {
+    return type == PropertyType::String || type == PropertyType::Blob;
+}
+
 PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size_t size) {
     PropertyDescriptor descriptor;
     descriptor.id = static_cast<PropertyId>(properties_.size());
     descriptor.name = std::move(name);
     descriptor.type = type;
     descriptor.offset = storageSize_;
-    descriptor.size = size;
 
-    storageSize_ += size;
+    if (size == 0 && !isVariableSized(type)) {
+        descriptor.size = fixedSizeOfType(type);
+    } else {
+        descriptor.size = size;
+    }
+
+    storageSize_ += descriptor.size;
     properties_.push_back(std::move(descriptor));
     return properties_.back().id;
 }

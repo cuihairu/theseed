@@ -18,11 +18,20 @@ enum class MethodSide : std::uint8_t {
 };
 
 enum class PropertyType : std::uint8_t {
-    Int32 = 0,
+    Int8 = 0,
+    Int16,
+    Int32,
+    Int64,
+    UInt8,
+    UInt16,
     UInt32,
+    UInt64,
     Float32,
     Float64,
     Bool,
+    String,
+    Vector3,
+    Blob,
 };
 
 struct PropertyDescriptor {
@@ -45,7 +54,10 @@ public:
 
     const std::string& entityType() const;
 
-    PropertyId addProperty(std::string name, PropertyType type, std::size_t size);
+    PropertyId addProperty(std::string name, PropertyType type, std::size_t size = 0);
+
+    static std::size_t fixedSizeOfType(PropertyType type);
+    static bool isVariableSized(PropertyType type);
     std::size_t propertyCount() const;
     std::size_t storageSize() const;
 
