@@ -6,3 +6,5 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_smoke_test COMMAND theseed_smoke_test)
+
+add_subdirectory(runtime)
