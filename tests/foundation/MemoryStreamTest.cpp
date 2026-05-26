@@ -1,4 +1,4 @@
-#include "theseed/core/MemoryStream.h"
+#include "theseed/foundation/MemoryStream.h"
 
 #include <cassert>
 #include <cmath>
@@ -7,7 +7,7 @@
 #include <iostream>
 #include <string>
 
-using theseed::core::MemoryStream;
+using theseed::foundation::MemoryStream;
 
 static int testsPassed = 0;
 static int testsFailed = 0;

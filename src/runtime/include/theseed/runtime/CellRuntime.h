@@ -11,6 +11,11 @@
 #include <string>
 #include <unordered_map>
 
+namespace theseed::foundation {
+struct TimerHandle;
+class TimerWheel;
+}  // namespace theseed::foundation
+
 namespace theseed::runtime {
 
 class CellRuntime final : public ITickable {
@@ -20,6 +25,7 @@ public:
     CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
                 std::shared_ptr<IRuntimeTransport> transport,
                 ComponentId localComponentId);
+    ~CellRuntime();
 
     SpaceRuntime& spaceRuntime();
     const SpaceRuntime& spaceRuntime() const;
@@ -49,6 +55,15 @@ public:
                             std::span<const std::byte> payload = {});
     bool dispatchInvocation(const RuntimeInvocation& invocation);
     bool applyGhostSync(const RuntimeInvocation& invocation);
+
+    using TimerCallback = std::function<void()>;
+
+    foundation::TimerHandle addTimer(Duration delay, TimerCallback callback);
+    bool cancelTimer(foundation::TimerHandle handle);
+
+    void broadcastEvent(std::string_view event, std::span<const std::byte> data = {});
+    void broadcastEventInRange(std::string_view event, const Vector3& center, float range,
+                               std::span<const std::byte> data = {});
 
     void tick(TickContext& context) override;
 
@@ -95,6 +110,7 @@ private:
     std::unordered_map<EntityId, std::unique_ptr<Entity>> ownedEntities_;
     std::unordered_map<EntityId, MigrationRoute> migrationRoutes_;
     std::unordered_map<EntityId, GhostBinding> ghostBindings_;
+    std::unique_ptr<foundation::TimerWheel> timerWheel_;
 };
 
 }  // namespace theseed::runtime

@@ -1,10 +1,10 @@
-#include "theseed/core/MemoryStream.h"
+#include "theseed/foundation/MemoryStream.h"
 
 #include <algorithm>
 #include <cstring>
 #include <utility>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 MemoryStream::MemoryStream(std::size_t initialCapacity)
     : buffer_(initialCapacity) {}
@@ -209,4 +209,4 @@ std::byte* MemoryStream::data() { return buffer_.data(); }
 const std::byte* MemoryStream::readPtr() const { return buffer_.data() + rpos_; }
 const std::byte* MemoryStream::writePtr() const { return buffer_.data() + wpos_; }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

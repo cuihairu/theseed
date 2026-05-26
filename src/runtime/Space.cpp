@@ -57,6 +57,8 @@ Space::Space(SpaceId id, std::string name, std::unique_ptr<ISpaceTopology> topol
     }
 }
 
+Space::~Space() = default;
+
 void Space::initialize(const SpaceConfig& config) {
     if (!config.name.empty()) {
         name_ = config.name;
@@ -139,6 +141,28 @@ std::vector<Entity*> Space::entities() const {
 
 std::vector<Entity*> Space::queryRange(const Vector3& center, float radius) const {
     return coordinateSystem_->entitiesInRange(center, radius);
+}
+
+std::vector<Entity*> Space::findEntitiesByType(const std::string& entityType) const {
+    std::vector<Entity*> result;
+    for (const auto& [entityId, member] : entities_) {
+        static_cast<void>(entityId);
+        if (member.entity != nullptr && member.entity->entityType() == entityType) {
+            result.push_back(member.entity);
+        }
+    }
+    return result;
+}
+
+std::vector<Entity*> Space::findEntitiesByTag(const std::string& tag) const {
+    std::vector<Entity*> result;
+    for (const auto& [entityId, member] : entities_) {
+        static_cast<void>(entityId);
+        if (member.entity != nullptr && member.entity->hasTag(tag)) {
+            result.push_back(member.entity);
+        }
+    }
+    return result;
 }
 
 std::size_t Space::entityCount() const {

@@ -7,5 +7,6 @@ target_link_libraries(
 
 add_test(NAME theseed_smoke_test COMMAND theseed_smoke_test)
 
+add_subdirectory(foundation)
 add_subdirectory(core)
 add_subdirectory(runtime)

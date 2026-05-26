@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 class MemoryStream final {
 public:
@@ -77,4 +77,4 @@ private:
     std::size_t wpos_ = 0;
 };
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

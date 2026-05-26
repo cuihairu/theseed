@@ -1,4 +1,4 @@
-#include "theseed/core/TimerWheel.h"
+#include "theseed/foundation/TimerWheel.h"
 
 #include <cassert>
 #include <chrono>
@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-using theseed::core::TimerHandle;
-using theseed::core::TimerWheel;
+using theseed::foundation::TimerHandle;
+using theseed::foundation::TimerWheel;
 
 static int testsPassed = 0;
 static int testsFailed = 0;

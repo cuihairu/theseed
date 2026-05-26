@@ -9,6 +9,15 @@ void PropertyBlock::init(const EntityDef& def) {
     def_ = &def;
     dirtyMask_.resize(def.propertyCount());
     storage_.assign(def.storageSize(), std::byte{0});
+
+    for (const auto& desc : def.properties()) {
+        if (!desc.defaultValue.empty() && desc.size > 0
+            && desc.defaultValue.size() <= desc.size) {
+            std::memcpy(storage_.data() + desc.offset,
+                        desc.defaultValue.data(),
+                        desc.defaultValue.size());
+        }
+    }
 }
 
 const EntityDef& PropertyBlock::def() const {

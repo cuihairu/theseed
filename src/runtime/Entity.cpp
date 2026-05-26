@@ -117,6 +117,99 @@ void Entity::clearMethodHandlers() {
     methodHandlers_.clear();
 }
 
+void Entity::subscribe(std::string event, EventCallback callback) {
+    if (!event.empty() && callback) {
+        eventSubscriptions_.emplace(std::move(event), std::move(callback));
+    }
+}
+
+void Entity::unsubscribe(const std::string& event) {
+    eventSubscriptions_.erase(event);
+}
+
+void Entity::emit(std::string_view event, std::span<const std::byte> data) {
+    auto range = eventSubscriptions_.equal_range(std::string(event));
+    for (auto it = range.first; it != range.second; ++it) {
+        it->second(*this, event, data);
+    }
+}
+
+void Entity::setOnCreate(LifecycleCallback cb) {
+    onCreate_ = std::move(cb);
+}
+
+void Entity::setOnDestroy(LifecycleCallback cb) {
+    onDestroy_ = std::move(cb);
+}
+
+void Entity::setOnEnterSpace(SpaceCallback cb) {
+    onEnterSpace_ = std::move(cb);
+}
+
+void Entity::setOnLeaveSpace(SpaceCallback cb) {
+    onLeaveSpace_ = std::move(cb);
+}
+
+void Entity::setOnEnterAoI(AoICallback cb) {
+    onEnterAoI_ = std::move(cb);
+}
+
+void Entity::setOnLeaveAoI(AoICallback cb) {
+    onLeaveAoI_ = std::move(cb);
+}
+
+void Entity::notifyCreate() {
+    if (onCreate_) {
+        onCreate_(*this);
+    }
+}
+
+void Entity::notifyDestroy() {
+    if (onDestroy_) {
+        onDestroy_(*this);
+    }
+}
+
+void Entity::notifyEnterSpace(SpaceId spaceId) {
+    if (onEnterSpace_) {
+        onEnterSpace_(*this, spaceId);
+    }
+}
+
+void Entity::notifyLeaveSpace(SpaceId spaceId) {
+    if (onLeaveSpace_) {
+        onLeaveSpace_(*this, spaceId);
+    }
+}
+
+void Entity::notifyEnterAoI(EntityId other) {
+    if (onEnterAoI_) {
+        onEnterAoI_(*this, other);
+    }
+}
+
+void Entity::notifyLeaveAoI(EntityId other) {
+    if (onLeaveAoI_) {
+        onLeaveAoI_(*this, other);
+    }
+}
+
+void Entity::addTag(std::string tag) {
+    tags_.insert(std::move(tag));
+}
+
+void Entity::removeTag(const std::string& tag) {
+    tags_.erase(tag);
+}
+
+bool Entity::hasTag(const std::string& tag) const {
+    return tags_.contains(tag);
+}
+
+const std::unordered_set<std::string>& Entity::tags() const {
+    return tags_;
+}
+
 void Entity::activate() {
     state_.store(EntityState::Active, std::memory_order_release);
 }

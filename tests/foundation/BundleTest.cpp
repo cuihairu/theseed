@@ -1,17 +1,17 @@
-#include "theseed/core/Bundle.h"
-#include "theseed/core/MemoryStream.h"
-#include "theseed/core/MessageHeader.h"
+#include "theseed/foundation/Bundle.h"
+#include "theseed/foundation/MemoryStream.h"
+#include "theseed/foundation/MessageHeader.h"
 
 #include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <string>
 
-using theseed::core::Bundle;
-using theseed::core::decodeHeader;
-using theseed::core::DeliveryFlag;
-using theseed::core::MemoryStream;
-using theseed::core::MessageHeader;
+using theseed::foundation::Bundle;
+using theseed::foundation::decodeHeader;
+using theseed::foundation::DeliveryFlag;
+using theseed::foundation::MemoryStream;
+using theseed::foundation::MessageHeader;
 
 static int testsPassed = 0;
 static int testsFailed = 0;

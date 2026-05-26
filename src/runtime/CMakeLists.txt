@@ -9,6 +9,8 @@ add_library(
     IORuntime.cpp
     EntityMigration.cpp
     GhostManager.cpp
+    InvocationCodec.cpp
+    PipedTransport.cpp
     PropertyBlock.cpp
     PropertyReplication.cpp
     RuntimeLoop.cpp
@@ -20,7 +22,8 @@ add_library(
 
 target_link_libraries(
     theseed_runtime
-    PUBLIC theseed_project_options)
+    PUBLIC theseed_project_options
+    PUBLIC theseed_foundation)
 
 target_include_directories(
     theseed_runtime

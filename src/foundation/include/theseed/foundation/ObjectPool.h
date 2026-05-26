@@ -9,7 +9,7 @@
 #include <new>
 #include <vector>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 template <typename T>
 class ObjectPool final {
@@ -172,4 +172,4 @@ void ObjectPool<T>::shrink() {
     // This is a no-op for simplicity; full implementation would scan blocks
 }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

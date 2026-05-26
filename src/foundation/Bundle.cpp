@@ -1,8 +1,8 @@
-#include "theseed/core/Bundle.h"
+#include "theseed/foundation/Bundle.h"
 
 #include <cstring>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 void Bundle::beginMessage(std::uint16_t messageId, DeliveryFlag delivery) {
     MessageHeader header;
@@ -23,7 +23,6 @@ void Bundle::endMessage() {
     const auto payloadStart = headerPos_ + MessageHeader::kEncodedSize;
     const auto payloadLength = static_cast<std::uint32_t>(currentPos - payloadStart);
 
-    // Backfill payloadLength at headerPos_ + sizeof(uint16_t)
     const auto lengthOffset = headerPos_ + sizeof(std::uint16_t);
     std::memcpy(stream_.data() + lengthOffset, &payloadLength, sizeof(payloadLength));
 
@@ -42,4 +41,4 @@ void Bundle::clear() {
     inMessage_ = false;
 }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

@@ -1,7 +1,7 @@
-#include "theseed/core/MessageHeader.h"
-#include "theseed/core/MemoryStream.h"
+#include "theseed/foundation/MessageHeader.h"
+#include "theseed/foundation/MemoryStream.h"
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 void encodeHeader(const MessageHeader& header, MemoryStream& stream) {
     stream.writeUint16(header.messageId);
@@ -21,4 +21,4 @@ bool decodeHeader(MessageHeader& header, MemoryStream& stream) {
     return true;
 }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

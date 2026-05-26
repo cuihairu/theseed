@@ -36,12 +36,15 @@ bool EntityDef::isVariableSized(PropertyType type) {
     return type == PropertyType::String || type == PropertyType::Blob;
 }
 
-PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size_t size) {
+PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size_t size,
+                                   PropertyFlag flags, std::vector<std::byte> defaultValue) {
     PropertyDescriptor descriptor;
     descriptor.id = static_cast<PropertyId>(properties_.size());
     descriptor.name = std::move(name);
     descriptor.type = type;
     descriptor.offset = storageSize_;
+    descriptor.flags = flags;
+    descriptor.defaultValue = std::move(defaultValue);
 
     if (size == 0 && !isVariableSized(type)) {
         descriptor.size = fixedSizeOfType(type);

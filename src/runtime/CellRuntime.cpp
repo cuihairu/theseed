@@ -1,4 +1,5 @@
 #include "theseed/runtime/CellRuntime.h"
+#include "theseed/foundation/TimerWheel.h"
 
 #include <array>
 #include <cstring>
@@ -47,7 +48,8 @@ CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
       transport_(std::move(transport)),
       localComponentId_(localComponentId),
       ingressPump_(*this),
-      flushPump_(*this) {
+      flushPump_(*this),
+      timerWheel_(std::make_unique<foundation::TimerWheel>()) {
     if (!spaceRuntime_) {
         throw std::invalid_argument("cell runtime requires space runtime");
     }
@@ -58,6 +60,8 @@ CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
         throw std::invalid_argument("cell runtime requires non-zero local component id");
     }
 }
+
+CellRuntime::~CellRuntime() = default;
 
 SpaceRuntime& CellRuntime::spaceRuntime() {
     return *spaceRuntime_;
@@ -89,9 +93,14 @@ void CellRuntime::detach(TickScheduler& scheduler) {
 
 void CellRuntime::addEntity(Entity& entity, const Vector3& position) {
     spaceRuntime_->addEntity(entity, position);
+    entity.notifyEnterSpace(spaceRuntime_->space().id());
 }
 
 void CellRuntime::removeEntity(EntityId entityId) {
+    auto* entity = findEntity(entityId);
+    if (entity != nullptr) {
+        entity->notifyLeaveSpace(spaceRuntime_->space().id());
+    }
     ghostBindings_.erase(entityId);
     ownedEntities_.erase(entityId);
     spaceRuntime_->removeEntity(entityId);
@@ -367,8 +376,16 @@ bool CellRuntime::applyGhostSync(const RuntimeInvocation& invocation) {
 }
 
 void CellRuntime::tick(TickContext& context) {
-    static_cast<void>(context);
+    timerWheel_->advance(context.deltaTime);
     syncRealGhosts();
+}
+
+foundation::TimerHandle CellRuntime::addTimer(Duration delay, TimerCallback callback) {
+    return timerWheel_->addTimer(delay, std::move(callback));
+}
+
+bool CellRuntime::cancelTimer(foundation::TimerHandle handle) {
+    return timerWheel_->cancel(handle);
 }
 
 void CellRuntime::syncRealGhosts() {
@@ -396,6 +413,23 @@ void CellRuntime::syncRealGhosts() {
         invocation.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
         invocation.payload = PropertyReplication::encodeDelta(*delta);
         transport_->send(std::move(invocation));
+    }
+}
+
+void CellRuntime::broadcastEvent(std::string_view event, std::span<const std::byte> data) {
+    for (auto* entity : spaceRuntime_->space().entities()) {
+        if (entity != nullptr && entity->state() == EntityState::Active) {
+            entity->emit(event, data);
+        }
+    }
+}
+
+void CellRuntime::broadcastEventInRange(std::string_view event, const Vector3& center, float range,
+                                         std::span<const std::byte> data) {
+    for (auto* entity : spaceRuntime_->space().queryRange(center, range)) {
+        if (entity != nullptr && entity->state() == EntityState::Active) {
+            entity->emit(event, data);
+        }
     }
 }
 

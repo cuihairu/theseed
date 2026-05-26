@@ -34,12 +34,28 @@ enum class PropertyType : std::uint8_t {
     Blob,
 };
 
+enum class PropertyFlag : std::uint32_t {
+    None = 0,
+    Persistent = 1 << 0,
+    ClientSync = 1 << 1,
+};
+
+inline PropertyFlag operator|(PropertyFlag a, PropertyFlag b) {
+    return static_cast<PropertyFlag>(static_cast<std::uint32_t>(a) | static_cast<std::uint32_t>(b));
+}
+
+inline bool hasFlag(PropertyFlag flags, PropertyFlag flag) {
+    return (static_cast<std::uint32_t>(flags) & static_cast<std::uint32_t>(flag)) != 0;
+}
+
 struct PropertyDescriptor {
     PropertyId id = 0;
     std::string name;
     PropertyType type = PropertyType::Int32;
     std::size_t offset = 0;
     std::size_t size = 0;
+    PropertyFlag flags = PropertyFlag::None;
+    std::vector<std::byte> defaultValue;
 };
 
 struct MethodDescriptor {
@@ -54,7 +70,9 @@ public:
 
     const std::string& entityType() const;
 
-    PropertyId addProperty(std::string name, PropertyType type, std::size_t size = 0);
+    PropertyId addProperty(std::string name, PropertyType type, std::size_t size = 0,
+                           PropertyFlag flags = PropertyFlag::None,
+                           std::vector<std::byte> defaultValue = {});
 
     static std::size_t fixedSizeOfType(PropertyType type);
     static bool isVariableSized(PropertyType type);

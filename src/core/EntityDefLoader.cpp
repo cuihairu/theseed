@@ -196,7 +196,71 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                 }
 
                 auto type = parsePropertyType(typeStr);
-                def->addProperty(std::move(name), type);
+
+                runtime::PropertyFlag flags = runtime::PropertyFlag::None;
+                auto flagStr = findAttr(propNode, "flags");
+                if (!flagStr.empty()) {
+                    if (flagStr.find("Persistent") != std::string::npos) {
+                        flags = flags | runtime::PropertyFlag::Persistent;
+                    }
+                    if (flagStr.find("ClientSync") != std::string::npos) {
+                        flags = flags | runtime::PropertyFlag::ClientSync;
+                    }
+                }
+
+                std::vector<std::byte> defaultValue;
+                auto defaultStr = findAttr(propNode, "defaultValue");
+                if (!defaultStr.empty() && !runtime::EntityDef::isVariableSized(type)) {
+                    auto fixedSize = runtime::EntityDef::fixedSizeOfType(type);
+                    if (fixedSize > 0) {
+                        defaultValue.resize(fixedSize, std::byte{0});
+                        switch (type) {
+                            case runtime::PropertyType::Int8:
+                            case runtime::PropertyType::UInt8: {
+                                auto v = static_cast<std::uint8_t>(std::stoi(defaultStr));
+                                std::memcpy(defaultValue.data(), &v, 1);
+                                break;
+                            }
+                            case runtime::PropertyType::Int16:
+                            case runtime::PropertyType::UInt16: {
+                                auto v = static_cast<std::uint16_t>(std::stoi(defaultStr));
+                                std::memcpy(defaultValue.data(), &v, 2);
+                                break;
+                            }
+                            case runtime::PropertyType::Int32:
+                            case runtime::PropertyType::UInt32: {
+                                auto v = static_cast<std::uint32_t>(std::stoi(defaultStr));
+                                std::memcpy(defaultValue.data(), &v, 4);
+                                break;
+                            }
+                            case runtime::PropertyType::Int64:
+                            case runtime::PropertyType::UInt64: {
+                                auto v = static_cast<std::uint64_t>(std::stoll(defaultStr));
+                                std::memcpy(defaultValue.data(), &v, 8);
+                                break;
+                            }
+                            case runtime::PropertyType::Float32: {
+                                auto v = std::stof(defaultStr);
+                                std::memcpy(defaultValue.data(), &v, 4);
+                                break;
+                            }
+                            case runtime::PropertyType::Float64: {
+                                auto v = std::stod(defaultStr);
+                                std::memcpy(defaultValue.data(), &v, 8);
+                                break;
+                            }
+                            case runtime::PropertyType::Bool: {
+                                auto v = static_cast<std::uint8_t>(defaultStr == "true" ? 1 : 0);
+                                std::memcpy(defaultValue.data(), &v, 1);
+                                break;
+                            }
+                            default:
+                                break;
+                        }
+                    }
+                }
+
+                def->addProperty(std::move(name), type, 0, flags, std::move(defaultValue));
             }
         } else if (child.tag == "Methods") {
             for (auto& methNode : child.children) {

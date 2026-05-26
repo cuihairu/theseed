@@ -7,7 +7,7 @@
 #include <functional>
 #include <vector>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 struct TimerHandle final {
     std::uint64_t id = 0;
@@ -63,4 +63,4 @@ private:
     std::array<std::array<std::vector<std::size_t>, kSlotsPerLevel>, kLevels> wheels_;
 };
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

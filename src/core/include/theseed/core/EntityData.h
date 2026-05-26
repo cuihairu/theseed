@@ -1,6 +1,6 @@
 #pragma once
 
-#include "theseed/core/MemoryStream.h"
+#include "theseed/foundation/MemoryStream.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +8,8 @@
 #include <vector>
 
 namespace theseed::core {
+
+using foundation::MemoryStream;
 
 using EntityId = std::uint64_t;
 using PropertyId = std::uint32_t;

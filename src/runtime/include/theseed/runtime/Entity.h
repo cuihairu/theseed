@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace theseed::runtime {
 
@@ -49,12 +50,34 @@ public:
     void clearCellEntityCall();
 
     using MethodHandler = std::function<void(Entity&, std::span<const std::byte>)>;
+    using LifecycleCallback = std::function<void(Entity&)>;
+    using SpaceCallback = std::function<void(Entity&, SpaceId)>;
+    using AoICallback = std::function<void(Entity&, EntityId)>;
+    using EventCallback = std::function<void(Entity&, std::string_view event, std::span<const std::byte> data)>;
 
     bool bindMethodHandler(std::string method, MethodHandler handler);
     bool hasMethodHandler(std::string_view method) const;
     bool dispatchMethod(std::string_view method, std::span<const std::byte> payload);
     bool dispatchInvocation(const RuntimeInvocation& invocation);
     void clearMethodHandlers();
+
+    void subscribe(std::string event, EventCallback callback);
+    void unsubscribe(const std::string& event);
+    void emit(std::string_view event, std::span<const std::byte> data = {});
+
+    void setOnCreate(LifecycleCallback cb);
+    void setOnDestroy(LifecycleCallback cb);
+    void setOnEnterSpace(SpaceCallback cb);
+    void setOnLeaveSpace(SpaceCallback cb);
+    void setOnEnterAoI(AoICallback cb);
+    void setOnLeaveAoI(AoICallback cb);
+
+    void notifyCreate();
+    void notifyDestroy();
+    void notifyEnterSpace(SpaceId spaceId);
+    void notifyLeaveSpace(SpaceId spaceId);
+    void notifyEnterAoI(EntityId other);
+    void notifyLeaveAoI(EntityId other);
 
     void activate();
     void beginMigration();
@@ -79,6 +102,11 @@ public:
     const PropertyBlock& propertyBlock() const;
     PropertyBlock& propertyBlock();
 
+    void addTag(std::string tag);
+    void removeTag(const std::string& tag);
+    bool hasTag(const std::string& tag) const;
+    const std::unordered_set<std::string>& tags() const;
+
 private:
     EntityId id_ = 0;
     EntitySide side_ = EntitySide::Base;
@@ -87,6 +115,14 @@ private:
     std::optional<EntityCall> baseCall_{};
     std::optional<EntityCall> cellCall_{};
     std::unordered_map<std::string, MethodHandler> methodHandlers_{};
+    std::unordered_multimap<std::string, EventCallback> eventSubscriptions_;
+    LifecycleCallback onCreate_;
+    LifecycleCallback onDestroy_;
+    SpaceCallback onEnterSpace_;
+    SpaceCallback onLeaveSpace_;
+    AoICallback onEnterAoI_;
+    AoICallback onLeaveAoI_;
+    std::unordered_set<std::string> tags_;
     PropertyBlock properties_;
 };
 

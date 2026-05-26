@@ -1,4 +1,4 @@
-#include "theseed/core/ObjectPool.h"
+#include "theseed/foundation/ObjectPool.h"
 
 #include <cassert>
 #include <cstdint>
@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
-using theseed::core::ObjectPool;
-using theseed::core::PooledObject;
+using theseed::foundation::ObjectPool;
+using theseed::foundation::PooledObject;
 
 static int testsPassed = 0;
 static int testsFailed = 0;

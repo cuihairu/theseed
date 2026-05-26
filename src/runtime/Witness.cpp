@@ -47,10 +47,18 @@ void Witness::onEnterView(Entity& entity, float distance) {
     entry.distance = distance;
     entry.detailLevel = classifyDistance(distance);
     entries_[entity.id()] = std::move(entry);
+
+    if (owner_ != nullptr) {
+        owner_->notifyEnterAoI(entity.id());
+    }
 }
 
 void Witness::onLeaveView(EntityId entityId) {
     entries_.erase(entityId);
+
+    if (owner_ != nullptr) {
+        owner_->notifyLeaveAoI(entityId);
+    }
 }
 
 bool Witness::entityInView(EntityId entityId) const {

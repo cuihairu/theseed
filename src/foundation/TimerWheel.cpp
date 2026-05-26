@@ -1,9 +1,9 @@
-#include "theseed/core/TimerWheel.h"
+#include "theseed/foundation/TimerWheel.h"
 
 #include <algorithm>
 #include <utility>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 TimerWheel::TimerWheel(Duration tickDuration)
     : tickDuration_(tickDuration) {}
@@ -23,7 +23,6 @@ void TimerWheel::insertEntry(std::size_t index) {
     const auto fireTick = entries_[index].fireTick;
     const auto diff = fireTick > currentTick_ ? fireTick - currentTick_ : 0;
 
-    // Determine the appropriate level for this timer
     static constexpr std::uint64_t kLevelMask[kLevels] = {
         0xFFULL,
         0xFFFFULL,
@@ -44,12 +43,10 @@ void TimerWheel::fireEntry(std::size_t index) {
     auto& entry = entries_[index];
 
     if (entry.period > 0) {
-        // Periodic: reschedule then fire (keep callback alive)
         entry.fireTick = currentTick_ + entry.period;
         insertEntry(index);
         if (entry.callback) entry.callback();
     } else {
-        // One-shot: extract callback, mark done, then fire
         auto cb = std::move(entry.callback);
         entry.callback = nullptr;
         entry.cancelled = true;
@@ -101,7 +98,6 @@ void TimerWheel::advance(Duration dt) {
     for (std::uint64_t t = 0; t < ticksToAdvance; ++t) {
         ++currentTick_;
 
-        // 1. Fire all entries in level 0 current slot
         auto& slot0 = wheels_[0][currentTick_ & 0xFF];
         auto entries0 = std::move(slot0);
         slot0.clear();
@@ -112,7 +108,6 @@ void TimerWheel::advance(Duration dt) {
             }
         }
 
-        // 2. Cascade from higher levels when lower levels complete a cycle
         for (int level = 1; level < kLevels; ++level) {
             const auto mask = (1ULL << (8 * level)) - 1;
             if ((currentTick_ & mask) != 0) break;
@@ -149,4 +144,4 @@ void TimerWheel::clear() {
     }
 }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

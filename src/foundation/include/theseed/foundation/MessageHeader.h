@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 enum class DeliveryFlag : std::uint8_t {
     OrderedReliable = 0,
@@ -27,4 +27,4 @@ class MemoryStream;
 void encodeHeader(const MessageHeader& header, MemoryStream& stream);
 bool decodeHeader(MessageHeader& header, MemoryStream& stream);
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

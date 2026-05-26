@@ -1,13 +1,13 @@
 #pragma once
 
-#include "theseed/core/Bundle.h"
+#include "theseed/foundation/Bundle.h"
 
 #include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 class Channel final {
 public:
@@ -51,4 +51,4 @@ private:
     std::array<HandlerPtr, kMaxMessageId> handlers_{};
 };
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

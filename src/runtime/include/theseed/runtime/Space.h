@@ -59,6 +59,7 @@ enum class SpaceState : std::uint8_t {
 class Space final {
 public:
     Space(SpaceId id, std::string name, std::unique_ptr<ISpaceTopology> topology);
+    ~Space();
 
     void initialize(const SpaceConfig& config = {});
     void beginDrain();
@@ -76,6 +77,8 @@ public:
     std::optional<Vector3> entityPosition(EntityId entityId) const;
     std::vector<Entity*> entities() const;
     std::vector<Entity*> queryRange(const Vector3& center, float radius) const;
+    std::vector<Entity*> findEntitiesByType(const std::string& entityType) const;
+    std::vector<Entity*> findEntitiesByTag(const std::string& tag) const;
     std::size_t entityCount() const;
 
     CoordinateSystem& coordinateSystem();

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "theseed/core/MessageHeader.h"
-#include "theseed/core/MemoryStream.h"
+#include "theseed/foundation/MessageHeader.h"
+#include "theseed/foundation/MemoryStream.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 class Bundle final {
 public:
@@ -38,4 +38,4 @@ private:
     bool inMessage_ = false;
 };
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation

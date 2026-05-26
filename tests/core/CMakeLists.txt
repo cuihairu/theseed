@@ -1,48 +1,3 @@
-add_executable(theseed_memory_stream_test MemoryStreamTest.cpp)
-
-target_link_libraries(
-    theseed_memory_stream_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_core)
-
-add_test(NAME theseed_memory_stream_test COMMAND theseed_memory_stream_test)
-
-add_executable(theseed_timer_wheel_test TimerWheelTest.cpp)
-
-target_link_libraries(
-    theseed_timer_wheel_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_core)
-
-add_test(NAME theseed_timer_wheel_test COMMAND theseed_timer_wheel_test)
-
-add_executable(theseed_object_pool_test ObjectPoolTest.cpp)
-
-target_link_libraries(
-    theseed_object_pool_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_core)
-
-add_test(NAME theseed_object_pool_test COMMAND theseed_object_pool_test)
-
-add_executable(theseed_bundle_test BundleTest.cpp)
-
-target_link_libraries(
-    theseed_bundle_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_core)
-
-add_test(NAME theseed_bundle_test COMMAND theseed_bundle_test)
-
-add_executable(theseed_channel_test ChannelTest.cpp)
-
-target_link_libraries(
-    theseed_channel_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_core)
-
-add_test(NAME theseed_channel_test COMMAND theseed_channel_test)
-
 add_executable(theseed_entity_data_test EntityDataTest.cpp)
 
 target_link_libraries(
@@ -60,3 +15,66 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_entity_def_loader_test COMMAND theseed_entity_def_loader_test)
+
+add_executable(theseed_base_runtime_test BaseRuntimeTest.cpp)
+
+target_link_libraries(
+    theseed_base_runtime_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_base_runtime_test COMMAND theseed_base_runtime_test)
+
+add_executable(theseed_entity_def_registry_test EntityDefRegistryTest.cpp)
+
+target_link_libraries(
+    theseed_entity_def_registry_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_def_registry_test COMMAND theseed_entity_def_registry_test)
+
+add_executable(theseed_base_app_test BaseAppTest.cpp)
+
+target_link_libraries(
+    theseed_base_app_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_base_app_test COMMAND theseed_base_app_test)
+
+add_executable(theseed_cell_app_test CellAppTest.cpp)
+
+target_link_libraries(
+    theseed_cell_app_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_cell_app_test COMMAND theseed_cell_app_test)
+
+add_executable(theseed_integration_test IntegrationTest.cpp)
+
+target_link_libraries(
+    theseed_integration_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_integration_test COMMAND theseed_integration_test)
+
+add_executable(theseed_entity_timer_test EntityTimerTest.cpp)
+
+target_link_libraries(
+    theseed_entity_timer_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_timer_test COMMAND theseed_entity_timer_test)
+
+add_executable(theseed_property_metadata_test PropertyMetadataTest.cpp)
+
+target_link_libraries(
+    theseed_property_metadata_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_property_metadata_test COMMAND theseed_property_metadata_test)

@@ -1,17 +1,17 @@
-#include "theseed/core/Channel.h"
-#include "theseed/core/MessageHeader.h"
+#include "theseed/foundation/Channel.h"
+#include "theseed/foundation/MessageHeader.h"
 
 #include <cstdint>
 #include <iostream>
 #include <string>
 
-using theseed::core::Bundle;
-using theseed::core::Channel;
-using theseed::core::decodeHeader;
-using theseed::core::IMessageHandler;
-using theseed::core::MessageDispatcher;
-using theseed::core::MessageHeader;
-using theseed::core::MemoryStream;
+using theseed::foundation::Bundle;
+using theseed::foundation::Channel;
+using theseed::foundation::decodeHeader;
+using theseed::foundation::IMessageHandler;
+using theseed::foundation::MessageDispatcher;
+using theseed::foundation::MessageHeader;
+using theseed::foundation::MemoryStream;
 
 static int testsPassed = 0;
 static int testsFailed = 0;

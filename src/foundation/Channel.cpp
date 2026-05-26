@@ -1,6 +1,6 @@
-#include "theseed/core/Channel.h"
+#include "theseed/foundation/Channel.h"
 
-namespace theseed::core {
+namespace theseed::foundation {
 
 Channel::Channel(std::uint32_t targetComponent)
     : targetComponent_(targetComponent) {}
@@ -57,4 +57,4 @@ std::size_t MessageDispatcher::handlerCount() const {
     return count;
 }
 
-}  // namespace theseed::core
+}  // namespace theseed::foundation
