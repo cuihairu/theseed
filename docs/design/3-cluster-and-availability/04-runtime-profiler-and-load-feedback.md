@@ -1,6 +1,7 @@
 # Runtime Profiler & Load Feedback — 负载剖面、过载判定与调度反馈链
 
-> 来源：BigWorld `EntityProfiler / EntityTypeProfiler / artificialMinLoad / CellAppMgr::loadBalance / overloadCheck / shouldOffload`。
+> 来源源头：BigWorld `EntityProfiler / EntityTypeProfiler / artificialMinLoad / CellAppMgr::loadBalance / overloadCheck / shouldOffload`。
+> KBEngine 只有基础负载判断参考，缺少完整 profiler → 调度反馈闭环。
 > 这篇讲的是“负载信号如何回到调度与限流”，不是通用 Telemetry，也不是 Ops 查询入口。
 
 ---

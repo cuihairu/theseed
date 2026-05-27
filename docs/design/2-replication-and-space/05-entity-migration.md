@@ -2,7 +2,8 @@
 
 > 实体迁移是 theseed 分布式架构的核心能力：实体可以在不同 CellApp 之间安全迁移。
 >
-> 来源：KBEngine teleport + Ghost 路由窗口，BigWorld Offload 机制。
+> 来源源头：BigWorld Offload / Cell 迁移 / 退役迁出机制。
+> 参考实现：KBEngine teleport + Ghost 路由窗口。
 > 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---

@@ -1,6 +1,7 @@
 # AoI Update Schemes & Load Bounds — 更新优先级曲线与空间负载边界
 
-> 来源：BigWorld `cellapp/aoi_update_schemes`、`Witness / EntityCache priority`、`SPACE_DATA_SERVER_LOAD_BOUNDS`、`cellappmgr::Space::updateRanges`。
+> 来源源头：BigWorld `cellapp/aoi_update_schemes`、`Witness / EntityCache priority`、`SPACE_DATA_SERVER_LOAD_BOUNDS`、`cellappmgr::Space::updateRanges`。
+> KBEngine 在这层只有较薄的参考价值。
 > 这篇补的是 BigWorld 在 AOI 与空间负载之间的系统化边界，不是再讲一遍十字链表。
 
 ---

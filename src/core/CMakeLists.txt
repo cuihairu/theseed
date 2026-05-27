@@ -1,6 +1,7 @@
 add_library(theseed_core
     EntityData.cpp
     EntityDefLoader.cpp
+    FileEntityStore.cpp
     BaseRuntime.cpp
     EntityDefRegistry.cpp
     BaseApp.cpp

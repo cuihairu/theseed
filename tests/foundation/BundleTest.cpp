@@ -37,7 +37,7 @@ static void testSingleMessage() {
     TEST("bundle single message encode/decode");
 
     Bundle bundle;
-    bundle.beginMessage(42, DeliveryFlag::OrderedReliable);
+    bundle.beginMessage(42, 0, DeliveryFlag::OrderedReliable);
     bundle.stream().writeInt32(100);
     bundle.stream().writeString("hello");
     bundle.endMessage();
@@ -73,7 +73,7 @@ static void testMultipleMessages() {
     bundle.stream().writeString("world");
     bundle.endMessage();
 
-    bundle.beginMessage(3, DeliveryFlag::UnorderedLossy);
+    bundle.beginMessage(3, 0, DeliveryFlag::UnorderedLossy);
     bundle.stream().writeFloat(3.14f);
     bundle.endMessage();
 

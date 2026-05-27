@@ -1,7 +1,8 @@
 # Server Merge — 合服工具链
 
-> 合服是游戏运营的刚需，但 KBEngine 没有任何合服工具。
-> BigWorld 有 consolidate_dbs / transfer_db / sync_db。
+> 合服是游戏运营的刚需。
+> 来源源头：BigWorld `consolidate_dbs / transfer_db / sync_db` 的数据工具链思想。
+> KBEngine 没有完整合服工具链，只能作为缺口参考。
 > theseed 需要完整的合服工具链：ID 重映射 + 冲突解决 + 关联修复。
 > 但本篇只谈“多服业务数据合并”，不覆盖 SecondaryDB 搬运与归并。
 

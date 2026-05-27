@@ -6,3 +6,4 @@
 
 - [01-mvp-architecture-baseline](01-mvp-architecture-baseline.md) — MVP 范围、运行时边界、同步与迁移约束
 - [02-audit-scope-and-layering](02-audit-scope-and-layering.md) — 审计口径、BigWorld/KBEngine 对照与新分层原则
+- [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md) — BigWorld 源头、KBEngine 参考、theseed 现代化整合口径

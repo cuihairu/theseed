@@ -1,7 +1,7 @@
 # Space Topology & AOI — 空间拓扑、AOI 索引与 Space 生命周期
 
-> 来源：BigWorld `CoordinateSystem / RangeTrigger / BSP topology / Space`，
-> KBEngine 继承 AOI 主干但把 Space 收缩成单 Cell。
+> 来源源头：BigWorld `CoordinateSystem / RangeTrigger / BSP topology / Space`。
+> KBEngine 是轻量参考实现，继承 AOI 主干但把 Space 收缩成更接近单 Cell 的路径。
 > theseed 在文档层显式拆开运行时空间、拓扑阶段与世界资产边界。
 
 ---
@@ -189,7 +189,7 @@ KBEngine 也继承了十字链表式 AOI 主干。
 
 ```
 theseed 仍然选择十字链表，原因不是保守，而是边界清楚：
-  - 本阶段目标是复刻 BigWorld / KBEngine 的 runtime 主路径
+  - 本阶段目标是保留 BigWorld 的 Space / AOI 语义，并借鉴 KBEngine 的轻量主路径
   - AOI 要优先服务 Witness / Ghost / Migration，而不是追求最“新”的索引名词
   - Uniform Grid / Spatial Hash / QuadTree / ECS Chunk + Grid 都可以作为后续候选，但不应抢占当前主线
 
@@ -308,7 +308,7 @@ chunk / compiled space 离线资源准备
 
 ```
   - 一个 Space = 一个 Cell
-  - 对标 KBEngine 主路径
+  - 参考 KBEngine 的轻量单 Cell 路径
   - 适合房间制、副本制、中小地图
 ```
 

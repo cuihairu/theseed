@@ -51,6 +51,13 @@ public:
     std::size_t pumpInbound();
     bool dispatchInvocation(const runtime::RuntimeInvocation& invocation);
 
+    bool requestCreateCell(runtime::EntityId entityId,
+                           const std::string& entityType,
+                           const runtime::Vector3& position,
+                           runtime::ComponentId targetCellApp);
+    bool requestDestroyCell(runtime::EntityId entityId,
+                            runtime::ComponentId targetCellApp);
+
     void tick(runtime::TickContext& context) override;
 
 private:
@@ -64,6 +71,12 @@ private:
     };
 
     void autoSaveAll();
+
+    bool handleCellReady(const runtime::RuntimeInvocation& invocation);
+    bool handleCellDestroyed(const runtime::RuntimeInvocation& invocation);
+    bool handlePropertySyncFromCell(const runtime::RuntimeInvocation& invocation);
+
+    void syncToCells();
 
     std::shared_ptr<runtime::IRuntimeTransport> transport_;
     std::shared_ptr<IEntityStore> store_;

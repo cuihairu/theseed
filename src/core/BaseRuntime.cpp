@@ -1,4 +1,5 @@
 #include "theseed/core/BaseRuntime.h"
+#include "theseed/runtime/PropertyReplication.h"
 
 #include <array>
 #include <cstring>
@@ -255,6 +256,16 @@ bool BaseRuntime::dispatchInvocation(const runtime::RuntimeInvocation& invocatio
         return false;
     }
 
+    if (invocation.method == "entity.cellReady") {
+        return handleCellReady(invocation);
+    }
+    if (invocation.method == "entity.cellDestroyed") {
+        return handleCellDestroyed(invocation);
+    }
+    if (invocation.method == "property.syncToBase") {
+        return handlePropertySyncFromCell(invocation);
+    }
+
     auto* entity = findEntity(invocation.entityId);
     if (!entity) {
         return false;
@@ -265,6 +276,7 @@ bool BaseRuntime::dispatchInvocation(const runtime::RuntimeInvocation& invocatio
 
 void BaseRuntime::tick(runtime::TickContext& context) {
     timerWheel_.advance(context.deltaTime);
+    syncToCells();
 
     if (autoSaveInterval_ > runtime::Duration{}) {
         autoSaveAccumulator_ += context.deltaTime;
@@ -317,6 +329,125 @@ void BaseRuntime::cancelEntityTimers(runtime::EntityId entityId) {
         timerWheel_.cancel(handle);
     }
     entityTimers_.erase(it);
+}
+
+bool BaseRuntime::handleCellReady(const runtime::RuntimeInvocation& invocation) {
+    runtime::EntityId entityId = 0;
+    runtime::ComponentId cellComponentId = 0;
+    if (invocation.payload.size() < sizeof(entityId) + sizeof(cellComponentId)) return false;
+    std::memcpy(&entityId, invocation.payload.data(), sizeof(entityId));
+    std::memcpy(&cellComponentId, invocation.payload.data() + sizeof(entityId), sizeof(cellComponentId));
+
+    auto* entity = findEntity(entityId);
+    if (!entity) return false;
+
+    entity->bindCellEntityCall(cellComponentId);
+    return true;
+}
+
+bool BaseRuntime::handleCellDestroyed(const runtime::RuntimeInvocation& invocation) {
+    runtime::EntityId entityId = 0;
+    if (invocation.payload.size() < sizeof(entityId)) return false;
+    std::memcpy(&entityId, invocation.payload.data(), sizeof(entityId));
+
+    auto* entity = findEntity(entityId);
+    if (!entity) return false;
+
+    entity->clearCellEntityCall();
+    return true;
+}
+
+bool BaseRuntime::handlePropertySyncFromCell(const runtime::RuntimeInvocation& invocation) {
+    if (invocation.payload.empty()) return false;
+
+    auto* entity = findEntity(invocation.entityId);
+    if (!entity) return false;
+
+    try {
+        auto deltas = runtime::PropertyReplication::decodeDelta(invocation.payload);
+        entity->applyPropertyDelta(deltas);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool BaseRuntime::requestCreateCell(runtime::EntityId entityId,
+                                     const std::string& entityType,
+                                     const runtime::Vector3& position,
+                                     runtime::ComponentId targetCellApp) {
+    auto* entity = findEntity(entityId);
+    if (!entity) return false;
+
+    // Payload: entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
+    constexpr std::size_t headerSize = sizeof(runtime::EntityId) + sizeof(runtime::ComponentId)
+                                     + sizeof(float) * 3;
+    auto snapshot = entity->buildFullPropertySnapshot();
+    auto encoded = runtime::PropertyReplication::encodeDelta(snapshot);
+
+    std::vector<std::byte> payload(headerSize + encoded.size());
+    auto* p = payload.data();
+    std::memcpy(p, &entityId, sizeof(entityId)); p += sizeof(entityId);
+    std::memcpy(p, &localComponentId_, sizeof(localComponentId_)); p += sizeof(localComponentId_);
+    std::memcpy(p, &position.x, sizeof(float)); p += sizeof(float);
+    std::memcpy(p, &position.y, sizeof(float)); p += sizeof(float);
+    std::memcpy(p, &position.z, sizeof(float)); p += sizeof(float);
+    std::memcpy(p, encoded.data(), encoded.size());
+
+    runtime::RuntimeInvocation invocation;
+    invocation.entityId = entityId;
+    invocation.targetComponent = targetCellApp;
+    invocation.entityType = entityType;
+    invocation.method = "entity.createCell";
+    invocation.deliveryClass = runtime::DeliveryClass::ORDERED_RELIABLE;
+    invocation.payload = std::move(payload);
+
+    auto result = transport_->send(std::move(invocation));
+    if (result == runtime::SendResult::Accepted) {
+        entity->clearDirtyFlags();
+    }
+    return result == runtime::SendResult::Accepted;
+}
+
+bool BaseRuntime::requestDestroyCell(runtime::EntityId entityId,
+                                      runtime::ComponentId targetCellApp) {
+    // Payload: entityId(8) + baseComponentId(4)
+    std::vector<std::byte> payload(sizeof(runtime::EntityId) + sizeof(runtime::ComponentId));
+    std::memcpy(payload.data(), &entityId, sizeof(entityId));
+    std::memcpy(payload.data() + sizeof(entityId), &localComponentId_, sizeof(localComponentId_));
+
+    runtime::RuntimeInvocation invocation;
+    invocation.entityId = entityId;
+    invocation.targetComponent = targetCellApp;
+    invocation.method = "entity.destroyCell";
+    invocation.deliveryClass = runtime::DeliveryClass::ORDERED_RELIABLE;
+    invocation.payload = std::move(payload);
+
+    return transport_->send(std::move(invocation)) == runtime::SendResult::Accepted;
+}
+
+void BaseRuntime::syncToCells() {
+    for (auto& [id, entity] : entities_) {
+        if (entity->state() != runtime::EntityState::Active) continue;
+
+        auto* cellCall = entity->cellEntityCall();
+        if (!cellCall || !cellCall->isValid()) continue;
+
+        auto deltas = entity->buildDirtyPropertyDelta();
+        if (deltas.empty()) continue;
+
+        runtime::RuntimeInvocation invocation;
+        invocation.entityId = entity->id();
+        invocation.targetComponent = cellCall->targetComponent();
+        invocation.entityType = entity->entityType();
+        invocation.method = "property.syncToCell";
+        invocation.deliveryClass = runtime::DeliveryClass::ORDERED_RELIABLE;
+        invocation.payload = runtime::PropertyReplication::encodeDelta(deltas);
+
+        if (transport_->send(std::move(invocation)) == runtime::SendResult::Accepted) {
+            entity->clearDirtyFlags();
+        }
+    }
 }
 
 }  // namespace theseed::core

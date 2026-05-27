@@ -1,6 +1,7 @@
 # Data Ops Toolchain — Snapshot、Transfer、Consolidate、Sync 与 Repair
 
-> 来源：BigWorld `transfer_db / consolidate_dbs / sync_db / DBApp consolidateData`。
+> 来源源头：BigWorld `transfer_db / consolidate_dbs / sync_db / DBApp consolidateData`。
+> KBEngine 工具链较薄，主要作为基础持久化管理参考。
 > 这篇承接的是“数据运维工具链”，不是 Runtime Core，也不是单纯合服。
 
 ---

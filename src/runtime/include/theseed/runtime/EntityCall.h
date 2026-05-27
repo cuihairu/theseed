@@ -29,9 +29,9 @@ public:
 
     RuntimeInvocation buildInvocation(std::string method,
                                       std::span<const std::byte> payload = {}) const;
-    bool call(IRuntimeTransport& transport,
-              std::string method,
-              std::span<const std::byte> payload = {}) const;
+    SendResult call(IRuntimeTransport& transport,
+                    std::string method,
+                    std::span<const std::byte> payload = {}) const;
 
     void updateTarget(ComponentId targetComponent);
     void invalidate();

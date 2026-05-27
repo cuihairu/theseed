@@ -1,7 +1,8 @@
 # theseed Engine — 设计文档总览
 
-> 对标 BigWorld 14.4.1 服务端实现与服务端工具链，
-> 同时以 KBEngine 作为运行时主干的现实参照。
+> theseed 的设计源头是 BigWorld 14.4.1 的服务端系统面与工具链思想。
+> KBEngine 是重要参考实现之一，主要用于校验运行时闭环如何被轻量落地。
+> 当前目标是整合 BigWorld 源头设计与 KBEngine 参考实现，形成面向现代 MMO 的可演进服务器引擎。
 > 当前口径不把客户端渲染和 WorldEditor UI 细节计入必做项。
 
 ---
@@ -12,7 +13,7 @@
 
 ```
 0-foundation
-  基线、审计口径、分层原则
+  引擎定位、基线、审计口径、分层原则
 
 1-runtime-model
   tick、entity、timer、runtime memory
@@ -41,6 +42,7 @@
 
 审计口径与重组理由见：
 
+- [04-modern-mmo-engine-positioning](0-foundation/04-modern-mmo-engine-positioning.md)
 - [02-audit-scope-and-layering](0-foundation/02-audit-scope-and-layering.md)
 
 ---
@@ -54,6 +56,7 @@
 | [01-mvp-architecture-baseline](0-foundation/01-mvp-architecture-baseline.md) | MVP 范围、运行时边界、同步时序、迁移与热更约束 |
 | [02-audit-scope-and-layering](0-foundation/02-audit-scope-and-layering.md) | 审计口径、BigWorld/KBEngine 对照与新分层原则 |
 | [03-repository-and-build-layout](0-foundation/03-repository-and-build-layout.md) | monorepo 目录、vcpkg、C++23 工具链边界 |
+| [04-modern-mmo-engine-positioning](0-foundation/04-modern-mmo-engine-positioning.md) | BigWorld 源头、KBEngine 参考、theseed 现代化整合口径 |
 
 ### 1-runtime-model
 
@@ -136,17 +139,19 @@
 
 ## 阅读建议
 
-**运行时主干**
+**运行时闭环**
 
-`0-foundation/01-mvp-architecture-baseline`
+`0-foundation/04-modern-mmo-engine-positioning`
+→ `0-foundation/01-mvp-architecture-baseline`
 → `1-runtime-model/01-tick-model`
 → `1-runtime-model/02-entity-system`
 → `2-replication-and-space/01-space-topology-and-aoi`
 → `2-replication-and-space/03-runtime-communication-and-transport`
 
-**BigWorld 系统级差异**
+**BigWorld 源头系统面**
 
-`3-cluster-and-availability/02-backup-hash-and-ha`
+`0-foundation/04-modern-mmo-engine-positioning`
+→ `3-cluster-and-availability/02-backup-hash-and-ha`
 → `4-data-and-ops/03-local-archive-and-secondary-db`
 → `4-data-and-ops/04-data-ops-toolchain`
 → `5-access-and-control-plane/01-gateway-and-login`

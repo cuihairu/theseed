@@ -1,6 +1,7 @@
 # Ops Control Plane — 运维控制面与分布式观察
 
-> 来源：BigWorld `Watcher / ForwardingWatcher / EntityProfiler / challenge watcher / controlled shutdown`。
+> 来源源头：BigWorld `Watcher / ForwardingWatcher / EntityProfiler / challenge watcher / controlled shutdown`。
+> 参考实现：KBEngine `Watcher / WebConsole` 的轻量管理路径。
 > 这层不是 OTel，也不是 Runtime Data Plane，而是在线运维与控制的独立平面。
 
 ---

@@ -1,6 +1,7 @@
 # World Streaming & Compiled Space — Chunk、Geometry Mapping 与世界资产边界
 
-> 来源：BigWorld `SpaceData_MappingData / GeometryMapping / Chunk / CompiledSpace / space_converter`。
+> 来源源头：BigWorld `SpaceData_MappingData / GeometryMapping / Chunk / CompiledSpace / space_converter`。
+> KBEngine 没有完整对等的 compiled space 体系，只能作为轻量运行时空间参考。
 > 本篇不把客户端渲染实现拉进来，只讨论它们对服务端与工具链的边界含义。
 
 ---

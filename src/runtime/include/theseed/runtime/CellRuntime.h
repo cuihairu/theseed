@@ -18,7 +18,7 @@ class TimerWheel;
 
 namespace theseed::runtime {
 
-class CellRuntime final : public ITickable {
+class CellRuntime final {
 public:
     using EntityFactory = std::function<std::unique_ptr<Entity>(EntityId, EntitySide)>;
 
@@ -55,6 +55,9 @@ public:
                             std::span<const std::byte> payload = {});
     bool dispatchInvocation(const RuntimeInvocation& invocation);
     bool applyGhostSync(const RuntimeInvocation& invocation);
+    bool handleCreateCell(const RuntimeInvocation& invocation);
+    bool handleDestroyCell(const RuntimeInvocation& invocation);
+    bool handlePropertySyncFromBase(const RuntimeInvocation& invocation);
 
     using TimerCallback = std::function<void()>;
 
@@ -65,7 +68,7 @@ public:
     void broadcastEventInRange(std::string_view event, const Vector3& center, float range,
                                std::span<const std::byte> data = {});
 
-    void tick(TickContext& context) override;
+    void tick(TickContext& context);
 
 private:
     struct MigrationRoute final {
@@ -92,7 +95,18 @@ private:
         CellRuntime* owner_ = nullptr;
     };
 
+    class PostSyncPump final : public ITickable {
+    public:
+        explicit PostSyncPump(CellRuntime& owner);
+        void tick(TickContext& context) override;
+
+    private:
+        CellRuntime* owner_ = nullptr;
+    };
+
     void syncRealGhosts();
+    void syncToBases();
+    void postSyncTick(TickContext& context);
     bool applyMigrationTransfer(const RuntimeInvocation& invocation);
     bool applyMigrationCommit(const RuntimeInvocation& invocation);
     bool routeMigratingInvocation(const RuntimeInvocation& invocation);
@@ -106,6 +120,7 @@ private:
     ComponentId localComponentId_ = 0;
     IngressPump ingressPump_;
     FlushPump flushPump_;
+    PostSyncPump postSyncPump_;
     std::unordered_map<std::string, EntityFactory> entityFactories_;
     std::unordered_map<EntityId, std::unique_ptr<Entity>> ownedEntities_;
     std::unordered_map<EntityId, MigrationRoute> migrationRoutes_;

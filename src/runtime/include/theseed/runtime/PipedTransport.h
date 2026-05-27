@@ -16,20 +16,22 @@ public:
     PipedTransport(const PipedTransport&) = delete;
     PipedTransport& operator=(const PipedTransport&) = delete;
 
-    bool send(RuntimeInvocation invocation) override;
+    SendResult send(RuntimeInvocation invocation) override;
     std::size_t receive(ComponentId targetComponent,
                         RuntimeInvocation* out,
                         std::size_t capacity) override;
     std::size_t pendingCount() const override;
+    void flush() override;
+    TransportStats stats() const override;
 
     void connect(PipedTransport& peer);
-    void flush();
 
 private:
     ComponentId localComponent_;
     PipedTransport* peer_ = nullptr;
     mutable std::mutex mutex_;
     std::deque<RuntimeInvocation> inbox_;
+    TransportStats stats_;
 };
 
 }  // namespace theseed::runtime

@@ -61,11 +61,11 @@ RuntimeInvocation EntityCall::buildInvocation(std::string method,
     return invocation;
 }
 
-bool EntityCall::call(IRuntimeTransport& transport,
-                      std::string method,
-                      std::span<const std::byte> payload) const {
+SendResult EntityCall::call(IRuntimeTransport& transport,
+                            std::string method,
+                            std::span<const std::byte> payload) const {
     if (!isValid() || method.empty()) {
-        return false;
+        return SendResult::Closed;
     }
 
     return transport.send(buildInvocation(std::move(method), payload));

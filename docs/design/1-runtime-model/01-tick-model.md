@@ -2,7 +2,8 @@
 
 > theseed 引擎的主循环设计。所有游戏逻辑、网络处理、属性同步都在 tick 中执行。
 >
-> 来源：KBEngine `EventDispatcher::processUntilBreak` + BigWorld 主循环。
+> 来源源头：BigWorld 主循环与进程级并行模型。
+> 参考实现：KBEngine `EventDispatcher::processUntilBreak` 的轻量 tick 落地方式。
 > 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
@@ -46,8 +47,8 @@ KBEngine 也以单线程 tick 为核心：
 ### theseed 的取舍
 
 ```
-theseed 选择继承单线程 tick 模型，
-因为它是 BigWorld / KBEngine runtime 主路径的共同底座。
+theseed 选择保留单线程 tick 模型，
+因为它是 BigWorld 源头设计与 KBEngine 参考实现共同验证过的运行时底座。
 
 差异只放在：
   - 任务拆分

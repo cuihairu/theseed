@@ -3,7 +3,9 @@
 > theseed 的数据定义系统：一份 XML 定义 → 内存/网络/存储三层映射。
 >
 > 格式：XML + XSD Schema 校验 + XInclude 文件拆分。
-> 来源：BigWorld 属性级映射（15+ 种 PropertyMapping）→ KBEngine 简化（5 种）→ theseed 继承 + 现代化。
+> 来源源头：BigWorld 属性级映射（15+ 种 PropertyMapping）。
+> 参考实现：KBEngine 将映射简化为 5 种 TABLE_ITEM_TYPE。
+> theseed 在保留属性级表达力的前提下做现代化收敛。
 
 ---
 
@@ -167,7 +169,7 @@ XmlDataSource       │ 整个 Entity → XML 文件            │ 不走 SQL
 
 ## 2. KBEngine 的取舍
 
-KBEngine 继承了 BigWorld 的 Entity 模型，但在数据库映射上做了大幅简化。
+KBEngine 参考了 BigWorld 的 Entity 模型，但在数据库映射上做了大幅简化。
 
 ### 2.1 KBEngine 只保留 5 种 TABLE_ITEM_TYPE
 

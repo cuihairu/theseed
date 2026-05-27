@@ -6,17 +6,18 @@ namespace theseed::runtime {
 PipedTransport::PipedTransport(ComponentId localComponent)
     : localComponent_(localComponent) {}
 
-bool PipedTransport::send(RuntimeInvocation invocation) {
+SendResult PipedTransport::send(RuntimeInvocation invocation) {
     if (peer_ == nullptr) {
-        return false;
+        return SendResult::NotConnected;
     }
 
     auto bytes = InvocationCodec::encode(invocation);
     auto decoded = InvocationCodec::decode(bytes);
 
     std::lock_guard lock(peer_->mutex_);
+    ++peer_->stats_.messagesSent;
     peer_->inbox_.push_back(std::move(decoded));
-    return true;
+    return SendResult::Accepted;
 }
 
 std::size_t PipedTransport::receive(ComponentId targetComponent,
@@ -44,13 +45,20 @@ std::size_t PipedTransport::pendingCount() const {
     return inbox_.size();
 }
 
+void PipedTransport::flush() {
+    // PipedTransport has no outbound buffering.
+}
+
+TransportStats PipedTransport::stats() const {
+    std::lock_guard lock(mutex_);
+    auto s = stats_;
+    s.inboundQueueDepth = inbox_.size();
+    return s;
+}
+
 void PipedTransport::connect(PipedTransport& peer) {
     peer_ = &peer;
     peer.peer_ = this;
-}
-
-void PipedTransport::flush() {
-    static_cast<void>(this);
 }
 
 }  // namespace theseed::runtime

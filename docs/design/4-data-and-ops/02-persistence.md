@@ -2,7 +2,8 @@
 
 > theseed 持久化层：实体存储、查询扩展、Schema 管理。
 >
-> 来源：KBEngine 只有 EntityTable CRUD，BigWorld 有 Archiver + SecondaryDB。
+> 来源源头：BigWorld `Archiver / SecondaryDB / consolidate_dbs`。
+> 参考实现：KBEngine 的 EntityTable CRUD 主路径。
 > 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 > 本篇只讨论主持久化与查询，不展开本地归档暂存层；后者见 [03-local-archive-and-secondary-db](03-local-archive-and-secondary-db.md)。
 

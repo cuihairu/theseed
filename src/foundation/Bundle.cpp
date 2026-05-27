@@ -4,11 +4,12 @@
 
 namespace theseed::foundation {
 
-void Bundle::beginMessage(std::uint16_t messageId, DeliveryFlag delivery) {
+void Bundle::beginMessage(std::uint16_t messageId, std::uint8_t channelClass, DeliveryFlag delivery) {
     MessageHeader header;
     header.messageId = messageId;
     header.payloadLength = 0;
     header.sequence = delivery == DeliveryFlag::OrderedReliable ? nextSequence_++ : 0;
+    header.channelClass = channelClass;
     header.delivery = delivery;
 
     headerPos_ = stream_.writePos();

@@ -1,6 +1,7 @@
 # Fault Tolerance — 三级容错
 
-> 来源：BigWorld Reviver + BackupSender + Archiver。
+> 来源源头：BigWorld `Reviver / BackupSender / Archiver`。
+> 参考实现：KBEngine 的基础进程恢复与持久化恢复路径。
 > 这是 KBEngine 差距最大的领域之一，但也是 theseed 最不应在 `MVP` 阶段过度承诺的领域。
 > 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 

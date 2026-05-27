@@ -5,11 +5,13 @@
 #include "theseed/runtime/RuntimeTransport.h"
 
 #include <atomic>
+#include <cstring>
 #include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -97,7 +99,35 @@ public:
     bool isPropertyDirty(PropertyId id) const;
     void clearDirtyFlags();
     std::vector<PropertyDelta> buildDirtyPropertyDelta() const;
+    std::vector<PropertyDelta> buildFullPropertySnapshot() const;
     void applyPropertyDelta(std::span<const PropertyDelta> deltas, bool markDirty = false);
+
+    using PropertyChangeCallback = std::function<void(Entity&, PropertyId,
+                                                      const std::byte*, const std::byte*, std::size_t)>;
+
+    void setPropertyChangedCallback(PropertyId id, PropertyChangeCallback callback);
+    void clearPropertyChangedCallbacks();
+
+    template <typename T>
+    void onPropertyChanged(PropertyId id, std::function<void(Entity&, T, T)> callback) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        if (!callback) {
+            setPropertyChangedCallback(id, nullptr);
+            return;
+        }
+
+        setPropertyChangedCallback(id,
+            [cb = std::move(callback)](Entity& e, PropertyId,
+                                       const std::byte* oldVal,
+                                       const std::byte* newVal,
+                                       std::size_t size) {
+                if (size != sizeof(T)) return;
+                T oldT{}, newT{};
+                std::memcpy(&oldT, oldVal, sizeof(T));
+                std::memcpy(&newT, newVal, sizeof(T));
+                cb(e, oldT, newT);
+            });
+    }
 
     const PropertyBlock& propertyBlock() const;
     PropertyBlock& propertyBlock();

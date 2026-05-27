@@ -1,6 +1,7 @@
 # BSP Rebalance & Offload — grow/shrink、chunk-aware balance 与退役迁出
 
-> 来源：BigWorld `InternalNode::doBalance / balanceChildren / balanceOnUnloadedChunks / chunkLimitInDirection / CellData::balance / retireCell / shouldOffload`。
+> 来源源头：BigWorld `InternalNode::doBalance / balanceChildren / balanceOnUnloadedChunks / chunkLimitInDirection / CellData::balance / retireCell / shouldOffload`。
+> KBEngine 在动态 BSP、offload 与 chunk-aware balance 上只有较薄参考价值。
 > 这篇补的是 BigWorld 动态多 Cell 真正复杂的那一层，不是再重复“Phase 3 支持 BSP”。
 
 ---
@@ -37,7 +38,7 @@ BigWorld 的优点：
 KBEngine 的优点：
   - 轻
   - 边界少
-  - 更适合作为 runtime core 起点
+  - 更适合作为轻量运行时参考
 
 共同缺点：
   - 动态 rebalance 的实现和验证成本都很高

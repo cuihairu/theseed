@@ -3,7 +3,8 @@
 > Ghost 解决实体跨 Cell 边界的可见性问题；Witness 解决实体到客户端的视野同步。
 > 两者是 AOI 系统之上最关键的运行时机制。
 >
-> 来源：BigWorld 原创设计，KBEngine 完整继承。
+> 来源源头：BigWorld `Witness / RealEntity / EntityCache / Ghost / Haunt`。
+> KBEngine 是轻量参考实现，继承 real/ghost 与 Witness 主干，但系统配套更薄。
 
 ---
 
@@ -15,7 +16,8 @@
 BigWorld 把 Witness 和 Ghost 做成核心运行时机制：
   - Witness 负责客户端视野与数据打包
   - Ghost 负责跨 Cell 的邻居可见性
-  - AOI、detail level、priority update 串成一条链
+  - EntityCache 负责每个观察关系的 detail level、priority、client state
+  - AOI、detail level、priority update、bandwidth budget 串成一条链
 ```
 
 ### KBEngine 是怎么实现的
@@ -44,7 +46,8 @@ KBEngine 保留了同样的语义主干：
 ```
 theseed 继承这个模型，
 因为它比“纯复制/纯订阅”更适合实体型游戏服务器。
-代价是必须把 AOI、属性同步和迁移窗口一起设计。
+代价是必须把 AOI、属性同步、迁移窗口和 per-witness 同步状态一起设计。
+其中 BigWorld 的 `EntityCache` 语义不能丢，只是不要求 MVP 立即完整实现。
 ```
 
 ---

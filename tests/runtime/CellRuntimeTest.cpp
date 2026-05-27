@@ -13,6 +13,7 @@ using theseed::runtime::EntitySide;
 using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::PropertyType;
 using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
 using theseed::runtime::SingleCellTopology;
 using theseed::runtime::Space;
 using theseed::runtime::SpaceConfig;
@@ -140,7 +141,7 @@ int main() {
     dispatchInvocation.entityType = realEntity.entityType();
     dispatchInvocation.method = "castSpell";
     dispatchInvocation.payload.assign(payload.begin(), payload.end());
-    if (!transport->send(dispatchInvocation)) {
+    if (transport->send(dispatchInvocation) != SendResult::Accepted) {
         return fail("runtime_dispatch_enqueue_local");
     }
     scheduler.runOnce();
@@ -154,7 +155,7 @@ int main() {
     routedInvocation.entityType = ghostProxyEntity.entityType();
     routedInvocation.method = "castSpell";
     routedInvocation.payload.assign(payload.begin(), payload.end());
-    if (!transport->send(routedInvocation)) {
+    if (transport->send(routedInvocation) != SendResult::Accepted) {
         return fail("runtime_dispatch_enqueue_forward");
     }
     scheduler.runOnce();

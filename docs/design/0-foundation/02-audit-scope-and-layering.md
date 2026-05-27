@@ -1,7 +1,8 @@
 # Audit Scope & Layering — 审计口径与分层原则
 
 > 本轮文档重组按 BigWorld 14.4.1 的服务端实现与服务端工具链对标，
-> 同时参考 KBEngine 的运行时主干。
+> 同时参考 KBEngine 的轻量运行时落地方式。
+> 顶层定位见 [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md)。
 > 不把客户端渲染、资源编辑器 UI、WorldEditor 交互细节纳入当前必做项。
 
 ---
@@ -11,8 +12,9 @@
 ### BigWorld 是怎么实现的
 
 ```
-BigWorld 的服务端实现面很厚：
+BigWorld 是这些系统边界的源头参考：
   - runtime 主干
+  - Space / AOI / Witness / Ghost
   - HA
   - 数据运维
   - 登录与控制面
@@ -22,7 +24,7 @@ BigWorld 的服务端实现面很厚：
 ### KBEngine 是怎么实现的
 
 ```
-KBEngine 更偏向运行时主干：
+KBEngine 更偏向轻量运行时闭环：
   - tick / entity / AOI / witness / migration
   - 系统层和工具链相对更薄
 ```
@@ -36,7 +38,7 @@ BigWorld 的优点：
 
 KBEngine 的优点：
   - 轻
-  - 更适合作为 runtime core 起点
+  - 更适合作为运行时闭环的参考实现
 
 共同缺点：
   - 如果不先立审计口径，很容易把“长期边界”和“当前实现”混在一起
@@ -45,10 +47,11 @@ KBEngine 的优点：
 ### theseed 的取舍
 
 ```
-theseed 先按 BigWorld 的系统分层重排文档，
-再用 KBEngine 的可落地 runtime 主干做 MVP 起点。
-这样文档不会低估 BigWorld 差异，
-也不会一次把所有复杂度塞进实现计划。
+theseed 以 BigWorld 的系统分层作为长期边界，
+以 KBEngine 的轻量运行时参考校验 MVP 路径，
+再把现代化基础设施放回明确层级。
+这样文档不会低估 BigWorld 的源头价值，
+也不会把 KBEngine 的简化实现误当成能力上限。
 ```
 
 ---
@@ -110,7 +113,7 @@ theseed 作为分布式游戏服务端引擎，
 
 ```
 1. BigWorld 的系统级实现面被拆散，看不出完整边界
-2. KBEngine 风格的运行时主干和 theseed 自己加的现代基础设施缠在一起
+2. KBEngine 的轻量运行时参考和 theseed 自己加的现代基础设施缠在一起
 ```
 
 所以本轮重组采用新的判断标准：
@@ -266,13 +269,13 @@ theseed 作为分布式游戏服务端引擎，
 
 ## 4. 当前覆盖判断
 
-按 KBEngine 为标尺：
+按 KBEngine 轻量参考实现检查：
 
 ```
-运行时主干已经基本进入“可设计、可落地”的状态。
+运行时闭环已经基本进入“可设计、可落地”的状态。
 ```
 
-按 BigWorld 为标尺：
+按 BigWorld 源头系统面检查：
 
 ```
 这些文档现在不再只覆盖 runtime core，
@@ -297,7 +300,7 @@ theseed 作为分布式游戏服务端引擎，
 
 ## 5. 阅读顺序建议
 
-### 5.1 先看运行时主干
+### 5.1 先看运行时闭环
 
 ```
 01-mvp-architecture-baseline
@@ -305,7 +308,7 @@ theseed 作为分布式游戏服务端引擎，
   → 2-replication-and-space
 ```
 
-### 5.2 再看 BigWorld 系统级差异
+### 5.2 再看 BigWorld 源头系统面
 
 ```
 3-cluster-and-availability
@@ -327,8 +330,8 @@ theseed 作为分布式游戏服务端引擎，
 这轮整理后的 theseed 文档应当被理解为：
 
 ```
-以 KBEngine 风格运行时主干为可落地起点，
-按 BigWorld 14.4.1 的服务端系统面补齐长期边界，
+以 BigWorld 14.4.1 的服务端系统面作为源头边界，
+以 KBEngine 的轻量运行时落地方式作为参考实现之一，
 同时把 theseed 自己新增的现代化基础设施明确放回合适层级。
 ```
 

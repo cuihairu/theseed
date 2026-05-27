@@ -23,11 +23,13 @@ class IRuntimeTransport {
 public:
     virtual ~IRuntimeTransport() = default;
 
-    virtual bool send(RuntimeInvocation invocation) = 0;
+    virtual SendResult send(RuntimeInvocation invocation) = 0;
     virtual std::size_t receive(ComponentId targetComponent,
                                 RuntimeInvocation* out,
                                 std::size_t capacity) = 0;
     virtual std::size_t pendingCount() const = 0;
+    virtual void flush() = 0;
+    virtual TransportStats stats() const = 0;
 };
 
 class InMemoryRuntimeTransport final : public IRuntimeTransport {
@@ -37,17 +39,20 @@ public:
     InMemoryRuntimeTransport(const InMemoryRuntimeTransport&) = delete;
     InMemoryRuntimeTransport& operator=(const InMemoryRuntimeTransport&) = delete;
 
-    bool send(RuntimeInvocation invocation) override;
+    SendResult send(RuntimeInvocation invocation) override;
     std::size_t receive(ComponentId targetComponent,
                         RuntimeInvocation* out,
                         std::size_t capacity) override;
     std::size_t pendingCount() const override;
+    void flush() override;
+    TransportStats stats() const override;
 
     std::size_t drain(RuntimeInvocation* out, std::size_t capacity);
 
 private:
     mutable std::mutex mutex_;
     std::deque<RuntimeInvocation> invocations_;
+    TransportStats stats_;
 };
 
 }  // namespace theseed::runtime

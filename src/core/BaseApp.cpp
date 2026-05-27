@@ -76,4 +76,16 @@ bool BaseApp::destroyEntity(runtime::EntityId id) {
     return runtime_ ? runtime_->destroyEntity(id) : false;
 }
 
+bool BaseApp::requestCreateCell(runtime::EntityId entityId,
+                                 const std::string& entityType,
+                                 const runtime::Vector3& position,
+                                 runtime::ComponentId targetCellApp) {
+    return runtime_ ? runtime_->requestCreateCell(entityId, entityType, position, targetCellApp) : false;
+}
+
+bool BaseApp::requestDestroyCell(runtime::EntityId entityId,
+                                  runtime::ComponentId targetCellApp) {
+    return runtime_ ? runtime_->requestDestroyCell(entityId, targetCellApp) : false;
+}
+
 }  // namespace theseed::core

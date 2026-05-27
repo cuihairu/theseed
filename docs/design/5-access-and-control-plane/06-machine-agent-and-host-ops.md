@@ -1,6 +1,7 @@
 # MachineAgent & Host Ops - 主机上报、进程编排与节点摘要
 
-> 参考：BigWorld `bwmachined`，KBEngine `machine`。
+> 来源源头：BigWorld `bwmachined`。
+> 参考实现：KBEngine `machine` 的组件调度与状态汇聚路径。
 > 这一层是“主机代理 + 本机进程编排 + 节点摘要上报”，不是完整监控中心。
 
 ---

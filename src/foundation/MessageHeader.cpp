@@ -7,6 +7,7 @@ void encodeHeader(const MessageHeader& header, MemoryStream& stream) {
     stream.writeUint16(header.messageId);
     stream.writeUint32(header.payloadLength);
     stream.writeUint32(header.sequence);
+    stream.writeUint8(header.channelClass);
     stream.writeUint8(static_cast<std::uint8_t>(header.delivery));
 }
 
@@ -17,6 +18,7 @@ bool decodeHeader(MessageHeader& header, MemoryStream& stream) {
     header.messageId = stream.readUint16();
     header.payloadLength = stream.readUint32();
     header.sequence = stream.readUint32();
+    header.channelClass = stream.readUint8();
     header.delivery = static_cast<DeliveryFlag>(stream.readUint8());
     return true;
 }

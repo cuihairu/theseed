@@ -11,6 +11,7 @@ using theseed::runtime::DeliveryClass;
 using theseed::runtime::EntityCall;
 using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
 
 namespace {
 
@@ -45,7 +46,7 @@ int main() {
         return fail("build_payload_size");
     }
 
-    if (!call.call(transport, "move", payload)) {
+    if (call.call(transport, "move", payload) != SendResult::Accepted) {
         return fail("call_send");
     }
 
@@ -65,11 +66,11 @@ int main() {
 
     call.updateTarget(9);
     call.setDeliveryClass(DeliveryClass::UNORDERED_LOSSY);
-    if (!call.call(transport, "ping", {})) {
+    if (call.call(transport, "ping", {}) != SendResult::Accepted) {
         return fail("call_after_update");
     }
     EntityCall otherCall(99, 7, "Monster");
-    if (!otherCall.call(transport, "attack", {})) {
+    if (otherCall.call(transport, "attack", {}) != SendResult::Accepted) {
         return fail("call_second_target");
     }
 
@@ -89,7 +90,7 @@ int main() {
     }
 
     call.invalidate();
-    if (call.call(transport, "fail", {})) {
+    if (call.call(transport, "fail", {}) == SendResult::Accepted) {
         return fail("invalid_call");
     }
 

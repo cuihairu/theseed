@@ -1,6 +1,7 @@
 # Backup Hash & HA Recovery Chain — 热备链、恢复权威与切换边界
 
-> 来源：BigWorld `BackupHash / BackupHashChain / BackupSender / BaseAppMgr::useNewBackupHash / requestBackupHashChain`。
+> 来源源头：BigWorld `BackupHash / BackupHashChain / BackupSender / BaseAppMgr::useNewBackupHash / requestBackupHashChain`。
+> KBEngine 没有完整对等的热备责任链，只能作为基础恢复参考。
 > 这篇不是在重复 `EntityBackup`，而是把 BigWorld 真正成体系的热备链路单独立住。
 
 ---

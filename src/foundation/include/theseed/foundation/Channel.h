@@ -11,6 +11,16 @@ namespace theseed::foundation {
 
 class Channel final {
 public:
+    enum class OverflowPolicy : std::uint8_t {
+        BackPressure,
+        DiscardOldest,
+    };
+
+    struct Watermark {
+        std::size_t low = 64;
+        std::size_t high = 256;
+    };
+
     explicit Channel(std::uint32_t targetComponent);
 
     Channel(const Channel&) = delete;
@@ -24,10 +34,18 @@ public:
     std::uint32_t targetComponent() const;
     std::uint32_t nextSequence() const;
 
+    void setWatermark(Watermark wm);
+    void setOverflowPolicy(OverflowPolicy policy);
+    bool isBackPressured() const;
+    const Watermark& watermark() const;
+    OverflowPolicy overflowPolicy() const;
+
 private:
     std::uint32_t targetComponent_;
     std::uint32_t sequence_ = 0;
     std::deque<Bundle> outbound_;
+    Watermark watermark_;
+    OverflowPolicy overflowPolicy_ = OverflowPolicy::BackPressure;
 };
 
 class IMessageHandler {

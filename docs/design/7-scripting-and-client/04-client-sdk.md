@@ -1,10 +1,12 @@
 # Client SDK — 客户端引擎支持
 
 > theseed 客户端 SDK：一份 XML 定义 → 生成服务端与客户端协议代码。
-> 同时保留一条“SDK 运行时元数据导入/更新”链路，用来对照 KBEngine 的混合式客户端方案。
+> 同时保留一条“SDK 运行时元数据导入/更新”链路，用来参考 KBEngine 的混合式客户端方案。
 > 但 `MVP` 不追求三端一次到位，而是先保证 Unity 全链路跑通。
 >
-> 来源：KBEngine 有 Unity 插件（维护不活跃），theseed 新增多引擎代码生成目标。
+> 来源源头：BigWorld 的客户端协议与实体同步思想。
+> 参考实现：KBEngine 的 Unity 插件与 SDK 生成链（维护不活跃）。
+> theseed 新增多引擎代码生成目标。
 > 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
@@ -50,8 +52,8 @@ BigWorld / KBEngine 的缺点：
 ### theseed 的取舍
 
 ```
-theseed 不追求一开始就复制 BigWorld 的完整客户端生态，
-也不接受 KBEngine 式长期手写客户端协议。
+theseed 不追求一开始就搬运 BigWorld 的完整客户端生态，
+也不接受把 KBEngine 的手写客户端协议路径作为长期主线。
 
 取舍是：
   - 先保证 Unity 主路径
@@ -125,7 +127,7 @@ theseed-codegen \
 ### 2.3 运行时 SDK 更新预留
 
 ```
-参考 KBEngine 的做法，theseed 预留客户端 SDK 分发与导入链：
+参考 KBEngine 的混合式客户端方案，theseed 预留客户端 SDK 分发与导入链：
   - 服务端下发 def / digest / package 摘要
   - 客户端校验版本与兼容性
   - 按受控流程替换生成产物

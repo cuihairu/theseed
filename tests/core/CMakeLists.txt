@@ -78,3 +78,67 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_property_metadata_test COMMAND theseed_property_metadata_test)
+
+add_executable(theseed_tcp_integration_test TcpIntegrationTest.cpp)
+
+target_link_libraries(
+    theseed_tcp_integration_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_tcp_integration_test COMMAND theseed_tcp_integration_test)
+
+add_executable(theseed_multi_cellapp_tcp_test MultiCellAppTcpTest.cpp)
+
+target_link_libraries(
+    theseed_multi_cellapp_tcp_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_multi_cellapp_tcp_test COMMAND theseed_multi_cellapp_tcp_test)
+
+add_executable(theseed_tick_driven_tcp_test TickDrivenTcpTest.cpp)
+
+target_link_libraries(
+    theseed_tick_driven_tcp_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_tick_driven_tcp_test COMMAND theseed_tick_driven_tcp_test)
+
+add_executable(theseed_remote_entity_test RemoteEntityTest.cpp)
+
+target_link_libraries(
+    theseed_remote_entity_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_remote_entity_test COMMAND theseed_remote_entity_test)
+
+
+add_executable(theseed_tick_node_lifecycle_test TickNodeLifecycleTest.cpp)
+
+target_link_libraries(
+    theseed_tick_node_lifecycle_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_tick_node_lifecycle_test COMMAND theseed_tick_node_lifecycle_test)
+
+add_executable(theseed_property_sync_test PropertySyncTest.cpp)
+
+target_link_libraries(
+    theseed_property_sync_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_property_sync_test COMMAND theseed_property_sync_test)
+
+add_executable(theseed_file_entity_store_test FileEntityStoreTest.cpp)
+
+target_link_libraries(
+    theseed_file_entity_store_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_file_entity_store_test COMMAND theseed_file_entity_store_test)

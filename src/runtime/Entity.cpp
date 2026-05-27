@@ -227,6 +227,7 @@ void Entity::destroy() {
     clearBaseEntityCall();
     clearCellEntityCall();
     clearMethodHandlers();
+    clearPropertyChangedCallbacks();
 }
 
 bool Entity::isPropertyDirty(PropertyId id) const {
@@ -241,8 +242,30 @@ std::vector<PropertyDelta> Entity::buildDirtyPropertyDelta() const {
     return properties_.buildDirtyDelta();
 }
 
+std::vector<PropertyDelta> Entity::buildFullPropertySnapshot() const {
+    return properties_.buildFullSnapshot();
+}
+
 void Entity::applyPropertyDelta(std::span<const PropertyDelta> deltas, bool markDirty) {
     properties_.applyDelta(deltas, markDirty);
+}
+
+void Entity::setPropertyChangedCallback(PropertyId id, PropertyChangeCallback callback) {
+    if (!callback) {
+        properties_.setChangeCallback(id, nullptr);
+        return;
+    }
+
+    auto* self = this;
+    properties_.setChangeCallback(id,
+        [self, cb = std::move(callback)](PropertyId pid, const std::byte* oldVal,
+                                          const std::byte* newVal, std::size_t size) {
+            cb(*self, pid, oldVal, newVal, size);
+        });
+}
+
+void Entity::clearPropertyChangedCallbacks() {
+    properties_.clearChangeCallbacks();
 }
 
 const PropertyBlock& Entity::propertyBlock() const {

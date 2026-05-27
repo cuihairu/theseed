@@ -2,7 +2,8 @@
 
 > theseed 统一的实体生命周期钩子设计和 C++ ↔ 脚本绑定架构。
 >
-> 来源：BigWorld 30+ 个钩子 + PyScript 手写绑定，KBEngine 20+ 个钩子 + Python C API 手写。
+> 来源源头：BigWorld 30+ 个生命周期钩子与 PyScript 手写绑定。
+> 参考实现：KBEngine 20+ 个钩子与 Python C API 手写绑定。
 > 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---

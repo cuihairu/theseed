@@ -26,6 +26,52 @@ MigrationEpoch decodeMigrationEpoch(std::span<const std::byte> payload) {
     return epoch;
 }
 
+// entity.createCell payload: entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) = 24
+struct CellCreationPayload {
+    EntityId entityId = 0;
+    ComponentId baseComponentId = 0;
+    float posX = 0;
+    float posY = 0;
+    float posZ = 0;
+};
+
+std::vector<std::byte> encodeCellCreation(EntityId entityId, ComponentId baseComponentId,
+                                            const Vector3& position) {
+    CellCreationPayload p;
+    p.entityId = entityId;
+    p.baseComponentId = baseComponentId;
+    p.posX = position.x;
+    p.posY = position.y;
+    p.posZ = position.z;
+    std::vector<std::byte> payload(sizeof(p));
+    std::memcpy(payload.data(), &p, sizeof(p));
+    return payload;
+}
+
+bool decodeCellCreation(std::span<const std::byte> payload, CellCreationPayload& out) {
+    if (payload.size() < sizeof(CellCreationPayload)) return false;
+    std::memcpy(&out, payload.data(), sizeof(out));
+    return true;
+}
+
+// entity.cellReady payload: entityId(8) + cellComponentId(4) = 12
+std::vector<std::byte> encodeCellReady(EntityId entityId, ComponentId cellComponentId) {
+    std::vector<std::byte> payload(sizeof(EntityId) + sizeof(ComponentId));
+    std::memcpy(payload.data(), &entityId, sizeof(entityId));
+    std::memcpy(payload.data() + sizeof(entityId), &cellComponentId, sizeof(cellComponentId));
+    return payload;
+}
+
+bool decodeCellReady(std::span<const std::byte> payload, EntityId& entityId, ComponentId& cellComponentId) {
+    if (payload.size() != sizeof(EntityId) + sizeof(ComponentId)) return false;
+    std::memcpy(&entityId, payload.data(), sizeof(entityId));
+    std::memcpy(&cellComponentId, payload.data() + sizeof(entityId), sizeof(cellComponentId));
+    return true;
+}
+
+// entity.destroyCell payload: entityId(8) + baseComponentId(4) = 12
+// entity.cellDestroyed payload: entityId(8) = 8
+
 }  // namespace
 
 CellRuntime::IngressPump::IngressPump(CellRuntime& owner) : owner_(&owner) {}
@@ -38,7 +84,14 @@ void CellRuntime::IngressPump::tick(TickContext& context) {
 CellRuntime::FlushPump::FlushPump(CellRuntime& owner) : owner_(&owner) {}
 
 void CellRuntime::FlushPump::tick(TickContext& context) {
-    owner_->tick(context);
+    static_cast<void>(context);
+    owner_->syncToBases();
+}
+
+CellRuntime::PostSyncPump::PostSyncPump(CellRuntime& owner) : owner_(&owner) {}
+
+void CellRuntime::PostSyncPump::tick(TickContext& context) {
+    owner_->postSyncTick(context);
 }
 
 CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
@@ -49,6 +102,7 @@ CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
       localComponentId_(localComponentId),
       ingressPump_(*this),
       flushPump_(*this),
+      postSyncPump_(*this),
       timerWheel_(std::make_unique<foundation::TimerWheel>()) {
     if (!spaceRuntime_) {
         throw std::invalid_argument("cell runtime requires space runtime");
@@ -80,14 +134,16 @@ ComponentId CellRuntime::localComponentId() const {
 }
 
 void CellRuntime::attach(TickScheduler& scheduler) {
-    spaceRuntime_->attach(scheduler);
     scheduler.registerTickable(TickPhase::Network, ingressPump_);
-    scheduler.registerTickable(TickPhase::Flush, flushPump_);
+    scheduler.registerTickable(TickPhase::SyncBuild, flushPump_);
+    spaceRuntime_->attach(scheduler);
+    scheduler.registerTickable(TickPhase::SyncBuild, postSyncPump_);
 }
 
 void CellRuntime::detach(TickScheduler& scheduler) {
     static_cast<void>(scheduler.unregisterTickable(TickPhase::Network, ingressPump_));
-    static_cast<void>(scheduler.unregisterTickable(TickPhase::Flush, flushPump_));
+    static_cast<void>(scheduler.unregisterTickable(TickPhase::SyncBuild, flushPump_));
+    static_cast<void>(scheduler.unregisterTickable(TickPhase::SyncBuild, postSyncPump_));
     spaceRuntime_->detach(scheduler);
 }
 
@@ -150,7 +206,7 @@ bool CellRuntime::beginMigration(EntityId entityId,
     invocation.method = "migration.transfer";
     invocation.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
     invocation.payload = EntityMigration::encode(snapshot);
-    if (!transport_->send(std::move(invocation))) {
+    if (transport_->send(std::move(invocation)) != SendResult::Accepted) {
         return false;
     }
 
@@ -231,7 +287,7 @@ bool CellRuntime::forwardGhostMethod(EntityId entityId,
         return false;
     }
 
-    return transport_->send(*invocation);
+    return transport_->send(*invocation) == SendResult::Accepted;
 }
 
 bool CellRuntime::dispatchInvocation(const RuntimeInvocation& invocation) {
@@ -243,6 +299,15 @@ bool CellRuntime::dispatchInvocation(const RuntimeInvocation& invocation) {
     }
     if (invocation.method == "migration.commit") {
         return applyMigrationCommit(invocation);
+    }
+    if (invocation.method == "entity.createCell") {
+        return handleCreateCell(invocation);
+    }
+    if (invocation.method == "entity.destroyCell") {
+        return handleDestroyCell(invocation);
+    }
+    if (invocation.method == "property.syncToCell") {
+        return handlePropertySyncFromBase(invocation);
     }
 
     if (invocation.targetComponent != localComponentId_) {
@@ -265,7 +330,7 @@ bool CellRuntime::dispatchInvocation(const RuntimeInvocation& invocation) {
             return false;
         }
 
-        return transport_->send(*forwarded);
+        return transport_->send(*forwarded) == SendResult::Accepted;
     }
 
     return entity->dispatchInvocation(invocation);
@@ -306,7 +371,7 @@ bool CellRuntime::applyMigrationTransfer(const RuntimeInvocation& invocation) {
     commit.method = "migration.commit";
     commit.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
     commit.payload = encodeMigrationEpoch(snapshot.epoch);
-    return transport_->send(std::move(commit));
+    return transport_->send(std::move(commit)) == SendResult::Accepted;
 }
 
 bool CellRuntime::applyMigrationCommit(const RuntimeInvocation& invocation) {
@@ -347,7 +412,7 @@ bool CellRuntime::routeMigratingInvocation(const RuntimeInvocation& invocation) 
 
     RuntimeInvocation forwarded = invocation;
     forwarded.targetComponent = iter->second.targetComponent;
-    return transport_->send(std::move(forwarded));
+    return transport_->send(std::move(forwarded)) == SendResult::Accepted;
 }
 
 bool CellRuntime::applyGhostSync(const RuntimeInvocation& invocation) {
@@ -375,7 +440,103 @@ bool CellRuntime::applyGhostSync(const RuntimeInvocation& invocation) {
     return true;
 }
 
+bool CellRuntime::handleCreateCell(const RuntimeInvocation& invocation) {
+    CellCreationPayload params;
+    if (!decodeCellCreation(invocation.payload, params)) return false;
+
+    const auto factoryIter = entityFactories_.find(invocation.entityType);
+    if (factoryIter == entityFactories_.end()) return false;
+
+    if (findEntity(params.entityId) != nullptr) return false;
+
+    auto entity = factoryIter->second(params.entityId, EntitySide::Cell);
+    if (!entity) return false;
+
+    auto* entityPtr = entity.get();
+    entityPtr->activate();
+    entityPtr->bindBaseEntityCall(params.baseComponentId);
+
+    // Apply initial property snapshot from base (if present)
+    if (invocation.payload.size() > sizeof(CellCreationPayload)) {
+        try {
+            auto snapshotSpan = std::span<const std::byte>(
+                invocation.payload.data() + sizeof(CellCreationPayload),
+                invocation.payload.size() - sizeof(CellCreationPayload));
+            auto deltas = PropertyReplication::decodeDelta(snapshotSpan);
+            entityPtr->applyPropertyDelta(deltas);
+        } catch (...) {
+            // Ignore malformed snapshot
+        }
+    }
+
+    Vector3 position{params.posX, params.posY, params.posZ};
+    addEntity(*entityPtr, position);
+    ownedEntities_.emplace(params.entityId, std::move(entity));
+
+    // Notify base that cell is ready
+    RuntimeInvocation ready;
+    ready.entityId = params.entityId;
+    ready.targetComponent = params.baseComponentId;
+    ready.entityType = invocation.entityType;
+    ready.method = "entity.cellReady";
+    ready.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
+    ready.payload = encodeCellReady(params.entityId, localComponentId_);
+    return transport_->send(std::move(ready)) == SendResult::Accepted;
+}
+
+bool CellRuntime::handleDestroyCell(const RuntimeInvocation& invocation) {
+    if (invocation.payload.size() < sizeof(EntityId)) return false;
+
+    auto* entity = findEntity(invocation.entityId);
+    if (entity == nullptr) return false;
+
+    ComponentId baseComponentId = 0;
+    if (invocation.payload.size() >= sizeof(EntityId) + sizeof(ComponentId)) {
+        std::memcpy(&baseComponentId, invocation.payload.data() + sizeof(EntityId), sizeof(ComponentId));
+    }
+
+    entity->destroy();
+    removeEntity(invocation.entityId);
+
+    if (baseComponentId != 0) {
+        RuntimeInvocation destroyed;
+        destroyed.entityId = invocation.entityId;
+        destroyed.targetComponent = baseComponentId;
+        destroyed.entityType = invocation.entityType;
+        destroyed.method = "entity.cellDestroyed";
+        destroyed.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
+
+        std::vector<std::byte> payload(sizeof(EntityId));
+        std::memcpy(payload.data(), &invocation.entityId, sizeof(EntityId));
+        destroyed.payload = std::move(payload);
+        static_cast<void>(transport_->send(std::move(destroyed)));
+    }
+
+    return true;
+}
+
+bool CellRuntime::handlePropertySyncFromBase(const RuntimeInvocation& invocation) {
+    if (invocation.payload.empty()) return false;
+
+    auto* entity = findEntity(invocation.entityId);
+    if (!entity) return false;
+
+    try {
+        auto deltas = PropertyReplication::decodeDelta(invocation.payload);
+        entity->applyPropertyDelta(deltas);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void CellRuntime::postSyncTick(TickContext& context) {
+    timerWheel_->advance(context.deltaTime);
+    syncRealGhosts();
+}
+
 void CellRuntime::tick(TickContext& context) {
+    syncToBases();
     timerWheel_->advance(context.deltaTime);
     syncRealGhosts();
 }
@@ -413,6 +574,31 @@ void CellRuntime::syncRealGhosts() {
         invocation.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
         invocation.payload = PropertyReplication::encodeDelta(*delta);
         transport_->send(std::move(invocation));
+    }
+}
+
+void CellRuntime::syncToBases() {
+    for (auto& [entityId, entityPtr] : ownedEntities_) {
+        auto* entity = entityPtr.get();
+        if (entity == nullptr || entity->state() != EntityState::Active) continue;
+
+        auto* baseCall = entity->baseEntityCall();
+        if (baseCall == nullptr || !baseCall->isValid()) continue;
+
+        auto deltas = entity->buildDirtyPropertyDelta();
+        if (deltas.empty()) continue;
+
+        RuntimeInvocation invocation;
+        invocation.entityId = entity->id();
+        invocation.targetComponent = baseCall->targetComponent();
+        invocation.entityType = entity->entityType();
+        invocation.method = "property.syncToBase";
+        invocation.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
+        invocation.payload = PropertyReplication::encodeDelta(deltas);
+
+        if (transport_->send(std::move(invocation)) == SendResult::Accepted) {
+            entity->clearDirtyFlags();
+        }
     }
 }
 

@@ -2,6 +2,7 @@
 
 > 这篇文档不是替代现有分篇设计，而是为现阶段实现提供统一约束。
 > 目标是先做出一个能稳定跑起来、边界清晰、可持续演进的 theseed MVP。
+> 顶层定位见 [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md)。
 
 ---
 
@@ -10,18 +11,20 @@
 ### BigWorld 是怎么实现的
 
 ```
-BigWorld 的做法是“先把运行时和系统层都做厚”：
-  - runtime 主干强
-  - HA / 数据 / 登录 / 控制面体系完整
-  - 但整体偏重，MVP 复刻成本高
+BigWorld 是 theseed 的源头参考：
+  - Runtime 主干强
+  - Space / AOI / Witness / Ghost 语义完整
+  - HA / 数据 / 登录 / 控制面 / 工具链成体系
+  - 但整体偏重，MVP 不能逐项搬运
 ```
 
 ### KBEngine 是怎么实现的
 
 ```
-KBEngine 的做法是“先把运行时主干跑通”：
+KBEngine 是 theseed 的重要参考实现之一：
   - tick / entity / AOI / EntityCall 简洁
   - 运行时落地强
+  - 适合校验最小闭环如何跑通
   - 但系统层能力偏薄
 ```
 
@@ -35,12 +38,12 @@ BigWorld 优点：
 BigWorld 缺点：
   - 重
   - 复杂
-  - MVP 复制成本高
+  - MVP 直接搬运成本高
 
 KBEngine 优点：
   - 轻
   - 易落地
-  - 适合做 runtime core 起点
+  - 适合做运行时闭环的现实参照
 
 KBEngine 缺点：
   - 系统级能力薄
@@ -50,11 +53,14 @@ KBEngine 缺点：
 ### theseed 的取舍
 
 ```
-theseed 先取 KBEngine 的可落地性，
-再按 BigWorld 的系统面补长期边界。
+theseed 以 BigWorld 的 MMO 服务端系统面为源头边界，
+以 KBEngine 的轻量运行时落地方式作为参考实现之一，
+再用现代工程方式重新拆分、收敛和落地。
 
-因此 MVP 不追求全量 BigWorld 复刻，
-但文档边界要保留 BigWorld 级系统能力的方向。
+因此 MVP 以可运行闭环为目标，
+同时不把 KBEngine 的简化能力当成上限。
+当前阶段只实现最小可运行闭环，
+但文档边界必须保留 BigWorld 级系统能力的方向。
 ```
 
 ---
@@ -81,10 +87,12 @@ theseed 先取 KBEngine 的可落地性，
 
 ## 2. MVP 目标
 
-theseed 的 MVP 不追求“完整替代 BigWorld”。
+theseed 的 MVP 不追求“完整替代 BigWorld”，也不以“重做 KBEngine”为目标。
 MVP 只追求一件事：
 
 **做出一个单机房内可运行的、单 Realm 的、可支撑房间制/副本制/中小地图玩法的分布式游戏服务器内核。**
+
+它必须具备继续演进到大型 MMO 的结构余量，但不能把 Phase 2 / Phase 3 的系统复杂度提前塞进 Phase 1。
 
 MVP 明确支持：
 
@@ -470,7 +478,7 @@ MVP 可选项：
 
 ## 13. MVP 实施顺序
 
-### Phase A：跑通最小闭环
+### Phase A：现代化运行时最小闭环
 
 - TickScheduler
 - Entity / BaseCell 模型
@@ -481,19 +489,22 @@ MVP 可选项：
 - MySQL load/save
 - Gateway 登录接入
 
-### Phase B：补齐在线玩法基础
+### Phase B：补齐在线玩法与基础运维
 
 - AOI 十字链表
 - Controller
 - Redis 会话/限流
 - Unity codegen
 - 基础 Metrics / Logs
+- 只读 Ops inspect
+- Channel / Bundle 状态统计
 
-### Phase C：增强运维能力
+### Phase C：接入 BigWorld 级系统面原型
 
 - 受限脚本热更
 - 迁移路由窗口
-- 备份恢复原型
+- BackupTopologyCoordinator / 备份恢复原型
+- Entity / EntityType load profiler 原型
 - 基础 Trace
 
 只有 Phase A 稳定后，才应该推进：

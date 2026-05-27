@@ -2,8 +2,9 @@
 
 > Controller 是服务端驱动实体行为的核心抽象。
 >
-> 来源：BigWorld 30+ 种 Controller，KBEngine 4 种。
-> theseed 取 BigWorld 的丰富性 + KBEngine 的简洁接口。
+> 来源源头：BigWorld 30+ 种 Controller 的行为抽象。
+> 参考实现：KBEngine 4 种 Controller 的简洁接口。
+> theseed 取 BigWorld 的能力边界与 KBEngine 的轻量落地方式。
 
 ---
 
@@ -46,7 +47,7 @@ KBEngine 的优点：
 ### theseed 的取舍
 
 ```
-theseed 不追求一开始复制 BigWorld 全量 Controller，
+theseed 不追求一开始搬运 BigWorld 全量 Controller，
 而是先定义统一接口和可迁移边界，
 再按业务价值逐步补类型。
 ```

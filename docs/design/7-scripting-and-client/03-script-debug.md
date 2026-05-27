@@ -1,7 +1,7 @@
 # Script Debug — 脚本层调试与执行态诊断
 
 > 本篇只讨论脚本运行时调试，不讨论平台遥测，也不讨论运维控制命令。
-> BigWorld / KBEngine 的主线更多是 `PyErr_Print`、`traceback`、`watcher`、`reload`；
+> 来源判断：BigWorld / KBEngine 的主线更多是 `PyErr_Print`、`traceback`、`watcher`、`reload`。
 > theseed 在此之上单独补脚本执行态调试面。
 
 ---

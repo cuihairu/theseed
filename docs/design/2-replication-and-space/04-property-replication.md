@@ -2,7 +2,8 @@
 
 > 属性同步是 theseed 最核心的数据流：实体属性变更如何高效传播到所有相关方。
 >
-> 来源：BigWorld DataLoDLevels + VolatileInfo，KBEngine onDefDataChanged + Witness::update。
+> 来源源头：BigWorld `DataLoDLevels / VolatileInfo / EntityCache / Witness`。
+> 参考实现：KBEngine `onDefDataChanged + Witness::update`。
 > 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
@@ -15,7 +16,8 @@
 BigWorld 的属性复制不是简单字段同步：
   - DataLoDLevels 做分级
   - VolatileInfo 记录临时变化
-  - Witness 负责把脏数据按视野打包发送
+  - EntityCache 记录每个观察关系的 detail level、event number、volatile number 和 priority
+  - Witness 负责在带宽预算内把脏数据按视野打包发送
 ```
 
 ### KBEngine 是怎么实现的
@@ -42,9 +44,10 @@ KBEngine 更偏向事件驱动：
 ### theseed 的取舍
 
 ```
-theseed 选择 dirty + tick-batch + detail level，
-因为它既能对齐 BigWorld 的分级思路，
-又比 KBEngine 更容易把复制边界写成可审计规则。
+theseed 选择 dirty + tick-batch + detail level 作为 MVP，
+同时把 BigWorld 的 EntityCache / priority / bandwidth budget 作为后续上限。
+这样既能先落地 KBEngine 参考实现中的轻量主路径，
+又不会丢掉 BigWorld 对大型 MMO 同屏同步的关键设计。
 ```
 
 ---

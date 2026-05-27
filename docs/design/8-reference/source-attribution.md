@@ -2,8 +2,8 @@
 
 > 这份文档回答三件事：
 >
-> 1. 新分层下每一层主要继承自 BigWorld、KBEngine，还是 theseed 自己扩展  
-> 2. 当前文档覆盖的是“KBEngine 运行时主干”还是“BigWorld 服务端系统面”  
+> 1. 新分层下每一层主要来自 BigWorld 源头、KBEngine 参考实现，还是 theseed 自己扩展  
+> 2. 当前文档覆盖的是“BigWorld 源头系统面”还是“KBEngine 轻量运行时参考”  
 > 3. 哪些能力现在只是边界，不是 MVP 承诺
 
 ---
@@ -13,8 +13,9 @@
 ### BigWorld 是怎么实现的
 
 ```
-BigWorld 的参考价值不只在 runtime，
-更在系统层和工具链：
+BigWorld 是 theseed 的源头设计参考，
+价值不只在 runtime，更在系统层和工具链：
+  - Space / AOI / Witness / Ghost
   - HA
   - 数据运维
   - 登录运维
@@ -24,7 +25,8 @@ BigWorld 的参考价值不只在 runtime，
 ### KBEngine 是怎么实现的
 
 ```
-KBEngine 的参考价值主要在 runtime 主干：
+KBEngine 是重要参考实现之一，
+参考价值主要在轻量运行时落地方式：
   - tick
   - entity
   - AOI / ghost / witness
@@ -36,11 +38,11 @@ KBEngine 的参考价值主要在 runtime 主干：
 ```
 BigWorld 的优点：
   - 系统面厚
-  - 能帮助 theseed 立长期边界
+  - 能作为 theseed 的长期系统边界源头
 
 KBEngine 的优点：
   - runtime 落地更直接
-  - 更适合作为 MVP 起点
+  - 更适合作为 MVP 运行链路参照
 
 共同缺点：
   - 如果不做来源追溯，文档容易误判“已经覆盖了什么”
@@ -51,13 +53,40 @@ KBEngine 的优点：
 ```
 theseed 这份来源追溯文档的任务，
 就是持续提醒读者：
-  - 哪些来自 BigWorld
-  - 哪些来自 KBEngine
+  - 哪些来自 BigWorld 源头设计
+  - 哪些来自 KBEngine 参考实现
   - 哪些是 theseed 新增
   - 哪些只是边界，不是当前承诺
 ```
 
-## 2.1 新增基础设施边界
+---
+
+## 1. 总判断
+
+一句话总结：
+
+```
+theseed 不是 KBEngine 的重写版，
+也不是 BigWorld 的逐项搬运。
+
+theseed 的文档结构应以 BigWorld 的 MMO 服务端系统面为源头，
+以 KBEngine 的轻量运行时落地为参考，
+再明确 theseed 自己的现代化工程取舍。
+```
+
+但要区分两层：
+
+```
+MVP 可落地起点
+  - 借鉴 KBEngine 的轻量运行时参考实现
+
+长期系统边界
+  - 明确继承 BigWorld 的 HA、数据运维、登录运维、控制面、load feedback、world system
+```
+
+---
+
+## 2. 新增基础设施边界
 
 ### 仓库布局与构建
 
@@ -79,31 +108,9 @@ theseed 的收敛方式是：
 
 ---
 
-## 1. 总判断
+## 3. 分层来源
 
-一句话总结：
-
-```
-theseed 现在的文档结构，
-已经不再只是“KBEngine runtime core + 现代化扩展”，
-而是开始按 BigWorld 14.4.1 的服务端系统面来组织边界。
-```
-
-但要区分两层：
-
-```
-MVP 可落地起点
-  - 更接近 KBEngine 风格运行时主干
-
-长期系统边界
-  - 明确对标 BigWorld 的 HA、数据运维、登录运维、控制面、load feedback
-```
-
----
-
-## 2. 分层来源
-
-### 2.1 0-foundation
+### 3.1 0-foundation
 
 主要来源：
 
@@ -119,12 +126,12 @@ theseed 自己定义
 而是这轮重组为避免边界混乱而补出的治理层。
 ```
 
-### 2.2 1-runtime-model
+### 3.2 1-runtime-model
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
 | Tick 5 阶段分段 | KBEngine | `EventDispatcher::processUntilBreak` 风格最清晰 |
-| Base / Cell 双体 | BigWorld | KBEngine 是完整继承者 |
+| Base / Cell 双体 | BigWorld | KBEngine 提供更轻量的继承实现 |
 | IORuntime / Reactor-Completion 分层 | theseed | 老引擎只有事件循环/ poller 语义，没有这层总抽象 |
 | Merkle diff / semantic compatibility | theseed | 老引擎多为单 digest 对比，缺少分层差异定位 |
 | PropertyBlock 连续内存 | theseed | 用于替代 Python dict 属性布局 |
@@ -138,11 +145,11 @@ theseed 自己定义
 这一层是“BigWorld 实体模型 + KBEngine 主循环拆解 + theseed 内存改造”。
 ```
 
-### 2.3 2-replication-and-space
+### 3.3 2-replication-and-space
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
-| AOI 十字链表 / RangeTrigger | BigWorld | KBEngine 完整继承 |
+| AOI 十字链表 / RangeTrigger | BigWorld | KBEngine 提供轻量继承实现 |
 | Witness / Ghost / real-ghost 权威 | BigWorld | KBEngine 继承但简化 |
 | EntityCall / Mailbox 思想 | BigWorld | KBEngine 做了单向化简 |
 | 迁移窗口与路由期 | KBEngine | GhostManager 路由窗口表达更直接 |
@@ -156,7 +163,7 @@ theseed 自己定义
 这一层是当前最“BigWorld 对齐”的核心层。
 ```
 
-### 2.4 3-cluster-and-availability
+### 3.4 3-cluster-and-availability
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
@@ -172,7 +179,7 @@ theseed 自己定义
 这一层几乎完全是按 BigWorld 服务端系统层来立边界。
 ```
 
-### 2.5 4-data-and-ops
+### 3.5 4-data-and-ops
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
@@ -188,7 +195,7 @@ theseed 自己定义
 这一层是“BigWorld 工具链边界 + theseed 现代存储增强”。
 ```
 
-### 2.6 5-access-and-control-plane
+### 3.6 5-access-and-control-plane
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
@@ -206,7 +213,7 @@ theseed 自己定义
 而是把 BigWorld 登录运维面与 Watcher 控制面重新放回系统边界。
 ```
 
-### 2.7 6-world-and-game-framework
+### 3.7 6-world-and-game-framework
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
@@ -222,7 +229,7 @@ theseed 自己定义
 不再把它们笼统叫做 gameplay。
 ```
 
-### 2.8 7-scripting-and-client
+### 3.8 7-scripting-and-client
 
 | 主题 | 主要来源 | 说明 |
 |------|------|------|
@@ -240,9 +247,33 @@ theseed 自己定义
 
 ---
 
-## 3. 覆盖结论
+## 4. 覆盖结论
 
-### 3.1 以 KBEngine 为标尺
+### 4.1 以 BigWorld 为源头标尺
+
+当前文档已经明确覆盖设计边界：
+
+```
+  - Space / AOI / Witness / Ghost / EntityCache
+  - Channel / Bundle / Runtime Data Plane
+  - BackupHash / 热备恢复链
+  - SecondaryDB / LocalArchiveStore
+  - Data Ops Toolchain
+  - Login 运维面
+  - Watcher 式控制面
+  - Runtime profiler → 调度反馈
+  - BSP / Load Bounds / Offload
+  - World Streaming / Compiled Space
+```
+
+但要强调：
+
+```
+这些很多仍然是 Phase 2 / Phase 3 边界，
+不是 MVP 实现承诺。
+```
+
+### 4.2 以 KBEngine 参考实现校验 MVP 运行链路
 
 当前文档已经覆盖：
 
@@ -264,35 +295,11 @@ theseed 自己定义
 
 当前文档已经够用了。
 
-### 3.2 以 BigWorld 为标尺
-
-当前文档已经明确覆盖设计边界：
-
-```
-  - BackupHash / 热备恢复链
-  - SecondaryDB / LocalArchiveStore
-  - Data Ops Toolchain
-  - Login 运维面
-  - Watcher 式控制面
-  - Runtime profiler → 调度反馈
-  - BSP / Load Bounds / Offload
-  - World Streaming / Compiled Space
-```
-
-但要强调：
-
-```
-这些很多仍然是 Phase 2 / Phase 3 边界，
-不是 MVP 实现承诺。
-```
-
----
-
-## 4. 当前能力判断
+## 5. 当前能力判断
 
 | 能力域 | 覆盖状态 | 备注 |
 |------|------|------|
-| Base / Cell / Tick / AOI / Ghost / Witness | 已覆盖 | 可作为 MVP 运行时主干 |
+| Base / Cell / Tick / AOI / Ghost / Witness | 已覆盖 | 可作为 MVP 运行链路 |
 | EntityCall / Property Replication / Migration | 已覆盖 | 口径已统一到复制与空间层 |
 | SingleCell / Static Partition 边界 | 已覆盖 | Phase 1 / 2 清晰 |
 | BigWorld 级 BSP / grow-shrink / auto rebalance | 已定义边界 | 非 MVP |
@@ -305,17 +312,18 @@ theseed 自己定义
 
 ---
 
-## 5. 总结
+## 6. 总结
 
-真正来自 BigWorld 的最大贡献，现在主要体现在三层：
+真正来自 BigWorld 源头设计的最大贡献，主要体现在四层：
 
 ```
 2-replication-and-space
 3-cluster-and-availability
 4-data-and-ops
+6-world-and-game-framework
 ```
 
-真正来自 KBEngine 的现实落地价值，主要体现在两层：
+真正来自 KBEngine 参考实现的现实落地价值，主要体现在两层：
 
 ```
 1-runtime-model
@@ -333,5 +341,5 @@ theseed 自己新增最多的层，则是：
 
 ```
 这些新增能力不再漂浮在旧目录里，
-而是被放回了和 BigWorld / KBEngine 对照后更合理的系统层级。
+而是被放回了以 BigWorld 为源头、以 KBEngine 为参考后更合理的系统层级。
 ```

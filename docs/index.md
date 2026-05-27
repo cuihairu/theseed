@@ -4,7 +4,7 @@ layout: home
 hero:
   name: theseed
   text: 游戏服务器引擎
-  tagline: 继承 BigWorld / KBEngine 架构思想，面向千台集群的现代游戏服务器引擎
+  tagline: 以 BigWorld 为源头、KBEngine 为参考实现之一，面向现代 MMO 的分布式游戏服务器引擎
   actions:
     - theme: brand
       text: 设计文档
@@ -12,7 +12,7 @@ hero:
 
 features:
   - title: 0-foundation 设计基线
-    details: MVP 范围、审计口径、分层原则、运行时硬边界
+    details: 引擎定位、MVP 范围、审计口径、分层原则、运行时硬边界
   - title: 1-runtime-model 运行时模型
     details: Tick 模型、Entity 双体、Timer、对象池、运行时内存
   - title: 2-replication-and-space 复制与空间

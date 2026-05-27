@@ -1,7 +1,8 @@
 # Telemetry & Debug — 遥测、调试与诊断边界
 
-> 来源：BigWorld `Watcher / message_logger / profiler` 的系统启发，
-> 以及 theseed 采用的 OTel / OTLP 现代化方案。
+> 来源源头：BigWorld `Watcher / message_logger / profiler` 的诊断思想。
+> 参考实现：KBEngine 的基础日志、观察与调试路径。
+> theseed 采用 OTel / OTLP 作为现代化遥测方案。
 > 本篇只讨论 Telemetry、Debug 和 Diagnostics，不替代运维控制面。
 
 ---

@@ -1,6 +1,7 @@
 # Cluster Lifecycle — Service Fragment、Retire、Drain 与受控停服
 
-> 来源：BigWorld `ServiceApp / registerServiceFragment / retireApp / controlledShutDown`。
+> 来源源头：BigWorld `ServiceApp / registerServiceFragment / retireApp / controlledShutDown`。
+> KBEngine 只提供较基础的组件生命周期参考。
 > 这层描述的是“集群生命周期面”，不是 Runtime 主路径，也不是单纯的容灾文档。
 
 ---

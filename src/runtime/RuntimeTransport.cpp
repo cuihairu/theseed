@@ -4,10 +4,11 @@
 
 namespace theseed::runtime {
 
-bool InMemoryRuntimeTransport::send(RuntimeInvocation invocation) {
+SendResult InMemoryRuntimeTransport::send(RuntimeInvocation invocation) {
     std::lock_guard lock(mutex_);
+    ++stats_.messagesSent;
     invocations_.push_back(std::move(invocation));
-    return true;
+    return SendResult::Accepted;
 }
 
 std::size_t InMemoryRuntimeTransport::receive(ComponentId targetComponent,
@@ -34,6 +35,7 @@ std::size_t InMemoryRuntimeTransport::receive(ComponentId targetComponent,
     }
 
     invocations_.swap(remaining);
+    stats_.messagesReceived += count;
     return count;
 }
 
@@ -56,6 +58,17 @@ std::size_t InMemoryRuntimeTransport::drain(RuntimeInvocation* out, std::size_t 
 std::size_t InMemoryRuntimeTransport::pendingCount() const {
     std::lock_guard lock(mutex_);
     return invocations_.size();
+}
+
+void InMemoryRuntimeTransport::flush() {
+    // In-memory transport has no outbound buffering.
+}
+
+TransportStats InMemoryRuntimeTransport::stats() const {
+    std::lock_guard lock(mutex_);
+    auto s = stats_;
+    s.inboundQueueDepth = invocations_.size();
+    return s;
 }
 
 }  // namespace theseed::runtime

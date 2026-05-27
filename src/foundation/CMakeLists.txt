@@ -4,7 +4,8 @@ add_library(theseed_foundation
     ObjectPool.cpp
     MessageHeader.cpp
     Bundle.cpp
-    Channel.cpp)
+    Channel.cpp
+    ChannelRouter.cpp)
 
 target_link_libraries(theseed_foundation PUBLIC theseed_project_options)
 

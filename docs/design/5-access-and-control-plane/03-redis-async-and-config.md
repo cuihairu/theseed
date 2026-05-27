@@ -1,7 +1,8 @@
 # Redis, Async & Config — 缓存、异步与配置
 
 > theseed 基础设施的开箱即用组件。
-> 来源：KBEngine 有基础 Redis 支持，theseed 大幅增强。
+> 来源判断：BigWorld 没有现代 Redis / Async / Config 组合栈，KBEngine 只有基础 Redis 支持。
+> theseed 在这层做现代基础设施扩展。
 
 ---
 

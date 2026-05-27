@@ -1,7 +1,7 @@
 # Runtime Communication & Transport — EntityCall、运行时数据面与传输语义
 
-> 来源：BigWorld `Mailbox / Mercury / Channel / Bundle`，
-> KBEngine `EntityCall / TCP`，
+> 来源源头：BigWorld `Mailbox / Mercury / Channel / Bundle`，
+> 参考实现：KBEngine `EntityCall / TCP`，
 > theseed 在此基础上补上更明确的运行时数据面边界。
 
 ---
@@ -14,6 +14,8 @@
 BigWorld 的运行时通信核心是 Mercury / Mailbox / Channel / Bundle：
   - 以通道和邮箱表达实体路由
   - 运行时消息和连接状态强绑定
+  - Channel 承载 inactivity、RTT、加密、统计、发送状态
+  - Bundle 承载消息聚合、request/reply、可靠性角色
   - 适合高频实体主路径
 ```
 
@@ -41,9 +43,10 @@ BigWorld / KBEngine 的优点：
 ### theseed 的取舍
 
 ```
-theseed 继续把 Runtime Data Plane 和控制面拆开，
-数据面保留面向实体路由的语义，
-但不让控制/运维消息混进主路径。
+theseed 继续把 Runtime Data Plane 和控制面拆开。
+数据面以 BigWorld 的 Channel / Bundle 状态语义为上限，
+以 KBEngine 的 EntityCall 直连路径作为 MVP 参考，
+但不让控制/运维消息混进实体主路径。
 ```
 
 ### 为什么不能继续混层

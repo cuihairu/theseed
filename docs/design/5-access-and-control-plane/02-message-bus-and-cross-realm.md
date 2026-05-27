@@ -3,7 +3,8 @@
 > theseed 的 MessageBus 负责 Control Plane 和 Cross-Realm Async Plane。
 > Runtime Data Plane 由独立的 Runtime Transport 负责，不走 MessageBus。
 >
-> 来源：KBEngine 无消息队列（直连 TCP），theseed 新增。
+> 来源判断：BigWorld 与 KBEngine 都没有现代通用 MessageBus。
+> theseed 新增 Control Plane 与 Cross-Realm Async Plane 的消息总线能力。
 > 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
@@ -51,7 +52,7 @@ BigWorld / KBEngine 的缺点：
 ### theseed 的取舍
 
 ```
-theseed 不复制旧引擎“所有事情都走自定义点对点”的做法。
+theseed 不沿用旧引擎“所有事情都走自定义点对点”的做法。
 
 取舍是：
   - Runtime Data Plane 继续独立，不走 MessageBus

@@ -1,6 +1,7 @@
 # SecondaryDB & Local Archive Store — 本地归档暂存层
 
-> 来源：BigWorld Archiver + SecondaryDB + `consolidate_dbs / transfer_db / sync_db`。
+> 来源源头：BigWorld `Archiver / SecondaryDB / consolidate_dbs / transfer_db / sync_db`。
+> KBEngine 没有完整对等层，只能作为直接写主库的简化参考。
 > 这层最容易被误读成“主数据库”或“热备份”，但它实际解决的是另一类问题。
 
 ---

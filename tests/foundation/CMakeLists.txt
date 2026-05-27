@@ -42,3 +42,12 @@ target_link_libraries(
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_channel_test COMMAND theseed_channel_test)
+
+add_executable(theseed_channel_router_test ChannelRouterTest.cpp)
+
+target_link_libraries(
+    theseed_channel_router_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_channel_router_test COMMAND theseed_channel_router_test)

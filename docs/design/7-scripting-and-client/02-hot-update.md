@@ -3,7 +3,9 @@
 > 热更新是游戏运维的核心能力，但也是最容易被过度承诺的能力。
 > theseed 当前只把 `MVP` 能稳定兑现的部分写成实现基线。
 >
-> 来源：KBEngine Python reload()（有限支持），theseed 新增分级热更模型。
+> 来源源头：BigWorld 的受控运维和滚动替换边界。
+> 参考实现：KBEngine Python reload() 的有限脚本替换路径。
+> theseed 新增分级热更模型。
 > 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
@@ -36,18 +38,18 @@ KBEngine 提供有限的 Python reload() 路径。
 ### 优缺点
 
 ```
-BigWorld 风格的优点：
+BigWorld 源头边界的优点：
   - 稳
   - 对一致性边界更保守
 
-BigWorld 风格的缺点：
+BigWorld 源头边界的缺点：
   - 线上小改成本高
 
-KBEngine 风格的优点：
+KBEngine 参考实现的优点：
   - 轻量
   - 改脚本快
 
-KBEngine 风格的缺点：
+KBEngine 参考实现的缺点：
   - 容易高估热更能力
   - 版本、迁移、异步边界不够硬
 ```
@@ -56,8 +58,8 @@ KBEngine 风格的缺点：
 
 ```
 theseed 取两者中间：
-  - 保留 KBEngine 式脚本热更便利性
-  - 用 BigWorld 式边界约束来限制能力宣称
+  - 保留 KBEngine 参考实现里的脚本热更便利性
+  - 用 BigWorld 源头边界约束来限制能力宣称
 
 所以：
   - MVP 只支持 L1 + 受限 L2

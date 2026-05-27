@@ -1,7 +1,7 @@
 # Gateway & Login — 接入层、登录服务与 Challenge 运维边界
 
-> 来源：BigWorld `LoginApp / Login Challenge / statusCheck / clearIPAddressBans`，
-> KBEngine `LoginApp`，
+> 来源源头：BigWorld `LoginApp / Login Challenge / statusCheck / clearIPAddressBans`。
+> 参考实现：KBEngine `LoginApp` 的轻量接入路径。
 > theseed 在此基础上把 Gateway 与 Login Service 的职责拆清。
 
 ---

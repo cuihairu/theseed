@@ -18,7 +18,8 @@ public:
     Bundle(Bundle&&) = default;
     Bundle& operator=(Bundle&&) = default;
 
-    void beginMessage(std::uint16_t messageId, DeliveryFlag delivery = DeliveryFlag::OrderedReliable);
+    void beginMessage(std::uint16_t messageId, std::uint8_t channelClass = 0,
+                      DeliveryFlag delivery = DeliveryFlag::OrderedReliable);
     void endMessage();
 
     MemoryStream& stream();

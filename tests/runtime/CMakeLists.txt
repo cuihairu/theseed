@@ -138,6 +138,15 @@ target_link_libraries(
 
 add_test(NAME theseed_aoi_event_test COMMAND theseed_aoi_event_test)
 
+add_executable(theseed_property_callback_test PropertyCallbackTest.cpp)
+
+target_link_libraries(
+    theseed_property_callback_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_property_callback_test COMMAND theseed_property_callback_test)
+
 add_executable(theseed_invocation_codec_test InvocationCodecTest.cpp)
 
 target_link_libraries(
@@ -167,3 +176,43 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_entity_event_test COMMAND theseed_entity_event_test)
+
+add_executable(theseed_network_transport_test NetworkTransportTest.cpp)
+
+target_link_libraries(
+    theseed_network_transport_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_network_transport_test COMMAND theseed_network_transport_test)
+
+add_executable(theseed_tcp_transport_test TcpTransportTest.cpp)
+
+target_link_libraries(
+    theseed_tcp_transport_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_tcp_transport_test COMMAND theseed_tcp_transport_test)
+
+add_executable(theseed_transport_hub_test TransportHubTest.cpp)
+
+target_link_libraries(
+    theseed_transport_hub_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_transport_hub_test COMMAND theseed_transport_hub_test)
+
+add_executable(theseed_network_node_test NetworkNodeTest.cpp)
+
+target_link_libraries(
+    theseed_network_node_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_network_node_test COMMAND theseed_network_node_test)

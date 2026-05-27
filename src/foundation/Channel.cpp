@@ -6,6 +6,9 @@ Channel::Channel(std::uint32_t targetComponent)
     : targetComponent_(targetComponent) {}
 
 void Channel::send(Bundle bundle) {
+    if (isBackPressured() && overflowPolicy_ == OverflowPolicy::DiscardOldest) {
+        outbound_.pop_front();
+    }
     outbound_.push_back(std::move(bundle));
 }
 
@@ -29,6 +32,12 @@ bool Channel::hasPending() const { return !outbound_.empty(); }
 std::size_t Channel::pendingBundleCount() const { return outbound_.size(); }
 std::uint32_t Channel::targetComponent() const { return targetComponent_; }
 std::uint32_t Channel::nextSequence() const { return sequence_; }
+
+void Channel::setWatermark(Watermark wm) { watermark_ = wm; }
+void Channel::setOverflowPolicy(OverflowPolicy policy) { overflowPolicy_ = policy; }
+bool Channel::isBackPressured() const { return outbound_.size() >= watermark_.high; }
+const Channel::Watermark& Channel::watermark() const { return watermark_; }
+Channel::OverflowPolicy Channel::overflowPolicy() const { return overflowPolicy_; }
 
 void MessageDispatcher::registerHandler(std::uint16_t messageId, HandlerPtr handler) {
     if (messageId < kMaxMessageId) {

@@ -34,6 +34,13 @@ public:
     runtime::Entity* findEntity(runtime::EntityId id) const;
     bool destroyEntity(runtime::EntityId id);
 
+    bool requestCreateCell(runtime::EntityId entityId,
+                           const std::string& entityType,
+                           const runtime::Vector3& position,
+                           runtime::ComponentId targetCellApp);
+    bool requestDestroyCell(runtime::EntityId entityId,
+                            runtime::ComponentId targetCellApp);
+
 private:
     Config config_;
     EntityDefRegistry registry_;

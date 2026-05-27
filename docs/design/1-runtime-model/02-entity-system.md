@@ -2,7 +2,9 @@
 
 > theseed 实体的核心设计：Base/Cell 双身体模型、结构化内存布局、生命周期管理。
 >
-> 来源：BigWorld 原创 Base/Cell 分离，KBEngine 完整继承。PropertyBlock 是 theseed 自研改进。
+> 来源源头：BigWorld Base/Cell 分离模型。
+> 参考实现：KBEngine 的轻量 BaseEntity / CellEntity 落地方式。
+> theseed 新增 PropertyBlock 结构化内存布局。
 
 ---
 
@@ -20,7 +22,7 @@ BigWorld 的实体是 Base / Cell 双身体模型：
 ### KBEngine 是怎么实现的
 
 ```
-KBEngine 基本继承了同样的 Base / Cell 模型：
+KBEngine 提供了更轻量的 Base / Cell 落地方式：
   - BaseEntity / CellEntity 分工明确
   - Python 脚本承接业务逻辑
   - 结构上更贴近可直接落地的 runtime core

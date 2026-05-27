@@ -14,6 +14,7 @@ using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::MethodSide;
 using theseed::runtime::PropertyType;
 using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
 using theseed::runtime::SingleCellTopology;
 using theseed::runtime::Space;
 using theseed::runtime::SpaceConfig;
@@ -129,7 +130,7 @@ int main() {
     oldAddressInvocation.method = "castSpell";
     oldAddressInvocation.payload.assign(payload.begin(), payload.end());
 
-    if (!transport->send(oldAddressInvocation)) {
+    if (transport->send(oldAddressInvocation) != SendResult::Accepted) {
         return fail("enqueue_old_address_invocation");
     }
     scheduler.runOnce();
@@ -144,7 +145,7 @@ int main() {
     removedEntityInvocation.method = "castSpell";
     removedEntityInvocation.payload.assign(secondPayload.begin(), secondPayload.end());
 
-    if (!transport->send(removedEntityInvocation)) {
+    if (transport->send(removedEntityInvocation) != SendResult::Accepted) {
         return fail("enqueue_removed_entity_invocation");
     }
     scheduler.runOnce();
@@ -162,7 +163,7 @@ int main() {
     droppedInvocation.entityType = sourceEntity.entityType();
     droppedInvocation.method = "castSpell";
     droppedInvocation.payload.assign(payload.begin(), payload.end());
-    if (!transport->send(droppedInvocation)) {
+    if (transport->send(droppedInvocation) != SendResult::Accepted) {
         return fail("enqueue_dropped_invocation");
     }
     scheduler.runOnce();
