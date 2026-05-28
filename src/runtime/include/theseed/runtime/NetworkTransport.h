@@ -22,11 +22,14 @@ public:
     static constexpr std::uint16_t kHeartbeatMessageId = 2;
 
     struct Config {
-        ComponentId localComponent = 0;
-        std::size_t maxMessageSize = 64 * 1024;
+        ComponentId localComponent{0};
+        std::size_t maxMessageSize{64 * 1024};
     };
 
-    explicit NetworkTransport(std::shared_ptr<IBytePipe> pipe, Config config = {});
+    explicit NetworkTransport(std::shared_ptr<IBytePipe> pipe)
+        : NetworkTransport(pipe, Config{}) {}
+
+    explicit NetworkTransport(std::shared_ptr<IBytePipe> pipe, Config config);
     ~NetworkTransport();
 
     NetworkTransport(const NetworkTransport&) = delete;

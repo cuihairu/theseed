@@ -26,9 +26,6 @@ EntityData entityToData(const runtime::Entity& entity) {
     const auto& def = block.def();
 
     for (const auto& desc : def.properties()) {
-        if (runtime::EntityDef::isVariableSized(desc.type)) {
-            continue;
-        }
         if (desc.flags != runtime::PropertyFlag::None
             && !runtime::hasFlag(desc.flags, runtime::PropertyFlag::Persistent)) {
             continue;
@@ -38,8 +35,14 @@ EntityData entityToData(const runtime::Entity& entity) {
         prop.id = desc.id;
         prop.name = desc.name;
         prop.type = propertyTypeToDataType(desc.type);
-        prop.rawValue.resize(desc.size);
-        std::memcpy(prop.rawValue.data(), block.data() + desc.offset, desc.size);
+
+        if (runtime::EntityDef::isVariableSized(desc.type)) {
+            auto varData = block.getBlob(desc.id);
+            prop.rawValue.assign(varData.begin(), varData.end());
+        } else {
+            prop.rawValue.resize(desc.size);
+            std::memcpy(prop.rawValue.data(), block.data() + desc.offset, desc.size);
+        }
 
         data.properties.push_back(std::move(prop));
     }
@@ -56,14 +59,15 @@ void dataToEntity(const EntityData& data, runtime::Entity& entity) {
         if (!desc) {
             continue;
         }
-        if (runtime::EntityDef::isVariableSized(desc->type)) {
-            continue;
-        }
-        if (prop.rawValue.size() != desc->size) {
-            continue;
-        }
 
-        std::memcpy(block.data() + desc->offset, prop.rawValue.data(), desc->size);
+        if (runtime::EntityDef::isVariableSized(desc->type)) {
+            block.setBlob(desc->id, prop.rawValue);
+        } else {
+            if (prop.rawValue.size() != desc->size) {
+                continue;
+            }
+            std::memcpy(block.data() + desc->offset, prop.rawValue.data(), desc->size);
+        }
     }
 
     entity.clearDirtyFlags();
@@ -142,6 +146,20 @@ runtime::Entity* BaseRuntime::createEntity(const std::string& entityType) {
 
     auto* ptr = entity.get();
     entities_.emplace(id, std::move(entity));
+    ptr->setTransport(transport_.get());
+    ptr->setTimerScheduleFns(
+        [this, id](runtime::Duration delay, runtime::Entity::EntityTimerCallback cb) {
+            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {
+                auto* e = findEntity(id);
+                if (e) cb(*e);
+            });
+        },
+        [this, id](runtime::Duration interval, runtime::Entity::EntityTimerCallback cb) {
+            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {
+                auto* e = findEntity(id);
+                if (e) cb(*e);
+            });
+        });
     ptr->activate();
     ptr->notifyCreate();
     return ptr;
@@ -166,9 +184,35 @@ runtime::Entity* BaseRuntime::loadEntity(runtime::EntityId id, const std::string
     dataToEntity(data, *entity);
     auto* ptr = entity.get();
     entities_.emplace(id, std::move(entity));
+    ptr->setTransport(transport_.get());
+    ptr->setTimerScheduleFns(
+        [this, id](runtime::Duration delay, runtime::Entity::EntityTimerCallback cb) {
+            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {
+                auto* e = findEntity(id);
+                if (e) cb(*e);
+            });
+        },
+        [this, id](runtime::Duration interval, runtime::Entity::EntityTimerCallback cb) {
+            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {
+                auto* e = findEntity(id);
+                if (e) cb(*e);
+            });
+        });
     ptr->activate();
-    ptr->notifyCreate();
+    ptr->notifyRestore();
     return ptr;
+}
+
+std::size_t BaseRuntime::restoreEntities(const std::string& entityType) {
+    auto ids = store_->listIdsByType(entityType);
+    std::size_t restored = 0;
+    for (auto id : ids) {
+        if (entities_.contains(id)) continue;
+        if (loadEntity(id, entityType)) {
+            ++restored;
+        }
+    }
+    return restored;
 }
 
 bool BaseRuntime::destroyEntity(runtime::EntityId id) {
@@ -177,6 +221,7 @@ bool BaseRuntime::destroyEntity(runtime::EntityId id) {
         return false;
     }
 
+    saveEntity(id);
     it->second->beginDestroy();
     it->second->notifyDestroy();
     it->second->destroy();
@@ -191,6 +236,22 @@ runtime::Entity* BaseRuntime::findEntity(runtime::EntityId id) const {
         return nullptr;
     }
     return it->second.get();
+}
+
+std::vector<runtime::Entity*> BaseRuntime::findEntitiesByType(const std::string& entityType) const {
+    std::vector<runtime::Entity*> result;
+    for (auto& [id, entity] : entities_) {
+        if (entity->entityType() == entityType) {
+            result.push_back(entity.get());
+        }
+    }
+    return result;
+}
+
+void BaseRuntime::forEachEntity(std::function<void(runtime::Entity&)> callback) const {
+    for (auto& [id, entity] : entities_) {
+        callback(*entity);
+    }
 }
 
 std::size_t BaseRuntime::entityCount() const {
@@ -289,9 +350,8 @@ void BaseRuntime::tick(runtime::TickContext& context) {
 
 void BaseRuntime::autoSaveAll() {
     for (auto& [id, entity] : entities_) {
-        if (entity->state() != runtime::EntityState::Active) {
-            continue;
-        }
+        if (entity->state() != runtime::EntityState::Active) continue;
+        if (!entity->propertyBlock().dirtyMask().any()) continue;
 
         auto data = entityToData(*entity);
         store_->save(id, data);
@@ -342,6 +402,7 @@ bool BaseRuntime::handleCellReady(const runtime::RuntimeInvocation& invocation) 
     if (!entity) return false;
 
     entity->bindCellEntityCall(cellComponentId);
+    entity->notifyCellReady();
     return true;
 }
 
@@ -382,7 +443,7 @@ bool BaseRuntime::requestCreateCell(runtime::EntityId entityId,
     // Payload: entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
     constexpr std::size_t headerSize = sizeof(runtime::EntityId) + sizeof(runtime::ComponentId)
                                      + sizeof(float) * 3;
-    auto snapshot = entity->buildFullPropertySnapshot();
+    auto snapshot = entity->buildFullPropertySnapshot(runtime::PropertyFlag::Base);
     auto encoded = runtime::PropertyReplication::encodeDelta(snapshot);
 
     std::vector<std::byte> payload(headerSize + encoded.size());
@@ -433,7 +494,7 @@ void BaseRuntime::syncToCells() {
         auto* cellCall = entity->cellEntityCall();
         if (!cellCall || !cellCall->isValid()) continue;
 
-        auto deltas = entity->buildDirtyPropertyDelta();
+        auto deltas = entity->buildDirtyPropertyDelta(runtime::PropertyFlag::Base);
         if (deltas.empty()) continue;
 
         runtime::RuntimeInvocation invocation;

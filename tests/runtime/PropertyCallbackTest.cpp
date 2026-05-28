@@ -255,6 +255,7 @@ static void testDestroyClearsCallbacks() {
 
     auto def = makeAvatarDef();
     Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
 
     int callCount = 0;
     entity.onPropertyChanged<std::int32_t>(0,
@@ -263,6 +264,7 @@ static void testDestroyClearsCallbacks() {
     entity.setProperty<std::int32_t>(0, 5);
     bool ok = callCount == 1;
 
+    entity.beginDestroy();
     entity.destroy();
     // After destroy, setProperty should still work but callback is gone
     entity.setProperty<std::int32_t>(0, 10);

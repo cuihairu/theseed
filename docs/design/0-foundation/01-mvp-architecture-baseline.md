@@ -486,8 +486,8 @@ MVP 可选项：
 - Base ↔ Cell EntityCall
 - SingleCell Space
 - Witness 同步
-- MySQL load/save
-- Gateway 登录接入
+- 持久化（FileEntityStore，MySQL 为 Phase B 目标）
+- LoginApp 极简登录接入（KBEngine 式，详见 `5-access-and-control-plane/01-gateway-and-login` 第 12 章）
 
 ### Phase B：补齐在线玩法与基础运维
 

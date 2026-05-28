@@ -102,8 +102,38 @@ const std::vector<PropertyDelta>* SpaceRuntime::findStagedDelta(EntityId entityI
 }
 
 void SpaceRuntime::tick(TickContext& context) {
-    static_cast<void>(context);
+    processEntityInput();
+    applyVelocity(context.deltaTime);
     refreshWitnesses();
+}
+
+void SpaceRuntime::processEntityInput() {
+    for (auto* entity : space_->entities()) {
+        if (entity != nullptr && entity->isActive()) {
+            entity->processInput();
+        }
+    }
+}
+
+void SpaceRuntime::applyVelocity(Duration deltaTime) {
+    auto dt = std::chrono::duration<float>(deltaTime).count();
+    if (dt <= 0.0f) return;
+
+    for (auto* entity : space_->entities()) {
+        if (entity == nullptr || !entity->hasVelocity()) continue;
+
+        auto pos = space_->entityPosition(entity->id());
+        if (!pos.has_value()) continue;
+
+        auto vel = entity->velocity();
+        Vector3 newPos{
+            pos->x + vel.x * dt,
+            pos->y + vel.y * dt,
+            pos->z + vel.z * dt,
+        };
+        space_->updateEntityPosition(entity->id(), newPos);
+        entity->notifyPositionChanged(*pos, newPos);
+    }
 }
 
 void SpaceRuntime::sync(TickContext& context) {

@@ -38,6 +38,8 @@ enum class PropertyFlag : std::uint32_t {
     None = 0,
     Persistent = 1 << 0,
     ClientSync = 1 << 1,
+    Base = 1 << 2,
+    Cell = 1 << 3,
 };
 
 inline PropertyFlag operator|(PropertyFlag a, PropertyFlag b) {
@@ -58,10 +60,16 @@ struct PropertyDescriptor {
     std::vector<std::byte> defaultValue;
 };
 
+struct ArgDescriptor {
+    std::string name;
+    PropertyType type = PropertyType::Int32;
+};
+
 struct MethodDescriptor {
     MethodId id = 0;
     std::string name;
     MethodSide side = MethodSide::Cell;
+    std::vector<ArgDescriptor> args;
 };
 
 class EntityDef final {
@@ -69,6 +77,10 @@ public:
     explicit EntityDef(std::string entityType = {});
 
     const std::string& entityType() const;
+
+    void setParentType(std::string parentType);
+    const std::string& parentType() const;
+    bool mergeFrom(const EntityDef& parent);
 
     PropertyId addProperty(std::string name, PropertyType type, std::size_t size = 0,
                            PropertyFlag flags = PropertyFlag::None,
@@ -79,7 +91,8 @@ public:
     std::size_t propertyCount() const;
     std::size_t storageSize() const;
 
-    MethodId addMethod(std::string name, MethodSide side = MethodSide::Cell);
+    MethodId addMethod(std::string name, MethodSide side = MethodSide::Cell,
+                       std::vector<ArgDescriptor> args = {});
     std::size_t methodCount() const;
 
     const PropertyDescriptor& property(PropertyId id) const;
@@ -92,6 +105,8 @@ public:
 
 private:
     std::string entityType_;
+    std::string parentType_;
+    bool inherited_ = false;
     std::size_t storageSize_ = 0;
     std::vector<PropertyDescriptor> properties_;
     std::vector<MethodDescriptor> methods_;

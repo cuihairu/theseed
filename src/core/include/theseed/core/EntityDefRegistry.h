@@ -28,6 +28,7 @@ public:
     EntityFactory createFactory(const std::string& entityType) const;
 
 private:
+    void resolveInheritance();
     static inline const std::shared_ptr<runtime::EntityDef> nullDef{};
 
     std::unordered_map<std::string, std::shared_ptr<runtime::EntityDef>> defs_;

@@ -166,6 +166,12 @@ Entity* CellRuntime::findEntity(EntityId entityId) const {
     return spaceRuntime_->space().findEntity(entityId);
 }
 
+void CellRuntime::forEachEntity(std::function<void(Entity&)> callback) const {
+    for (auto& [id, entity] : ownedEntities_) {
+        callback(*entity);
+    }
+}
+
 bool CellRuntime::registerEntityFactory(std::string entityType, EntityFactory factory) {
     if (entityType.empty() || !factory) {
         return false;
@@ -453,7 +459,22 @@ bool CellRuntime::handleCreateCell(const RuntimeInvocation& invocation) {
     if (!entity) return false;
 
     auto* entityPtr = entity.get();
+    entityPtr->setTransport(transport_.get());
+    entityPtr->setTimerScheduleFns(
+        [this, params](Duration delay, Entity::EntityTimerCallback cb) {
+            return addEntityTimer(params.entityId, delay, [cb = std::move(cb), this, params]() {
+                auto* e = findEntity(params.entityId);
+                if (e) cb(*e);
+            });
+        },
+        [this, params](Duration interval, Entity::EntityTimerCallback cb) {
+            return addEntityPeriodicTimer(params.entityId, interval, [cb = std::move(cb), this, params]() {
+                auto* e = findEntity(params.entityId);
+                if (e) cb(*e);
+            });
+        });
     entityPtr->activate();
+    entityPtr->notifyCreate();
     entityPtr->bindBaseEntityCall(params.baseComponentId);
 
     // Apply initial property snapshot from base (if present)
@@ -495,6 +516,9 @@ bool CellRuntime::handleDestroyCell(const RuntimeInvocation& invocation) {
         std::memcpy(&baseComponentId, invocation.payload.data() + sizeof(EntityId), sizeof(ComponentId));
     }
 
+    entity->beginDestroy();
+    entity->notifyDestroy();
+    cancelEntityTimers(invocation.entityId);
     entity->destroy();
     removeEntity(invocation.entityId);
 
@@ -545,8 +569,29 @@ foundation::TimerHandle CellRuntime::addTimer(Duration delay, TimerCallback call
     return timerWheel_->addTimer(delay, std::move(callback));
 }
 
+foundation::TimerHandle CellRuntime::addEntityTimer(EntityId entityId, Duration delay, TimerCallback callback) {
+    auto handle = timerWheel_->addTimer(delay, std::move(callback));
+    entityTimers_[entityId].push_back(handle);
+    return handle;
+}
+
+foundation::TimerHandle CellRuntime::addEntityPeriodicTimer(EntityId entityId, Duration interval, TimerCallback callback) {
+    auto handle = timerWheel_->addPeriodic(interval, std::move(callback));
+    entityTimers_[entityId].push_back(handle);
+    return handle;
+}
+
 bool CellRuntime::cancelTimer(foundation::TimerHandle handle) {
     return timerWheel_->cancel(handle);
+}
+
+void CellRuntime::cancelEntityTimers(EntityId entityId) {
+    auto it = entityTimers_.find(entityId);
+    if (it == entityTimers_.end()) return;
+    for (auto& handle : it->second) {
+        timerWheel_->cancel(handle);
+    }
+    entityTimers_.erase(it);
 }
 
 void CellRuntime::syncRealGhosts() {
@@ -585,7 +630,7 @@ void CellRuntime::syncToBases() {
         auto* baseCall = entity->baseEntityCall();
         if (baseCall == nullptr || !baseCall->isValid()) continue;
 
-        auto deltas = entity->buildDirtyPropertyDelta();
+        auto deltas = entity->buildDirtyPropertyDelta(PropertyFlag::Cell);
         if (deltas.empty()) continue;
 
         RuntimeInvocation invocation;

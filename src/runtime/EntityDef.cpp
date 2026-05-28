@@ -12,6 +12,41 @@ const std::string& EntityDef::entityType() const {
     return entityType_;
 }
 
+void EntityDef::setParentType(std::string parentType) {
+    parentType_ = std::move(parentType);
+}
+
+const std::string& EntityDef::parentType() const {
+    return parentType_;
+}
+
+bool EntityDef::mergeFrom(const EntityDef& parent) {
+    if (inherited_) return false;
+
+    for (const auto& prop : parent.properties_) {
+        if (findProperty(prop.name) != nullptr) {
+            return false;
+        }
+        auto descriptor = prop;
+        descriptor.id = static_cast<PropertyId>(properties_.size());
+        descriptor.offset = storageSize_;
+        properties_.push_back(std::move(descriptor));
+        storageSize_ += prop.size;
+    }
+
+    for (const auto& meth : parent.methods_) {
+        if (findMethod(meth.name) != nullptr) {
+            continue;
+        }
+        auto descriptor = meth;
+        descriptor.id = static_cast<MethodId>(methods_.size());
+        methods_.push_back(std::move(descriptor));
+    }
+
+    inherited_ = true;
+    return true;
+}
+
 std::size_t EntityDef::fixedSizeOfType(PropertyType type) {
     switch (type) {
         case PropertyType::Int8:    return 1;
@@ -38,6 +73,14 @@ bool EntityDef::isVariableSized(PropertyType type) {
 
 PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size_t size,
                                    PropertyFlag flags, std::vector<std::byte> defaultValue) {
+    if (name.empty()) {
+        throw std::invalid_argument("property name is empty");
+    }
+
+    if (findProperty(name) != nullptr) {
+        throw std::invalid_argument("duplicate property name: " + name);
+    }
+
     PropertyDescriptor descriptor;
     descriptor.id = static_cast<PropertyId>(properties_.size());
     descriptor.name = std::move(name);
@@ -57,7 +100,8 @@ PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size
     return properties_.back().id;
 }
 
-MethodId EntityDef::addMethod(std::string name, MethodSide side) {
+MethodId EntityDef::addMethod(std::string name, MethodSide side,
+                               std::vector<ArgDescriptor> args) {
     if (name.empty()) {
         throw std::invalid_argument("method name is empty");
     }
@@ -70,6 +114,7 @@ MethodId EntityDef::addMethod(std::string name, MethodSide side) {
     descriptor.id = static_cast<MethodId>(methods_.size());
     descriptor.name = std::move(name);
     descriptor.side = side;
+    descriptor.args = std::move(args);
 
     methods_.push_back(std::move(descriptor));
     return methods_.back().id;

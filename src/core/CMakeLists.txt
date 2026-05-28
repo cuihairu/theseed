@@ -8,6 +8,7 @@ add_library(theseed_core
     CellApp.cpp)
 
 target_link_libraries(theseed_core PUBLIC theseed_project_options)
+target_link_libraries(theseed_core PUBLIC theseed_login)
 target_link_libraries(theseed_core PUBLIC theseed_runtime)
 target_link_libraries(theseed_core PUBLIC theseed_foundation)
 

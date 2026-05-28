@@ -3,6 +3,7 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/RuntimeTransport.h"
+#include "theseed/runtime/TickScheduler.h"
 
 #include <chrono>
 #include <cstdint>
@@ -19,6 +20,7 @@ using theseed::runtime::EntityId;
 using theseed::runtime::EntitySide;
 using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::PropertyType;
+using theseed::runtime::TickScheduler;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -182,6 +184,178 @@ static void testMultipleEntityTimers() {
     if (ok) PASS(); else FAIL("independent timers failed, c1=" + std::to_string(count1) + " c2=" + std::to_string(count2));
 }
 
+// --- Entity-level timer tests (via Entity::addTimer/addPeriodicTimer) ---
+
+static void testEntityLevelOneShotTimer() {
+    TEST("entity.addTimer one-shot fires via TickScheduler");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto runtime = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeDef();
+    runtime->registerEntityFactory("Avatar", [def](EntityId id, EntitySide side) {
+        return std::make_unique<Entity>(id, side, *def);
+    });
+
+    TickScheduler scheduler(std::chrono::milliseconds{10});
+    runtime->attach(scheduler);
+
+    auto* entity = runtime->createEntity("Avatar");
+    int fireCount = 0;
+    entity->addTimer(std::chrono::milliseconds{30},
+        [&](Entity& e) {
+            ++fireCount;
+            static_cast<void>(e);
+        });
+
+    for (int i = 0; i < 10; ++i) {
+        scheduler.runOnce();
+    }
+
+    bool ok = fireCount == 1;
+
+    runtime->detach(scheduler);
+    if (ok) PASS();
+    else FAIL("fireCount=" + std::to_string(fireCount));
+}
+
+static void testEntityLevelPeriodicTimer() {
+    TEST("entity.addPeriodicTimer fires multiple times via TickScheduler");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto runtime = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeDef();
+    runtime->registerEntityFactory("Avatar", [def](EntityId id, EntitySide side) {
+        return std::make_unique<Entity>(id, side, *def);
+    });
+
+    TickScheduler scheduler(std::chrono::milliseconds{10});
+    runtime->attach(scheduler);
+
+    auto* entity = runtime->createEntity("Avatar");
+    int fireCount = 0;
+    entity->addPeriodicTimer(std::chrono::milliseconds{20},
+        [&](Entity& e) {
+            ++fireCount;
+            static_cast<void>(e);
+        });
+
+    for (int i = 0; i < 20; ++i) {
+        scheduler.runOnce();
+    }
+
+    bool ok = fireCount >= 5;
+
+    runtime->detach(scheduler);
+    if (ok) PASS();
+    else FAIL("fireCount=" + std::to_string(fireCount) + " expected >= 5");
+}
+
+static void testEntityTimerCancelledOnDestroy() {
+    TEST("entity timer cancelled when entity destroyed via TickScheduler");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto runtime = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeDef();
+    runtime->registerEntityFactory("Avatar", [def](EntityId id, EntitySide side) {
+        return std::make_unique<Entity>(id, side, *def);
+    });
+
+    TickScheduler scheduler(std::chrono::milliseconds{10});
+    runtime->attach(scheduler);
+
+    auto* entity = runtime->createEntity("Avatar");
+    auto id = entity->id();
+
+    int fireCount = 0;
+    entity->addPeriodicTimer(std::chrono::milliseconds{20},
+        [&](Entity&) { ++fireCount; });
+
+    // Tick a bit to verify timer works
+    for (int i = 0; i < 5; ++i) {
+        scheduler.runOnce();
+    }
+    int before = fireCount;
+    bool ok = before > 0;
+
+    runtime->destroyEntity(id);
+
+    // Tick more - timer should not fire
+    for (int i = 0; i < 10; ++i) {
+        scheduler.runOnce();
+    }
+    ok = ok && fireCount == before;
+
+    runtime->detach(scheduler);
+    if (ok) PASS();
+    else FAIL("before=" + std::to_string(before) + " after=" + std::to_string(fireCount));
+}
+
+static void testEntityTimerCallbackReceivesEntity() {
+    TEST("entity timer callback receives correct entity reference");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto runtime = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeDef();
+    runtime->registerEntityFactory("Avatar", [def](EntityId id, EntitySide side) {
+        return std::make_unique<Entity>(id, side, *def);
+    });
+
+    TickScheduler scheduler(std::chrono::milliseconds{10});
+    runtime->attach(scheduler);
+
+    auto* entity = runtime->createEntity("Avatar");
+    auto expectedId = entity->id();
+
+    EntityId capturedId = 0;
+    entity->addTimer(std::chrono::milliseconds{20},
+        [&](Entity& e) { capturedId = e.id(); });
+
+    for (int i = 0; i < 5; ++i) {
+        scheduler.runOnce();
+    }
+
+    bool ok = capturedId == expectedId;
+
+    runtime->detach(scheduler);
+    if (ok) PASS();
+    else FAIL("captured=" + std::to_string(capturedId) + " expected=" + std::to_string(expectedId));
+}
+
+static void testEntityTimerModifiesProperty() {
+    TEST("entity timer modifies property");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto runtime = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeDef();
+    runtime->registerEntityFactory("Avatar", [def](EntityId id, EntitySide side) {
+        return std::make_unique<Entity>(id, side, *def);
+    });
+
+    TickScheduler scheduler(std::chrono::milliseconds{10});
+    runtime->attach(scheduler);
+
+    auto* entity = runtime->createEntity("Avatar");
+    entity->setProperty<std::int32_t>(0, 1);
+
+    entity->addTimer(std::chrono::milliseconds{20},
+        [](Entity& e) { e.setProperty<std::int32_t>(0, 42); });
+
+    for (int i = 0; i < 5; ++i) {
+        scheduler.runOnce();
+    }
+
+    bool ok = entity->getProperty<std::int32_t>(0) == 42;
+
+    runtime->detach(scheduler);
+    if (ok) PASS();
+    else FAIL("level=" + std::to_string(entity->getProperty<std::int32_t>(0)));
+}
+
 int main() {
     std::cout << "EntityTimer tests:\n";
 
@@ -191,6 +365,13 @@ int main() {
     testCancelTimer();
     testDestroyEntityCancelsTimers();
     testMultipleEntityTimers();
+
+    // Entity-level timer tests
+    testEntityLevelOneShotTimer();
+    testEntityLevelPeriodicTimer();
+    testEntityTimerCancelledOnDestroy();
+    testEntityTimerCallbackReceivesEntity();
+    testEntityTimerModifiesProperty();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -1,1 +1,5 @@
 add_subdirectory(machine)
+add_subdirectory(loginapp)
+add_subdirectory(realmapp)
+add_subdirectory(baseapp)
+add_subdirectory(cellapp)

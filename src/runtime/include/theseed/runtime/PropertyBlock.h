@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +45,12 @@ public:
         fireCallback(id, &oldValue, &value, sizeof(T));
     }
 
+    std::string_view getString(PropertyId id) const;
+    void setString(PropertyId id, std::string_view value);
+
+    std::span<const std::byte> getBlob(PropertyId id) const;
+    void setBlob(PropertyId id, std::span<const std::byte> value);
+
     void setChangeCallback(PropertyId id, PropertyChangeCallback callback);
     void clearChangeCallbacks();
 
@@ -50,8 +58,8 @@ public:
     const DirtyMask& dirtyMask() const;
     bool isDirty(PropertyId id) const;
     void clearDirty();
-    std::vector<PropertyDelta> buildDirtyDelta() const;
-    std::vector<PropertyDelta> buildFullSnapshot() const;
+    std::vector<PropertyDelta> buildDirtyDelta(PropertyFlag excludeFlags = PropertyFlag::None) const;
+    std::vector<PropertyDelta> buildFullSnapshot(PropertyFlag excludeFlags = PropertyFlag::None) const;
     void applyDelta(std::span<const PropertyDelta> deltas, bool markDirty = false);
 
     const std::byte* data() const;
@@ -60,10 +68,13 @@ public:
 
 private:
     void fireCallback(PropertyId id, const void* oldVal, const void* newVal, std::size_t size);
+    void fireVarCallback(PropertyId id, const std::vector<std::byte>& oldVal,
+                         const std::vector<std::byte>& newVal);
 
     const EntityDef* def_ = nullptr;
     DirtyMask dirtyMask_{};
     std::vector<std::byte> storage_;
+    std::unordered_map<PropertyId, std::vector<std::byte>> varStorage_;
     std::unordered_map<PropertyId, PropertyChangeCallback> changeCallbacks_;
 };
 

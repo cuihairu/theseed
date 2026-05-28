@@ -17,7 +17,8 @@ class PropertyReplication final {
 public:
     static std::vector<PropertyDelta> buildDirtyDelta(const EntityDef& def,
                                                       const std::byte* storage,
-                                                      const DirtyMask& dirtyMask);
+                                                      const DirtyMask& dirtyMask,
+                                                      PropertyFlag excludeFlags = PropertyFlag::None);
 
     static void applyDelta(const EntityDef& def,
                            std::span<const PropertyDelta> deltas,

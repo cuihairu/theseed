@@ -142,3 +142,21 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_file_entity_store_test COMMAND theseed_file_entity_store_test)
+
+add_executable(theseed_property_sync_direction_test PropertySyncDirectionTest.cpp)
+
+target_link_libraries(
+    theseed_property_sync_direction_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_property_sync_direction_test COMMAND theseed_property_sync_direction_test)
+
+add_executable(theseed_entity_restore_test EntityRestoreTest.cpp)
+
+target_link_libraries(
+    theseed_entity_restore_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_restore_test COMMAND theseed_entity_restore_test)

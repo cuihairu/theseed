@@ -188,20 +188,24 @@ static void testCallbackCanAccessEntity() {
     else FAIL("property read/write failed, hp=" + std::to_string(readHp));
 }
 
-static void testLoadEntityTriggersCreate() {
-    TEST("loadEntity triggers onCreate callback");
+static void testLoadEntityTriggersRestore() {
+    TEST("loadEntity triggers onRestore callback");
 
     auto transport = std::make_shared<InMemoryRuntimeTransport>();
     auto store = std::make_shared<InMemoryEntityStore>();
     auto def = makeDef();
-    bool triggered = false;
+    bool createTriggered = false;
+    bool restoreTriggered = false;
 
     BaseRuntime rt(transport, store, 1);
     rt.registerEntityFactory("Avatar",
-        [def, &triggered](EntityId id, auto side) -> std::unique_ptr<Entity> {
+        [def, &createTriggered, &restoreTriggered](EntityId id, auto side) -> std::unique_ptr<Entity> {
             auto e = std::make_unique<Entity>(id, side, *def);
-            e->setOnCreate([&triggered](Entity& entity) {
-                triggered = true;
+            e->setOnCreate([&createTriggered](Entity& entity) {
+                createTriggered = true;
+            });
+            e->setOnRestore([&restoreTriggered](Entity& entity) {
+                restoreTriggered = true;
             });
             return e;
         });
@@ -220,8 +224,9 @@ static void testLoadEntityTriggersCreate() {
     store->save(10, data);
 
     auto* entity = rt.loadEntity(10, "Avatar");
-    if (entity && triggered) PASS();
-    else FAIL("loadEntity did not trigger onCreate");
+    if (entity && restoreTriggered && !createTriggered) PASS();
+    else FAIL("loadEntity did not trigger onRestore (restore=" + std::to_string(restoreTriggered)
+              + " create=" + std::to_string(createTriggered) + ")");
 }
 
 static void testDestroyCallbackBeforeCleanup() {
@@ -252,6 +257,146 @@ static void testDestroyCallbackBeforeCleanup() {
     else FAIL("entity state not accessible, hp=" + std::to_string(readHp));
 }
 
+// --- State machine tests ---
+
+static std::unique_ptr<EntityDef> makeStateDef() {
+    return std::make_unique<EntityDef>("TestEntity");
+}
+
+static void testValidStateTransitionCreatingToActive() {
+    TEST("state transition: Creating → Active");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+
+    bool ok = entity.state() == theseed::runtime::EntityState::Creating;
+    ok = ok && !entity.isActive();
+
+    entity.activate();
+    ok = ok && entity.state() == theseed::runtime::EntityState::Active;
+    ok = ok && entity.isActive();
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testValidTransitionActiveToDestroying() {
+    TEST("state transition: Active → Destroying → Destroyed");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
+
+    entity.beginDestroy();
+    bool ok = entity.state() == theseed::runtime::EntityState::Destroying;
+
+    entity.destroy();
+    ok = ok && entity.state() == theseed::runtime::EntityState::Destroyed;
+    ok = ok && !entity.isActive();
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testValidTransitionActiveToMigrating() {
+    TEST("state transition: Active → Migrating");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
+
+    entity.beginMigration();
+    bool ok = entity.state() == theseed::runtime::EntityState::Migrating;
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testInvalidTransitionDoubleActivate() {
+    TEST("invalid transition: double activate is no-op");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
+
+    entity.activate();
+    bool ok = entity.state() == theseed::runtime::EntityState::Active;
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testDestroyFromCreatingIsNoOp() {
+    TEST("invalid transition: destroy from Creating is no-op");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+
+    entity.destroy();
+    bool ok = entity.state() == theseed::runtime::EntityState::Creating;
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testMigrationToDestroy() {
+    TEST("state transition: Migrating → Destroying → Destroyed");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
+    entity.beginMigration();
+
+    entity.beginDestroy();
+    bool ok = entity.state() == theseed::runtime::EntityState::Destroying;
+
+    entity.destroy();
+    ok = ok && entity.state() == theseed::runtime::EntityState::Destroyed;
+
+    if (ok) PASS();
+    else FAIL("state=" + std::to_string(static_cast<int>(entity.state())));
+}
+
+static void testDestroyCleansUpEntityCalls() {
+    TEST("destroy cleans up entity calls");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+    entity.activate();
+    entity.bindBaseEntityCall(10);
+    entity.bindCellEntityCall(20);
+
+    bool ok = entity.baseEntityCall() != nullptr;
+    ok = ok && entity.cellEntityCall() != nullptr;
+
+    entity.beginDestroy();
+    entity.destroy();
+    ok = ok && entity.baseEntityCall() == nullptr;
+    ok = ok && entity.cellEntityCall() == nullptr;
+
+    if (ok) PASS();
+    else FAIL("base=" + std::to_string(entity.baseEntityCall() != nullptr)
+              + " cell=" + std::to_string(entity.cellEntityCall() != nullptr));
+}
+
+static void testIsActiveMethod() {
+    TEST("isActive returns correct value for each state");
+
+    auto def = makeStateDef();
+    Entity entity(1, EntitySide::Base, *def);
+
+    bool ok = !entity.isActive();
+    entity.activate();
+    ok = ok && entity.isActive();
+    entity.beginMigration();
+    ok = ok && !entity.isActive();
+    entity.beginDestroy();
+    ok = ok && !entity.isActive();
+
+    if (ok) PASS();
+    else FAIL("wrong isActive");
+}
+
 int main() {
     std::cout << "EntityLifecycle tests:\n";
 
@@ -261,8 +406,18 @@ int main() {
     testOnLeaveSpace();
     testNoCallbackIfNotSet();
     testCallbackCanAccessEntity();
-    testLoadEntityTriggersCreate();
+    testLoadEntityTriggersRestore();
     testDestroyCallbackBeforeCleanup();
+
+    // State machine tests
+    testValidStateTransitionCreatingToActive();
+    testValidTransitionActiveToDestroying();
+    testValidTransitionActiveToMigrating();
+    testInvalidTransitionDoubleActivate();
+    testDestroyFromCreatingIsNoOp();
+    testMigrationToDestroy();
+    testDestroyCleansUpEntityCalls();
+    testIsActiveMethod();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

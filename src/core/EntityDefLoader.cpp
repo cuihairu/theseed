@@ -1,6 +1,7 @@
 #include "theseed/core/EntityDefLoader.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -183,6 +184,11 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
     auto entityName = findAttr(entityNode, "name");
     auto def = std::make_unique<EntityDef>(entityName);
 
+    auto extends = findAttr(entityNode, "extends");
+    if (!extends.empty()) {
+        def->setParentType(std::move(extends));
+    }
+
     for (auto& child : entityNode.children) {
         if (child.tag == "Properties") {
             for (auto& propNode : child.children) {
@@ -206,56 +212,99 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                     if (flagStr.find("ClientSync") != std::string::npos) {
                         flags = flags | runtime::PropertyFlag::ClientSync;
                     }
+                    if (flagStr.find("Base") != std::string::npos) {
+                        flags = flags | runtime::PropertyFlag::Base;
+                    }
+                    if (flagStr.find("Cell") != std::string::npos) {
+                        flags = flags | runtime::PropertyFlag::Cell;
+                    }
                 }
 
                 std::vector<std::byte> defaultValue;
                 auto defaultStr = findAttr(propNode, "defaultValue");
-                if (!defaultStr.empty() && !runtime::EntityDef::isVariableSized(type)) {
-                    auto fixedSize = runtime::EntityDef::fixedSizeOfType(type);
-                    if (fixedSize > 0) {
-                        defaultValue.resize(fixedSize, std::byte{0});
-                        switch (type) {
-                            case runtime::PropertyType::Int8:
-                            case runtime::PropertyType::UInt8: {
-                                auto v = static_cast<std::uint8_t>(std::stoi(defaultStr));
-                                std::memcpy(defaultValue.data(), &v, 1);
-                                break;
+                if (!defaultStr.empty()) {
+                    if (type == runtime::PropertyType::String) {
+                        defaultValue.assign(
+                            reinterpret_cast<const std::byte*>(defaultStr.data()),
+                            reinterpret_cast<const std::byte*>(defaultStr.data()) + defaultStr.size());
+                    } else if (type == runtime::PropertyType::Blob) {
+                        // Hex-encoded blob: "DEADBEEF" -> {0xDE, 0xAD, 0xBE, 0xEF}
+                        if (defaultStr.size() % 2 == 0) {
+                            defaultValue.reserve(defaultStr.size() / 2);
+                            for (std::size_t i = 0; i + 1 < defaultStr.size(); i += 2) {
+                                auto byteVal = static_cast<std::uint8_t>(
+                                    std::stoul(defaultStr.substr(i, 2), nullptr, 16));
+                                defaultValue.push_back(static_cast<std::byte>(byteVal));
                             }
-                            case runtime::PropertyType::Int16:
-                            case runtime::PropertyType::UInt16: {
-                                auto v = static_cast<std::uint16_t>(std::stoi(defaultStr));
-                                std::memcpy(defaultValue.data(), &v, 2);
-                                break;
+                        }
+                    } else if (type == runtime::PropertyType::Vector3) {
+                        // Format: "x,y,z"
+                        defaultValue.resize(sizeof(float) * 3, std::byte{0});
+                        float vals[3] = {0, 0, 0};
+                        int idx = 0;
+                        std::string token;
+                        for (auto ch : defaultStr) {
+                            if (ch == ',') {
+                                if (idx < 3 && !token.empty()) {
+                                    vals[idx] = std::stof(token);
+                                    ++idx;
+                                }
+                                token.clear();
+                            } else {
+                                token += ch;
                             }
-                            case runtime::PropertyType::Int32:
-                            case runtime::PropertyType::UInt32: {
-                                auto v = static_cast<std::uint32_t>(std::stoi(defaultStr));
-                                std::memcpy(defaultValue.data(), &v, 4);
-                                break;
+                        }
+                        if (idx < 3 && !token.empty()) {
+                            vals[idx] = std::stof(token);
+                        }
+                        std::memcpy(defaultValue.data(), vals, sizeof(float) * 3);
+                    } else if (!runtime::EntityDef::isVariableSized(type)) {
+                        auto fixedSize = runtime::EntityDef::fixedSizeOfType(type);
+                        if (fixedSize > 0) {
+                            defaultValue.resize(fixedSize, std::byte{0});
+                            switch (type) {
+                                case runtime::PropertyType::Int8:
+                                case runtime::PropertyType::UInt8: {
+                                    auto v = static_cast<std::uint8_t>(std::stoi(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 1);
+                                    break;
+                                }
+                                case runtime::PropertyType::Int16:
+                                case runtime::PropertyType::UInt16: {
+                                    auto v = static_cast<std::uint16_t>(std::stoi(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 2);
+                                    break;
+                                }
+                                case runtime::PropertyType::Int32:
+                                case runtime::PropertyType::UInt32: {
+                                    auto v = static_cast<std::uint32_t>(std::stoi(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 4);
+                                    break;
+                                }
+                                case runtime::PropertyType::Int64:
+                                case runtime::PropertyType::UInt64: {
+                                    auto v = static_cast<std::uint64_t>(std::stoll(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 8);
+                                    break;
+                                }
+                                case runtime::PropertyType::Float32: {
+                                    auto v = std::stof(defaultStr);
+                                    std::memcpy(defaultValue.data(), &v, 4);
+                                    break;
+                                }
+                                case runtime::PropertyType::Float64: {
+                                    auto v = std::stod(defaultStr);
+                                    std::memcpy(defaultValue.data(), &v, 8);
+                                    break;
+                                }
+                                case runtime::PropertyType::Bool: {
+                                    auto v = static_cast<std::uint8_t>(defaultStr == "true" ? 1 : 0);
+                                    std::memcpy(defaultValue.data(), &v, 1);
+                                    break;
+                                }
+                                default:
+                                    break;
                             }
-                            case runtime::PropertyType::Int64:
-                            case runtime::PropertyType::UInt64: {
-                                auto v = static_cast<std::uint64_t>(std::stoll(defaultStr));
-                                std::memcpy(defaultValue.data(), &v, 8);
-                                break;
-                            }
-                            case runtime::PropertyType::Float32: {
-                                auto v = std::stof(defaultStr);
-                                std::memcpy(defaultValue.data(), &v, 4);
-                                break;
-                            }
-                            case runtime::PropertyType::Float64: {
-                                auto v = std::stod(defaultStr);
-                                std::memcpy(defaultValue.data(), &v, 8);
-                                break;
-                            }
-                            case runtime::PropertyType::Bool: {
-                                auto v = static_cast<std::uint8_t>(defaultStr == "true" ? 1 : 0);
-                                std::memcpy(defaultValue.data(), &v, 1);
-                                break;
-                            }
-                            default:
-                                break;
                         }
                     }
                 }
@@ -276,7 +325,16 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                 if (sideStr == "Base") side = runtime::MethodSide::Base;
                 else if (sideStr == "Client") side = runtime::MethodSide::Client;
 
-                def->addMethod(std::move(name), side);
+                std::vector<runtime::ArgDescriptor> args;
+                for (auto& argNode : methNode.children) {
+                    if (argNode.tag != "Arg") continue;
+                    auto argName = findAttr(argNode, "name");
+                    auto argTypeStr = findAttr(argNode, "type", "Int32");
+                    auto argType = parsePropertyType(argTypeStr);
+                    args.push_back({std::move(argName), argType});
+                }
+
+                def->addMethod(std::move(name), side, std::move(args));
             }
         }
     }

@@ -18,6 +18,7 @@ using theseed::runtime::EntityState;
 using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::MethodSide;
 using theseed::runtime::PropertyType;
+using theseed::runtime::SpaceId;
 using theseed::runtime::Vector3;
 
 static int testsPassed = 0;
@@ -195,6 +196,78 @@ static void testMultipleEntities() {
     std::filesystem::remove_all(dir);
 }
 
+static void testOnDestroyFires() {
+    TEST("destroyEntity triggers onDestroy and cleans up");
+
+    auto dir = createDefDir();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+
+    CellApp::Config config;
+    config.entityDefPath = dir;
+    config.componentId = 2;
+
+    CellApp app(config, transport);
+    app.init();
+
+    auto* entity = app.createEntity("Avatar", Vector3{0, 0, 0});
+    auto id = entity->id();
+
+    bool destroyed = false;
+    entity->setOnDestroy([&destroyed](Entity&) {
+        destroyed = true;
+    });
+
+    // Verify entity state before destroy
+    bool ok = entity->state() == EntityState::Active;
+
+    app.destroyEntity(id);
+    ok = ok && destroyed;
+    ok = ok && app.findEntity(id) == nullptr;
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS(); else FAIL("destroy cleanup failed");
+}
+
+static void testOnEnterLeaveSpace() {
+    TEST("entity receives enterSpace/leaveSpace callbacks");
+
+    auto dir = createDefDir();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+
+    CellApp::Config config;
+    config.entityDefPath = dir;
+    config.componentId = 2;
+
+    CellApp app(config, transport);
+    app.init();
+
+    bool entered = false;
+    bool left = false;
+
+    // Set callbacks after creation, test manual space events
+    auto* entity = app.createEntity("Avatar", Vector3{5, 0, 0});
+
+    // notifyEnterSpace is called during addEntity (in createEntity flow)
+    // Callbacks set after creation won't catch the initial enterSpace.
+    // Instead, verify by manually calling notifyEnterSpace/notifyLeaveSpace
+    entity->setOnEnterSpace([&entered](Entity&, SpaceId) {
+        entered = true;
+    });
+    entity->setOnLeaveSpace([&left](Entity&, SpaceId) {
+        left = true;
+    });
+
+    // Manually trigger to verify callback wiring
+    entity->notifyEnterSpace(1);
+    entity->notifyLeaveSpace(1);
+
+    bool ok = entered && left;
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS(); else FAIL("entered=" + std::string(entered ? "T" : "F")
+                               + " left=" + std::string(left ? "T" : "F"));
+}
+
 int main() {
     std::cout << "CellApp tests:\n";
 
@@ -203,6 +276,8 @@ int main() {
     testFindAndDestroy();
     testSetProperty();
     testMultipleEntities();
+    testOnDestroyFires();
+    testOnEnterLeaveSpace();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

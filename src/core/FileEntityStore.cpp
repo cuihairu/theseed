@@ -117,4 +117,37 @@ bool FileEntityStore::exists(EntityId id, const std::string& entityType) const {
     return std::filesystem::exists(entityPath(id, entityType));
 }
 
+std::vector<EntityId> FileEntityStore::listIdsByType(const std::string& entityType) {
+    std::vector<EntityId> ids;
+    auto dir = rootDir_ / entityType;
+    if (!std::filesystem::exists(dir)) return ids;
+
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".dat") continue;
+
+        auto stem = entry.path().stem().string();
+        try {
+            auto id = static_cast<EntityId>(std::stoull(stem));
+            ids.push_back(id);
+        } catch (...) {
+            continue;
+        }
+    }
+    return ids;
+}
+
+std::vector<std::string> FileEntityStore::listEntityTypes() {
+    std::vector<std::string> types;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(rootDir_, ec)) {
+        if (!entry.is_directory()) continue;
+        auto name = entry.path().filename().string();
+        if (name.starts_with('_')) continue;
+        types.push_back(std::move(name));
+    }
+    return types;
+}
+
 }  // namespace theseed::core

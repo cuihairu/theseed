@@ -216,3 +216,51 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_network_node_test COMMAND theseed_network_node_test)
+
+add_executable(theseed_typed_invocation_test TypedInvocationTest.cpp)
+
+target_link_libraries(
+    theseed_typed_invocation_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_typed_invocation_test COMMAND theseed_typed_invocation_test)
+
+add_executable(theseed_variable_property_test VariablePropertyTest.cpp)
+
+target_link_libraries(
+    theseed_variable_property_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_variable_property_test COMMAND theseed_variable_property_test)
+
+add_executable(theseed_entity_parent_child_test EntityParentChildTest.cpp)
+
+target_link_libraries(
+    theseed_entity_parent_child_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_entity_parent_child_test COMMAND theseed_entity_parent_child_test)
+
+add_executable(theseed_entity_velocity_test EntityVelocityTest.cpp)
+
+target_link_libraries(
+    theseed_entity_velocity_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_velocity_test COMMAND theseed_entity_velocity_test)
+
+add_executable(theseed_entity_action_test EntityActionTest.cpp)
+
+target_link_libraries(
+    theseed_entity_action_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_action_test COMMAND theseed_entity_action_test)

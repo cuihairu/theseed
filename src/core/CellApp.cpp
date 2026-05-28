@@ -81,6 +81,7 @@ runtime::Entity* CellApp::createEntity(const std::string& entityType,
     auto entity = std::make_unique<runtime::Entity>(id, runtime::EntitySide::Cell, *def);
     auto* ptr = entity.get();
     ptr->activate();
+    ptr->notifyCreate();
 
     ownedEntities_.emplace(id, std::move(entity));
     runtime_->addEntity(*ptr, position);
@@ -96,8 +97,16 @@ bool CellApp::destroyEntity(runtime::EntityId id) {
         return false;
     }
 
+    auto it = ownedEntities_.find(id);
+    if (it == ownedEntities_.end()) {
+        return false;
+    }
+
+    it->second->beginDestroy();
+    it->second->notifyDestroy();
     runtime_->removeEntity(id);
-    ownedEntities_.erase(id);
+    it->second->destroy();
+    ownedEntities_.erase(it);
     return true;
 }
 

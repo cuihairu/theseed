@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace theseed::foundation {
 struct TimerHandle;
@@ -38,6 +39,7 @@ public:
     void addEntity(Entity& entity, const Vector3& position);
     void removeEntity(EntityId entityId);
     Entity* findEntity(EntityId entityId) const;
+    void forEachEntity(std::function<void(Entity&)> callback) const;
 
     bool registerEntityFactory(std::string entityType, EntityFactory factory);
     bool beginMigration(EntityId entityId,
@@ -62,7 +64,10 @@ public:
     using TimerCallback = std::function<void()>;
 
     foundation::TimerHandle addTimer(Duration delay, TimerCallback callback);
+    foundation::TimerHandle addEntityTimer(EntityId entityId, Duration delay, TimerCallback callback);
+    foundation::TimerHandle addEntityPeriodicTimer(EntityId entityId, Duration interval, TimerCallback callback);
     bool cancelTimer(foundation::TimerHandle handle);
+    void cancelEntityTimers(EntityId entityId);
 
     void broadcastEvent(std::string_view event, std::span<const std::byte> data = {});
     void broadcastEventInRange(std::string_view event, const Vector3& center, float range,
@@ -126,6 +131,7 @@ private:
     std::unordered_map<EntityId, MigrationRoute> migrationRoutes_;
     std::unordered_map<EntityId, GhostBinding> ghostBindings_;
     std::unique_ptr<foundation::TimerWheel> timerWheel_;
+    std::unordered_map<EntityId, std::vector<foundation::TimerHandle>> entityTimers_;
 };
 
 }  // namespace theseed::runtime

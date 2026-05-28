@@ -1,6 +1,7 @@
 #include "theseed/core/BaseApp.h"
 #include "theseed/core/CellApp.h"
 #include "theseed/core/IEntityStore.h"
+#include "theseed/foundation/MemoryStream.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/NetworkNode.h"
@@ -67,6 +68,8 @@ static std::string createDefDir() {
     <Methods>
         <Method name="onDamage" side="Cell"/>
         <Method name="onHeal" side="Base"/>
+        <Method name="takeDamage" side="Cell"/>
+        <Method name="applyHeal" side="Base"/>
     </Methods>
 </EntityDef>
 )");
@@ -401,6 +404,41 @@ static void testPropertySyncBidirectional() {
 }
 
 // Test: createCell carries initial property snapshot - cell entity has correct values immediately
+static void testOnCellReadyCallback() {
+    TEST("onCellReady fires when cell entity reports ready");
+
+    auto dir = createDefDir();
+    TcpConnection::globalInit();
+    MiniCluster c(dir);
+
+    c.connect();
+    c.tickUntil([&] { return c.baseNode->hasPeer(2); });
+
+    bool cellReadyFired = false;
+    EntityId cellReadyEntityId = 0;
+
+    auto* baseEntity = c.baseApp->createEntity("Avatar");
+    auto entityId = baseEntity->id();
+    baseEntity->setOnCellReady([&](Entity& e) {
+        cellReadyFired = true;
+        cellReadyEntityId = e.id();
+    });
+
+    c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{10, 20, 30}, 2);
+    c.tickUntil([&] {
+        return cellReadyFired;
+    });
+
+    bool ok = cellReadyFired && cellReadyEntityId == entityId;
+
+    TcpConnection::globalShutdown();
+    std::filesystem::remove_all(dir);
+
+    if (ok) PASS();
+    else FAIL("fired=" + std::string(cellReadyFired ? "true" : "false")
+              + " id=" + std::to_string(cellReadyEntityId));
+}
+
 static void testCreateCellWithPropertySnapshot() {
     TEST("createCell: cell entity receives initial property snapshot");
 
@@ -438,6 +476,186 @@ static void testCreateCellWithPropertySnapshot() {
               + " hp=" + std::to_string(cellEntity->getProperty<float>(1)));
 }
 
+// Test: base entity calls cell method via callCell
+static void testBaseToCellRemoteCall() {
+    TEST("remote call: base entity calls cell method via callCell");
+
+    auto dir = createDefDir();
+    TcpConnection::globalInit();
+    MiniCluster c(dir);
+
+    c.connect();
+    c.tickUntil([&] { return c.baseNode->hasPeer(2); });
+
+    auto* baseEntity = c.baseApp->createEntity("Avatar");
+    auto entityId = baseEntity->id();
+
+    c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{0, 0, 0}, 2);
+    c.tickUntil([&] {
+        return baseEntity->cellEntityCall() != nullptr && baseEntity->cellEntityCall()->isValid();
+    });
+
+    auto* cellEntity = c.cellApp->runtime().findEntity(entityId);
+    bool ok = cellEntity != nullptr;
+    if (!ok) { TcpConnection::globalShutdown(); std::filesystem::remove_all(dir); FAIL("cell entity missing"); return; }
+
+    bool methodReceived = false;
+    std::int32_t receivedDamage = 0;
+    cellEntity->bindMethodHandler("takeDamage",
+        [&](Entity& e, std::span<const std::byte> payload) {
+            if (payload.size() >= sizeof(std::int32_t)) {
+                std::memcpy(&receivedDamage, payload.data(), sizeof(std::int32_t));
+                methodReceived = true;
+            }
+            static_cast<void>(e);
+        });
+
+    // Base calls cell method
+    std::int32_t damage = 25;
+    std::byte payload[sizeof(damage)];
+    std::memcpy(payload, &damage, sizeof(damage));
+    auto result = baseEntity->callCell("takeDamage", payload);
+    ok = ok && result == theseed::runtime::SendResult::Accepted;
+
+    int ticks = c.tickUntil([&] { return methodReceived; }, 200);
+    ok = ok && ticks > 0;
+    ok = ok && receivedDamage == 25;
+
+    TcpConnection::globalShutdown();
+    std::filesystem::remove_all(dir);
+
+    if (ok) PASS();
+    else FAIL("result=" + std::to_string(static_cast<int>(result))
+              + " received=" + std::to_string(receivedDamage)
+              + " ticks=" + std::to_string(ticks));
+}
+
+// Test: cell entity calls base method via callBase
+static void testCellToBaseRemoteCall() {
+    TEST("remote call: cell entity calls base method via callBase");
+
+    auto dir = createDefDir();
+    TcpConnection::globalInit();
+    MiniCluster c(dir);
+
+    c.connect();
+    c.tickUntil([&] { return c.baseNode->hasPeer(2); });
+
+    auto* baseEntity = c.baseApp->createEntity("Avatar");
+    auto entityId = baseEntity->id();
+
+    bool methodReceived = false;
+    float receivedHeal = 0;
+    baseEntity->bindMethodHandler("applyHeal",
+        [&](Entity& e, std::span<const std::byte> payload) {
+            if (payload.size() >= sizeof(float)) {
+                std::memcpy(&receivedHeal, payload.data(), sizeof(float));
+                methodReceived = true;
+            }
+            static_cast<void>(e);
+        });
+
+    c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{0, 0, 0}, 2);
+    c.tickUntil([&] {
+        return baseEntity->cellEntityCall() != nullptr && baseEntity->cellEntityCall()->isValid();
+    });
+
+    auto* cellEntity = c.cellApp->runtime().findEntity(entityId);
+    bool ok = cellEntity != nullptr;
+    if (!ok) { TcpConnection::globalShutdown(); std::filesystem::remove_all(dir); FAIL("cell entity missing"); return; }
+
+    // Cell calls base method
+    float healAmount = 30.0f;
+    std::byte payload[sizeof(healAmount)];
+    std::memcpy(payload, &healAmount, sizeof(healAmount));
+    auto result = cellEntity->callBase("applyHeal", payload);
+    ok = ok && result == theseed::runtime::SendResult::Accepted;
+
+    int ticks = c.tickUntil([&] { return methodReceived; }, 200);
+    ok = ok && ticks > 0;
+    ok = ok && std::abs(receivedHeal - 30.0f) < 0.01f;
+
+    TcpConnection::globalShutdown();
+    std::filesystem::remove_all(dir);
+
+    if (ok) PASS();
+    else FAIL("result=" + std::to_string(static_cast<int>(result))
+              + " heal=" + std::to_string(receivedHeal)
+              + " ticks=" + std::to_string(ticks));
+}
+
+// Test: typed remote call from base to cell
+static void testBaseToCellTypedRemoteCall() {
+    TEST("remote call: base entity typed callCellWith");
+
+    auto dir = createDefDir();
+    TcpConnection::globalInit();
+    MiniCluster c(dir);
+
+    c.connect();
+    c.tickUntil([&] { return c.baseNode->hasPeer(2); });
+
+    auto* baseEntity = c.baseApp->createEntity("Avatar");
+    auto entityId = baseEntity->id();
+
+    c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{0, 0, 0}, 2);
+    c.tickUntil([&] {
+        return baseEntity->cellEntityCall() != nullptr && baseEntity->cellEntityCall()->isValid();
+    });
+
+    auto* cellEntity = c.cellApp->runtime().findEntity(entityId);
+    bool ok = cellEntity != nullptr;
+    if (!ok) { TcpConnection::globalShutdown(); std::filesystem::remove_all(dir); FAIL("cell entity missing"); return; }
+
+    bool methodReceived = false;
+    std::int32_t receivedDamage = 0;
+    cellEntity->bindStreamMethodHandler("takeDamage",
+        [&](Entity& e, theseed::foundation::MemoryStream& ms) {
+            receivedDamage = ms.readInt32();
+            methodReceived = true;
+            static_cast<void>(e);
+        });
+
+    // Base calls cell method with typed args
+    auto result = baseEntity->callCellWith<std::int32_t>("takeDamage", 42);
+    ok = ok && result == theseed::runtime::SendResult::Accepted;
+
+    int ticks = c.tickUntil([&] { return methodReceived; }, 200);
+    ok = ok && ticks > 0;
+    ok = ok && receivedDamage == 42;
+
+    TcpConnection::globalShutdown();
+    std::filesystem::remove_all(dir);
+
+    if (ok) PASS();
+    else FAIL("result=" + std::to_string(static_cast<int>(result))
+              + " received=" + std::to_string(receivedDamage)
+              + " ticks=" + std::to_string(ticks));
+}
+
+// Test: callCell returns NotConnected when no cell
+static void testCallCellNoConnection() {
+    TEST("remote call: callCell returns NotConnected without cell");
+
+    auto dir = createDefDir();
+    TcpConnection::globalInit();
+    MiniCluster c(dir);
+
+    c.connect();
+    c.tickUntil([&] { return c.baseNode->hasPeer(2); });
+
+    auto* baseEntity = c.baseApp->createEntity("Avatar");
+
+    // No cell created, callCell should return NotConnected
+    auto result = baseEntity->callCell("someMethod");
+
+    TcpConnection::globalShutdown();
+    std::filesystem::remove_all(dir);
+
+    if (result == theseed::runtime::SendResult::NotConnected) PASS();
+    else FAIL("expected NotConnected, got " + std::to_string(static_cast<int>(result)));
+}
+
 int main() {
     std::cout << "Property sync tests:\n";
 
@@ -448,6 +666,11 @@ int main() {
     testPropertySyncBaseToCellMultiple();
     testPropertySyncBidirectional();
     testCreateCellWithPropertySnapshot();
+    testOnCellReadyCallback();
+    testBaseToCellRemoteCall();
+    testCellToBaseRemoteCall();
+    testBaseToCellTypedRemoteCall();
+    testCallCellNoConnection();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -31,7 +31,7 @@ target_link_libraries(
     PUBLIC theseed_project_options
     PUBLIC theseed_foundation)
 
-if(MSVC)
+if(WIN32)
     target_link_libraries(theseed_runtime PUBLIC ws2_32)
 endif()
 

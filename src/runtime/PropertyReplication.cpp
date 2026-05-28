@@ -8,7 +8,8 @@ namespace theseed::runtime {
 
 std::vector<PropertyDelta> PropertyReplication::buildDirtyDelta(const EntityDef& def,
                                                                 const std::byte* storage,
-                                                                const DirtyMask& dirtyMask) {
+                                                                const DirtyMask& dirtyMask,
+                                                                PropertyFlag excludeFlags) {
     if (storage == nullptr) {
         throw std::invalid_argument("property storage is null");
     }
@@ -16,6 +17,10 @@ std::vector<PropertyDelta> PropertyReplication::buildDirtyDelta(const EntityDef&
     std::vector<PropertyDelta> deltas;
     dirtyMask.forEachDirty([&](PropertyId propertyId) {
         const auto& descriptor = def.property(propertyId);
+        if (static_cast<std::uint32_t>(descriptor.flags) & static_cast<std::uint32_t>(excludeFlags)) {
+            return;
+        }
+
         PropertyDelta delta;
         delta.propertyId = propertyId;
         delta.value.resize(descriptor.size);

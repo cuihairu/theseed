@@ -1,5 +1,8 @@
 #include "theseed/core/BaseApp.h"
+#include "theseed/login/SessionToken.h"
+#include "theseed/runtime/TcpConnection.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace theseed::core {
@@ -16,6 +19,10 @@ BaseApp::BaseApp(Config config,
     if (!store_) {
         throw std::invalid_argument("base app requires entity store");
     }
+
+    clientListener_.setConnectionFactory([]() {
+        return runtime::TcpConnection::create();
+    });
 }
 
 bool BaseApp::init() {
@@ -33,6 +40,15 @@ bool BaseApp::init() {
     }
 
     runtime_->setAutoSaveInterval(config_.autoSaveInterval);
+
+    for (const auto& entityType : store_->listEntityTypes()) {
+        if (runtime_->findEntitiesByType(entityType).empty()) {
+            runtime_->restoreEntities(entityType);
+        }
+    }
+
+    clientListener_.listen(config_.clientListenHost, config_.clientListenPort);
+
     return true;
 }
 
@@ -46,6 +62,14 @@ void BaseApp::detach(runtime::TickScheduler& scheduler) {
     if (runtime_) {
         runtime_->detach(scheduler);
     }
+}
+
+void BaseApp::tick() {
+    acceptClientConnections();
+    for (auto& session : clientSessions_) {
+        session->pump();
+    }
+    cleanupClients();
 }
 
 BaseRuntime& BaseApp::runtime() {
@@ -76,6 +100,10 @@ bool BaseApp::destroyEntity(runtime::EntityId id) {
     return runtime_ ? runtime_->destroyEntity(id) : false;
 }
 
+std::size_t BaseApp::restoreEntities(const std::string& entityType) {
+    return runtime_ ? runtime_->restoreEntities(entityType) : 0;
+}
+
 bool BaseApp::requestCreateCell(runtime::EntityId entityId,
                                  const std::string& entityType,
                                  const runtime::Vector3& position,
@@ -86,6 +114,76 @@ bool BaseApp::requestCreateCell(runtime::EntityId entityId,
 bool BaseApp::requestDestroyCell(runtime::EntityId entityId,
                                   runtime::ComponentId targetCellApp) {
     return runtime_ ? runtime_->requestDestroyCell(entityId, targetCellApp) : false;
+}
+
+void BaseApp::acceptClientConnections() {
+    while (auto conn = clientListener_.accept()) {
+        auto session = std::make_unique<login::ClientSession>(conn);
+        auto* rawSession = session.get();
+        session->setMessageCallback(
+            [this, rawSession](login::ClientMessageType type,
+                               std::span<const std::byte> payload) {
+                onClientMessage(rawSession, type, payload);
+            });
+        clientSessions_.push_back(std::move(session));
+    }
+}
+
+void BaseApp::onClientMessage(login::ClientSession* session,
+                               login::ClientMessageType type,
+                               std::span<const std::byte> payload) {
+    switch (type) {
+        case login::ClientMessageType::EnterGame: {
+            std::string token;
+            if (login::ClientProtocol::decodeEnterGame(payload, token)) {
+                handleEnterGame(session, token);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void BaseApp::handleEnterGame(login::ClientSession* session, const std::string& token) {
+    std::string accountId, realmId;
+    login::EnterGameResponse resp;
+
+    if (!login::SessionToken::validate(token, accountId, realmId)) {
+        resp.success = false;
+        resp.error = "invalid token";
+        auto data = login::ClientProtocol::encodeEnterGameResponse(resp);
+        session->send(std::span<const std::byte>(data.data(), data.size()));
+        return;
+    }
+
+    // Try to restore existing entity or create new one
+    auto* entity = runtime_->createEntity("Player");
+    if (!entity) {
+        resp.success = false;
+        resp.error = "failed to create entity";
+        auto data = login::ClientProtocol::encodeEnterGameResponse(resp);
+        session->send(std::span<const std::byte>(data.data(), data.size()));
+        return;
+    }
+
+    sessionEntityMap_[session] = entity->id();
+
+    resp.success = true;
+    resp.entityId = entity->id();
+    resp.entityType = entity->entityType();
+    auto data = login::ClientProtocol::encodeEnterGameResponse(resp);
+    session->send(std::span<const std::byte>(data.data(), data.size()));
+}
+
+void BaseApp::cleanupClients() {
+    std::erase_if(clientSessions_, [this](const std::unique_ptr<login::ClientSession>& s) {
+        if (!s->isConnected()) {
+            sessionEntityMap_.erase(s.get());
+            return true;
+        }
+        return false;
+    });
 }
 
 }  // namespace theseed::core

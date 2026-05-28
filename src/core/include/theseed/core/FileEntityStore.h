@@ -16,6 +16,8 @@ public:
     bool save(EntityId id, const EntityData& data) override;
     bool remove(EntityId id) override;
     EntityId allocId() override;
+    std::vector<EntityId> listIdsByType(const std::string& entityType) override;
+    std::vector<std::string> listEntityTypes() override;
 
     bool exists(EntityId id, const std::string& entityType) const;
 

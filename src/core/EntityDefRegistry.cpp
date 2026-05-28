@@ -43,7 +43,23 @@ std::size_t EntityDefRegistry::loadDirectory(const std::string& path) {
         }
     }
 
+    resolveInheritance();
     return loaded;
+}
+
+void EntityDefRegistry::resolveInheritance() {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& [name, def] : defs_) {
+            if (def->parentType().empty()) continue;
+            auto parentIt = defs_.find(def->parentType());
+            if (parentIt == defs_.end()) continue;
+            if (def->mergeFrom(*parentIt->second)) {
+                changed = true;
+            }
+        }
+    }
 }
 
 bool EntityDefRegistry::registerDef(std::shared_ptr<runtime::EntityDef> def) {

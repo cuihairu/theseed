@@ -5,6 +5,7 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -283,6 +284,127 @@ static void testLoadNonexistent() {
     if (entity == nullptr) PASS(); else FAIL("expected null for nonexistent entity");
 }
 
+static void testAutoSaveOnDestroy() {
+    TEST("destroy entity auto-saves data");
+
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto rt = makeRuntime(nullptr, store);
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt->createEntity("Avatar");
+    auto id = entity->id();
+    entity->setProperty<std::int32_t>(0, 77);
+    entity->setProperty<float>(1, 55.5f);
+
+    rt->destroyEntity(id);
+
+    bool ok = rt->entityCount() == 0;
+    auto* loaded = rt->loadEntity(id, "Avatar");
+    ok = ok && loaded != nullptr;
+    ok = ok && loaded->getProperty<std::int32_t>(0) == 77;
+    ok = ok && std::abs(loaded->getProperty<float>(1) - 55.5f) < 0.01f;
+
+    if (ok) PASS(); else FAIL("auto-save on destroy failed");
+}
+
+static void testFindEntitiesByType() {
+    TEST("find entities by type");
+
+    auto rt = makeRuntime();
+    auto avatarDef = makeAvatarDef();
+    auto npcDef = std::make_shared<EntityDef>("Npc");
+    npcDef->addProperty("name", PropertyType::Int32);
+
+    rt->registerEntityFactory("Avatar", makeFactory(avatarDef));
+    rt->registerEntityFactory("Npc", makeFactory(npcDef));
+
+    auto* a1 = rt->createEntity("Avatar");
+    auto* a2 = rt->createEntity("Avatar");
+    auto* n1 = rt->createEntity("Npc");
+
+    auto avatars = rt->findEntitiesByType("Avatar");
+    auto npcs = rt->findEntitiesByType("Npc");
+    auto empty = rt->findEntitiesByType("Monster");
+
+    bool ok = avatars.size() == 2;
+    ok = ok && npcs.size() == 1;
+    ok = ok && empty.empty();
+
+    std::size_t foundA1 = 0, foundA2 = 0;
+    for (auto* e : avatars) {
+        if (e == a1) ++foundA1;
+        if (e == a2) ++foundA2;
+    }
+    ok = ok && foundA1 == 1 && foundA2 == 1;
+    ok = ok && npcs[0] == n1;
+
+    if (ok) PASS(); else FAIL("avatars=" + std::to_string(avatars.size()));
+}
+
+static void testNameBasedPropertyAccess() {
+    TEST("name-based property access");
+
+    auto rt = makeRuntime();
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt->createEntity("Avatar");
+
+    bool setOk = entity->setProperty<std::int32_t>("level", 42);
+    setOk = setOk && entity->setProperty<float>("hp", 99.5f);
+    bool setBad = entity->setProperty<std::int32_t>("nonexistent", 1);
+
+    auto* level = entity->findProperty<std::int32_t>("level");
+    auto* hp = entity->findProperty<float>("hp");
+    auto* bad = entity->findProperty<std::int32_t>("nonexistent");
+
+    bool ok = setOk && !setBad;
+    ok = ok && level != nullptr && *level == 42;
+    ok = ok && hp != nullptr && std::abs(*hp - 99.5f) < 0.01f;
+    ok = ok && bad == nullptr;
+
+    if (ok) PASS(); else FAIL("name-based access failed");
+}
+
+static void testForEachEntity() {
+    TEST("forEachEntity iterates all entities");
+
+    auto rt = makeRuntime();
+    auto avatarDef = makeAvatarDef();
+    auto npcDef = std::make_shared<EntityDef>("Npc");
+    npcDef->addProperty("hp", PropertyType::Int32);
+
+    rt->registerEntityFactory("Avatar", makeFactory(avatarDef));
+    rt->registerEntityFactory("Npc", makeFactory(npcDef));
+
+    auto* a1 = rt->createEntity("Avatar");
+    auto* a2 = rt->createEntity("Avatar");
+    auto* n1 = rt->createEntity("Npc");
+
+    std::vector<EntityId> visited;
+    rt->forEachEntity([&visited](Entity& e) {
+        visited.push_back(e.id());
+    });
+
+    bool ok = visited.size() == 3;
+    std::size_t foundA1 = 0, foundA2 = 0, foundN1 = 0;
+    for (auto id : visited) {
+        if (id == a1->id()) ++foundA1;
+        if (id == a2->id()) ++foundA2;
+        if (id == n1->id()) ++foundN1;
+    }
+    ok = ok && foundA1 == 1 && foundA2 == 1 && foundN1 == 1;
+
+    // Empty runtime
+    auto emptyRt = makeRuntime();
+    std::size_t emptyCount = 0;
+    emptyRt->forEachEntity([&emptyCount](Entity&) { ++emptyCount; });
+    ok = ok && emptyCount == 0;
+
+    if (ok) PASS(); else FAIL("visited=" + std::to_string(visited.size()));
+}
+
 int main() {
     std::cout << "BaseRuntime tests:\n";
 
@@ -296,6 +418,10 @@ int main() {
     testDispatchInvocation();
     testUnknownEntityType();
     testLoadNonexistent();
+    testAutoSaveOnDestroy();
+    testFindEntitiesByType();
+    testNameBasedPropertyAccess();
+    testForEachEntity();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

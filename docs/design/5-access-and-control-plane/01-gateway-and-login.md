@@ -1,4 +1,4 @@
-# Gateway & Login — 接入层、登录服务与 Challenge 运维边界
+﻿# Gateway & Login — 接入层、登录服务与 Challenge 运维边界
 
 > 来源源头：BigWorld `LoginApp / Login Challenge / statusCheck / clearIPAddressBans`。
 > 参考实现：KBEngine `LoginApp` 的轻量接入路径。
@@ -28,6 +28,22 @@ KBEngine 也有 LoginApp，
 但整体更偏向接入与会话分发，
 运维控制面没有 BigWorld 那么厚。
 ```
+
+### 实现能力对比
+
+| 维度 | BigWorld | KBEngine | theseed 取舍 |
+|------|----------|----------|--------------|
+| LoginApp 定位 | 登录入口 + 登录状态机 + 运维子系统 | 轻量登录入口 + 会话分发 | 当前参考 BigWorld，先实现登录面核心服务 |
+| Gateway 边界 | 接入和登录面职责存在历史耦合 | LoginApp 承担较多接入职责 | 逻辑上保留 Gateway/Login 边界，MVP 不强制拆进程 |
+| Challenge | Login Challenge / factory 能力明确 | 基本不强调复杂 challenge | 当前先保留开关与接口位置，复杂状态机后续增强 |
+| Pending request | 登录请求状态可跟踪、可控 | 相对轻量 | MVP 可先省略复杂状态机，但接口预留审计点 |
+| IP ban / 风控 | 登录面内建临时 ban、清理命令 | 较弱 | Phase C 引入，避免 MVP 过重 |
+| statusCheck | 登录面运维命令的一部分 | 较弱 | Phase C 接入统一 Ops Control Plane |
+| 受控停服 | 与登录入口配合 draining / shutdown | 较弱 | Phase C 做 controlledShutdown / draining |
+| 区服选择 | 不是核心抽象 | 常见实现依赖 LoginApp 路由 | 当前由 LoginApp 直接返回分区列表和角色摘要 |
+| 分区入口路由 | 依赖集群状态或服务发现 | 轻量分发 | 当前先支持每区固定 ip:port，策略化放入待定计划 |
+| 会话签发 | 登录服务完成 session handoff | LoginApp 直接分发会话信息 | theseed 用 ISessionIssuer 签发绑定 accountId + realmId 的 token |
+| 部署形态 | 偏完整服务面 | 更容易单点落地 | 当前先单 LoginApp 落地，多入口和 Pipeline 放入待定计划 |
 
 ### 优缺点
 
@@ -398,9 +414,127 @@ Phase 3：
 
 ## 11. 一句话判断
 
-本篇的重点不是“登录如何握手”，而是：
+本篇的重点不是”登录如何握手”，而是：
 
 ```
 theseed 已经把 BigWorld 风格的登录服务系统边界
 从单纯接入细节提升为 Access Plane 的独立能力面。
 ```
+
+---
+
+## 12. LoginApp — 参考 BigWorld 的实现基线
+
+> 本节先回到 BigWorld 的实现方式，作为当前阶段的落地基线。
+> LoginApp 先按登录面核心服务实现，包含认证、分区列表、角色摘要、风控、session handoff，
+> 不先引入可组装 Pipeline 的抽象化改造。
+
+### 12.1 LoginApp 的职责
+
+LoginApp 参考 BigWorld 的登录面实现，职责包括：
+
+```text
+  - 认证
+  - 分区列表查询
+  - 角色摘要返回
+  - pending request 维护
+  - 临时 ban / 风控
+  - statusCheck
+  - session handoff
+```
+
+LoginApp 不承担游戏内 Entity runtime，不承担消息总线控制面，也不承担统一运维平台。
+
+### 12.2 登录流程
+
+```text
+Client
+  → login(account, credentials)
+  → LoginApp 校验账号
+  → 返回分区列表 + 每区角色摘要 + 分区 ip:port
+
+Client 选择分区
+  → connect realm.ip:realm.port
+  → loginGateway(account, token, realmId)
+  → 分区验证 session
+  → 创建 Account Entity
+  → reqAvatarList / selectAvatarGame
+```
+
+单区模式时可跳过分区选择，但默认实现仍按分区入口处理。
+
+### 12.3 BigWorld 对照的实现点
+
+```text
+BigWorld 风格的关键点：
+  - LoginApp 是一个独立登录面子系统
+  - 登录、风控、ban、statusCheck、session handoff 在同一边界内
+  - 分区信息与角色摘要由登录面返回
+  - 客户端最终直连分区入口
+```
+
+### 12.4 当前实现基线
+
+```cpp
+struct RealmInfo {
+    std::string realmId;
+    std::string name;
+    std::string status;
+    std::string host;
+    uint16_t port;
+    std::vector<CharacterSummary> characters;
+};
+
+class ILoginApp {
+public:
+    virtual ~ILoginApp() = default;
+    virtual LoginReply login(const LoginRequest& request) = 0;
+    virtual RealmList queryRealms(const AccountId& accountId) = 0;
+    virtual LoginReply selectRealm(const AccountId& accountId,
+                                   const std::string& realmId) = 0;
+    virtual void clearTemporaryBans() = 0;
+    virtual LoginStatsSnapshot stats() const = 0;
+};
+```
+
+### 12.5 配置基线
+
+```yaml
+login_app:
+  endpoint: login.example.com
+  auth:
+    type: password
+  realm_source:
+    type: static_list
+  realms:
+    - id: "realm_east"
+      name: "华东一区"
+      host: "10.0.1.1"
+      port: 20000
+    - id: "realm_south"
+      name: "华南一区"
+      host: "10.0.2.1"
+      port: 20000
+  bans:
+    temporary_ttl_sec: 1800
+  challenge:
+    enabled: false
+```
+
+### 12.6 讨论待确定的计划
+
+以下内容先保留为讨论，不进入当前实现基线：
+
+```text
+  - 可组装 Login Pipeline
+  - 独立 Gateway 进程
+  - login endpoint 发现 / DNS 轮询 / LB
+  - 分区入口策略化（Static / Registry / Fixed）
+  - Challenge 状态机增强
+  - 更细粒度的风控策略
+```
+
+### 12.7 设计文档与实现基线的关系
+
+本文档第 1-11 章描述的是 theseed Access Plane 的完整系统边界。
+第 12 章当前先采用 BigWorld 式实现基线，后续再根据验证结果决定是否引入更抽象的管道化方案。

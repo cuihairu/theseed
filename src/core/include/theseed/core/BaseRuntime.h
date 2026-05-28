@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace theseed::core {
 
@@ -32,8 +33,11 @@ public:
 
     runtime::Entity* createEntity(const std::string& entityType);
     runtime::Entity* loadEntity(runtime::EntityId id, const std::string& entityType);
+    std::size_t restoreEntities(const std::string& entityType);
     bool destroyEntity(runtime::EntityId id);
     runtime::Entity* findEntity(runtime::EntityId id) const;
+    std::vector<runtime::Entity*> findEntitiesByType(const std::string& entityType) const;
+    void forEachEntity(std::function<void(runtime::Entity&)> callback) const;
     std::size_t entityCount() const;
 
     bool setCellEntityCall(runtime::EntityId id, runtime::ComponentId cellComponent);
