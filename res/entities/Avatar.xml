@@ -1,0 +1,13 @@
+<EntityDef name="Avatar">
+    <Properties>
+        <Property name="level" type="Int32"/>
+        <Property name="hp" type="Float32"/>
+        <Property name="x" type="Float32"/>
+        <Property name="y" type="Float32"/>
+        <Property name="z" type="Float32"/>
+    </Properties>
+    <Methods>
+        <Method name="onDamage" side="Cell"/>
+        <Method name="onHeal" side="Base"/>
+    </Methods>
+</EntityDef>

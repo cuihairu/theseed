@@ -169,6 +169,11 @@ void BaseApp::handleEnterGame(login::ClientSession* session, const std::string& 
 
     sessionEntityMap_[session] = entity->id();
 
+    // Request cell entity creation on CellApp (component 2 by default)
+    requestCreateCell(entity->id(), entity->entityType(),
+                      runtime::Vector3{0.0f, 0.0f, 0.0f},
+                      runtime::ComponentId{2});
+
     resp.success = true;
     resp.entityId = entity->id();
     resp.entityType = entity->entityType();
