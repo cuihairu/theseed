@@ -10,6 +10,7 @@ std::vector<std::byte> InvocationCodec::encode(const RuntimeInvocation& invocati
     foundation::MemoryStream stream;
 
     stream.writeUint64(invocation.entityId);
+    stream.writeUint32(invocation.sourceComponent);
     stream.writeUint32(invocation.targetComponent);
     stream.writeString(invocation.entityType);
     stream.writeString(invocation.method);
@@ -32,6 +33,7 @@ RuntimeInvocation InvocationCodec::decode(std::span<const std::byte> data) {
 
     RuntimeInvocation invocation;
     invocation.entityId = stream.readUint64();
+    invocation.sourceComponent = stream.readUint32();
     invocation.targetComponent = stream.readUint32();
     invocation.entityType = stream.readString();
     invocation.method = stream.readString();

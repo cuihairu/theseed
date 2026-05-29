@@ -12,6 +12,7 @@ namespace theseed::runtime {
 
 struct RuntimeInvocation final {
     EntityId entityId = 0;
+    ComponentId sourceComponent = 0;
     ComponentId targetComponent = 0;
     std::string entityType;
     std::string method;
