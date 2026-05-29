@@ -264,3 +264,23 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_entity_action_test COMMAND theseed_entity_action_test)
+
+add_executable(theseed_cross_list_aoi_test CrossListAOITest.cpp)
+
+target_link_libraries(
+    theseed_cross_list_aoi_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_cross_list_aoi_test COMMAND theseed_cross_list_aoi_test)
+
+add_executable(theseed_controller_test ControllerTest.cpp)
+
+target_link_libraries(
+    theseed_controller_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_controller_test COMMAND theseed_controller_test)

@@ -19,6 +19,9 @@
 
 namespace theseed::runtime {
 
+class ControllerManager;
+struct Vector3;
+
 enum class EntitySide : std::uint8_t {
     Base = 0,
     Cell,
@@ -35,6 +38,7 @@ enum class EntityState : std::uint8_t {
 class Entity final {
 public:
     Entity(EntityId id, EntitySide side, const EntityDef& def);
+    ~Entity();
 
     EntityId id() const;
     EntitySide side() const;
@@ -239,6 +243,32 @@ public:
     foundation::TimerHandle addTimer(Duration delay, EntityTimerCallback callback);
     foundation::TimerHandle addPeriodicTimer(Duration interval, EntityTimerCallback callback);
 
+    // Position (set by Space/SpaceRuntime, read by controllers)
+    Vector3 position() const;
+    void setPosition(Vector3 pos);
+    bool hasPosition() const;
+
+    // Position query for other entities (set by SpaceRuntime)
+    using PositionProvider = std::function<std::optional<Vector3>(EntityId)>;
+    void setPositionProvider(PositionProvider provider);
+    std::optional<Vector3> queryEntityPosition(EntityId entityId) const;
+
+    // Controller system
+    using ControllerId = std::uint32_t;
+    using ControllerCallback = std::function<void(Entity&, ControllerId, std::int32_t, bool)>;
+
+    ControllerManager& controllers();
+    const ControllerManager& controllers() const;
+
+    ControllerId moveTo(const Vector3& target, float speed,
+                        float arrivalThreshold = 0.5F, std::int32_t userArg = 0);
+    ControllerId moveToEntity(EntityId targetId, float speed,
+                              float range = 1.0F, std::int32_t userArg = 0);
+    void cancelController(ControllerId id);
+
+    void setOnControllerComplete(ControllerCallback cb);
+    void notifyControllerComplete(ControllerId id, std::int32_t userArg, bool success);
+
 private:
     EntityId id_ = 0;
     EntitySide side_ = EntitySide::Base;
@@ -269,6 +299,11 @@ private:
     std::unordered_set<EntityId> children_;
     Vector3 velocity_{};
     bool hasVelocity_ = false;
+    Vector3 position_{};
+    bool hasPosition_ = false;
+    PositionProvider positionProvider_;
+    mutable std::unique_ptr<ControllerManager> controllers_;
+    ControllerCallback onControllerComplete_;
 };
 
 }  // namespace theseed::runtime

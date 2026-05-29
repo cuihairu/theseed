@@ -93,6 +93,7 @@ void Space::addEntity(Entity& entity, const Vector3& position) {
         throw std::invalid_argument("entity already exists in space");
     }
 
+    entity.setPosition(position);
     auto node = std::make_unique<CoordinateNode>(entity, position);
     coordinateSystem_->insert(*node);
     entities_.emplace(entity.id(), Member{

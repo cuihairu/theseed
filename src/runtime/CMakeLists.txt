@@ -2,6 +2,7 @@ add_library(
     theseed_runtime
     AOI.cpp
     CellRuntime.cpp
+    Controller.cpp
     DirtyMask.cpp
     Entity.cpp
     EntityCall.cpp

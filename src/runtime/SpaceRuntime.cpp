@@ -1,4 +1,5 @@
 #include "theseed/runtime/SpaceRuntime.h"
+#include "theseed/runtime/Controller.h"
 
 #include <stdexcept>
 #include <utility>
@@ -44,6 +45,9 @@ void SpaceRuntime::detach(TickScheduler& scheduler) {
 
 void SpaceRuntime::addEntity(Entity& entity, const Vector3& position) {
     space_->addEntity(entity, position);
+    entity.setPositionProvider([this](EntityId id) -> std::optional<Vector3> {
+        return space_->entityPosition(id);
+    });
 }
 
 void SpaceRuntime::removeEntity(EntityId entityId) {
@@ -104,6 +108,7 @@ const std::vector<PropertyDelta>* SpaceRuntime::findStagedDelta(EntityId entityI
 void SpaceRuntime::tick(TickContext& context) {
     processEntityInput();
     applyVelocity(context.deltaTime);
+    tickControllers(context.deltaTime);
     refreshWitnesses();
 }
 
@@ -146,6 +151,17 @@ void SpaceRuntime::refreshWitnesses() {
     for (auto& [entityId, binding] : witnesses_) {
         static_cast<void>(entityId);
         binding.trigger->refresh();
+    }
+}
+
+void SpaceRuntime::tickControllers(Duration deltaTime) {
+    auto dt = std::chrono::duration<float>(deltaTime).count();
+    if (dt <= 0.0f) return;
+
+    for (auto* entity : space_->entities()) {
+        if (entity == nullptr || !entity->isActive()) continue;
+        if (entity->controllers().count() == 0) continue;
+        entity->controllers().tick(dt);
     }
 }
 

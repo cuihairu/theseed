@@ -58,6 +58,7 @@ private:
     void refreshWitnesses();
     void processEntityInput();
     void applyVelocity(Duration deltaTime);
+    void tickControllers(Duration deltaTime);
     void stageDirtyEntities();
     void collectWitnessDirty();
 

@@ -1,4 +1,5 @@
 #include "theseed/runtime/Entity.h"
+#include "theseed/runtime/Controller.h"
 
 #include <string_view>
 
@@ -23,6 +24,8 @@ Entity::Entity(EntityId id, EntitySide side, const EntityDef& def)
     : id_(id), side_(side), def_(&def) {
     properties_.init(def);
 }
+
+Entity::~Entity() = default;
 
 EntityId Entity::id() const {
     return id_;
@@ -278,8 +281,78 @@ void Entity::notifyLeaveAoI(EntityId other) {
 }
 
 void Entity::notifyPositionChanged(Vector3 oldPos, Vector3 newPos) {
+    position_ = newPos;
+    hasPosition_ = true;
     if (onPositionChanged_) {
         onPositionChanged_(*this, oldPos, newPos);
+    }
+}
+
+Vector3 Entity::position() const {
+    return position_;
+}
+
+void Entity::setPosition(Vector3 pos) {
+    position_ = pos;
+    hasPosition_ = true;
+}
+
+bool Entity::hasPosition() const {
+    return hasPosition_;
+}
+
+void Entity::setPositionProvider(PositionProvider provider) {
+    positionProvider_ = std::move(provider);
+}
+
+std::optional<Vector3> Entity::queryEntityPosition(EntityId entityId) const {
+    if (positionProvider_) {
+        return positionProvider_(entityId);
+    }
+    return std::nullopt;
+}
+
+ControllerManager& Entity::controllers() {
+    if (!controllers_) {
+        controllers_ = std::make_unique<ControllerManager>();
+    }
+    return *controllers_;
+}
+
+const ControllerManager& Entity::controllers() const {
+    if (!controllers_) {
+        controllers_ = std::make_unique<ControllerManager>();
+    }
+    return *controllers_;
+}
+
+Entity::ControllerId Entity::moveTo(const Vector3& target, float speed,
+                                     float arrivalThreshold, std::int32_t userArg) {
+    auto ctrl = std::make_unique<MoveToPointController>(*this, target, speed,
+                                                         arrivalThreshold, userArg);
+    return controllers().add(std::move(ctrl));
+}
+
+Entity::ControllerId Entity::moveToEntity(EntityId targetId, float speed,
+                                           float range, std::int32_t userArg) {
+    auto ctrl = std::make_unique<MoveToEntityController>(*this, targetId, speed,
+                                                          range, userArg);
+    return controllers().add(std::move(ctrl));
+}
+
+void Entity::cancelController(ControllerId id) {
+    if (controllers_) {
+        controllers_->remove(id);
+    }
+}
+
+void Entity::setOnControllerComplete(ControllerCallback cb) {
+    onControllerComplete_ = std::move(cb);
+}
+
+void Entity::notifyControllerComplete(ControllerId id, std::int32_t userArg, bool success) {
+    if (onControllerComplete_) {
+        onControllerComplete_(*this, id, userArg, success);
     }
 }
 
@@ -386,6 +459,9 @@ void Entity::destroy() {
         clearMethodHandlers();
         clearPropertyChangedCallbacks();
         clearInput();
+        if (controllers_) {
+            controllers_->clear();
+        }
         parentId_ = 0;
         children_.clear();
     }
