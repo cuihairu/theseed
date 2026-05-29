@@ -158,7 +158,7 @@ void BaseApp::handleEnterGame(login::ClientSession* session, const std::string& 
     }
 
     // Try to restore existing entity or create new one
-    auto* entity = runtime_->createEntity("Player");
+    auto* entity = runtime_->createEntity("Avatar");
     if (!entity) {
         resp.success = false;
         resp.error = "failed to create entity";
