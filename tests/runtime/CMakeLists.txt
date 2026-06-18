@@ -284,3 +284,84 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_controller_test COMMAND theseed_controller_test)
+
+add_executable(theseed_entity_ref_test EntityRefTest.cpp)
+
+target_link_libraries(
+    theseed_entity_ref_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_entity_ref_test COMMAND theseed_entity_ref_test)
+
+add_executable(theseed_state_machine_test StateMachineTest.cpp)
+
+target_link_libraries(
+    theseed_state_machine_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_state_machine_test COMMAND theseed_state_machine_test)
+
+add_executable(theseed_property_constraint_test PropertyConstraintTest.cpp)
+
+target_link_libraries(
+    theseed_property_constraint_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_property_constraint_test COMMAND theseed_property_constraint_test)
+
+add_executable(theseed_entity_group_test EntityGroupTest.cpp)
+
+target_link_libraries(
+    theseed_entity_group_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_entity_group_test COMMAND theseed_entity_group_test)
+
+add_executable(theseed_behavior_tree_test BehaviorTreeTest.cpp)
+
+target_link_libraries(
+    theseed_behavior_tree_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_behavior_tree_test COMMAND theseed_behavior_tree_test)
+
+add_executable(theseed_transport_stats_collector_test TransportStatsCollectorTest.cpp)
+
+target_link_libraries(
+    theseed_transport_stats_collector_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_transport_stats_collector_test COMMAND theseed_transport_stats_collector_test)
+
+add_executable(theseed_load_profiler_test LoadProfilerTest.cpp)
+
+target_link_libraries(
+    theseed_load_profiler_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_load_profiler_test COMMAND theseed_load_profiler_test)
+
+add_executable(theseed_migration_route_window_test MigrationRouteWindowTest.cpp)
+
+target_link_libraries(
+    theseed_migration_route_window_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_migration_route_window_test COMMAND theseed_migration_route_window_test)
+
+add_executable(theseed_backup_topology_test BackupTopologyCoordinatorTest.cpp)
+
+target_link_libraries(
+    theseed_backup_topology_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_backup_topology_test COMMAND theseed_backup_topology_test)

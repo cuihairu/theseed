@@ -23,6 +23,18 @@ struct WitnessDelta final {
     EntityId entityId = 0;
     DetailLevel detailLevel = 0;
     std::vector<PropertyDelta> properties;
+    std::optional<Vector3> position;
+};
+
+enum class AoIEventType : std::uint8_t {
+    Enter = 0,
+    Leave = 1,
+};
+
+struct AoIEvent final {
+    EntityId observerId = 0;
+    EntityId targetId = 0;
+    AoIEventType type = AoIEventType::Enter;
 };
 
 class Witness final {
@@ -46,7 +58,10 @@ public:
 
     std::size_t collectDirty();
     void recordDirty(EntityId entityId, std::span<const PropertyDelta> properties);
+    void recordPosition(EntityId entityId, const Vector3& position);
     std::vector<WitnessDelta> flushDeltas();
+
+    std::vector<AoIEvent> flushAoIEvents();
 
 private:
     struct Entry final {
@@ -54,12 +69,14 @@ private:
         float distance = 0.0F;
         DetailLevel detailLevel = 0;
         std::array<std::vector<PropertyDelta>, 3> stagedDeltas;
+        std::optional<Vector3> stagedPosition;
     };
 
     Entity* owner_ = nullptr;
     float nearDistance_ = 25.0F;
     float midDistance_ = 60.0F;
     std::unordered_map<EntityId, Entry> entries_;
+    std::vector<AoIEvent> pendingAoIEvents_;
 };
 
 class WitnessViewTrigger final : public RangeTrigger {

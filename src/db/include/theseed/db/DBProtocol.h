@@ -24,6 +24,10 @@ inline constexpr const char* kListIds = "db.listIds";
 inline constexpr const char* kListIdsOk = "db.listIds.ok";
 inline constexpr const char* kListTypes = "db.listTypes";
 inline constexpr const char* kListTypesOk = "db.listTypes.ok";
+inline constexpr const char* kQueryAccount = "db.queryAccount";
+inline constexpr const char* kQueryAccountOk = "db.queryAccount.ok";
+inline constexpr const char* kCreateAccount = "db.createAccount";
+inline constexpr const char* kCreateAccountOk = "db.createAccount.ok";
 }  // namespace DBMethod
 
 class DBProtocol {
@@ -69,6 +73,29 @@ public:
                                        std::vector<core::EntityId>& outIds);
     static bool decodeListTypesResponse(std::span<const std::byte> payload,
                                          std::vector<std::string>& outTypes);
+
+    // Account-specific protocol
+    static std::vector<std::byte> encodeQueryAccountRequest(const std::string& username);
+    static std::vector<std::byte> encodeQueryAccountResponse(bool found,
+                                                              core::EntityId entityId,
+                                                              const std::string& password);
+    static bool decodeQueryAccountRequest(std::span<const std::byte> payload,
+                                           std::string& outUsername);
+    static bool decodeQueryAccountResponse(std::span<const std::byte> payload,
+                                            bool& outFound,
+                                            core::EntityId& outEntityId,
+                                            std::string& outPassword);
+
+    static std::vector<std::byte> encodeCreateAccountRequest(const std::string& username,
+                                                              const std::string& password);
+    static std::vector<std::byte> encodeCreateAccountResponse(bool success,
+                                                               core::EntityId entityId);
+    static bool decodeCreateAccountRequest(std::span<const std::byte> payload,
+                                            std::string& outUsername,
+                                            std::string& outPassword);
+    static bool decodeCreateAccountResponse(std::span<const std::byte> payload,
+                                             bool& outSuccess,
+                                             core::EntityId& outEntityId);
 };
 
 }  // namespace theseed::db

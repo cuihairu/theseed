@@ -160,3 +160,156 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_entity_restore_test COMMAND theseed_entity_restore_test)
+
+add_executable(theseed_client_prop_sync_test ClientPropertySyncTest.cpp)
+
+target_link_libraries(
+    theseed_client_prop_sync_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_client_prop_sync_test COMMAND theseed_client_prop_sync_test)
+
+add_executable(theseed_aoi_client_test AoIClientTest.cpp)
+
+target_link_libraries(
+    theseed_aoi_client_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_aoi_client_test COMMAND theseed_aoi_client_test)
+
+add_executable(theseed_client_action_test ClientActionTest.cpp)
+
+target_link_libraries(
+    theseed_client_action_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_client_action_test COMMAND theseed_client_action_test)
+
+add_executable(theseed_client_disconnect_test ClientDisconnectTest.cpp)
+
+target_link_libraries(
+    theseed_client_disconnect_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_client_disconnect_test COMMAND theseed_client_disconnect_test)
+
+add_executable(theseed_cell_spawn_test CellSpawnTest.cpp)
+
+target_link_libraries(
+    theseed_cell_spawn_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_cell_spawn_test COMMAND theseed_cell_spawn_test)
+
+add_executable(theseed_multi_space_test MultiSpaceTest.cpp)
+
+target_link_libraries(
+    theseed_multi_space_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_multi_space_test COMMAND theseed_multi_space_test)
+
+add_executable(theseed_client_event_test ClientEventTest.cpp)
+
+target_link_libraries(
+    theseed_client_event_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_client_event_test COMMAND theseed_client_event_test)
+
+add_executable(theseed_migration_test MigrationTest.cpp)
+
+target_link_libraries(
+    theseed_migration_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_migration_test COMMAND theseed_migration_test)
+
+add_executable(theseed_witness_sync_test WitnessSyncTest.cpp)
+
+target_link_libraries(
+    theseed_witness_sync_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_witness_sync_test COMMAND theseed_witness_sync_test)
+
+add_executable(theseed_space_teleport_test SpaceTeleportTest.cpp)
+
+target_link_libraries(
+    theseed_space_teleport_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_space_teleport_test COMMAND theseed_space_teleport_test)
+
+add_executable(theseed_position_sync_test PositionSyncTest.cpp)
+
+target_link_libraries(
+    theseed_position_sync_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_position_sync_test COMMAND theseed_position_sync_test)
+
+add_executable(theseed_destruction_test DestructionTest.cpp)
+
+target_link_libraries(
+    theseed_destruction_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_destruction_test COMMAND theseed_destruction_test)
+
+add_executable(theseed_property_flags_test PropertyFlagsTest.cpp)
+
+target_link_libraries(
+    theseed_property_flags_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_property_flags_test COMMAND theseed_property_flags_test)
+
+add_executable(theseed_method_dispatch_test MethodDispatchTest.cpp)
+
+target_link_libraries(
+    theseed_method_dispatch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_method_dispatch_test COMMAND theseed_method_dispatch_test)
+
+add_executable(theseed_client_method_test ClientMethodTest.cpp)
+
+target_link_libraries(
+    theseed_client_method_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_client_method_test COMMAND theseed_client_method_test)
+
+add_executable(theseed_entity_query_test EntityQueryTest.cpp)
+
+target_link_libraries(
+    theseed_entity_query_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_query_test COMMAND theseed_entity_query_test)
+
+add_executable(theseed_entity_query_store_test EntityQueryStoreTest.cpp)
+
+target_link_libraries(
+    theseed_entity_query_store_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_query_store_test COMMAND theseed_entity_query_store_test)

@@ -49,6 +49,7 @@ struct EntityData {
     PropertyData* findProperty(PropertyId id);
     const PropertyData* findProperty(PropertyId id) const;
     PropertyData* findPropertyByName(const std::string& name);
+    const PropertyData* findPropertyByName(const std::string& name) const;
 };
 
 void encodeProperty(MemoryStream& stream, const PropertyData& prop);

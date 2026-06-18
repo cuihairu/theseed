@@ -2,14 +2,17 @@
 #include "theseed/core/IEntityStore.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
+#include "theseed/runtime/PropertyReplication.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 
 using theseed::core::BaseRuntime;
 using theseed::core::InMemoryEntityStore;
@@ -20,7 +23,11 @@ using theseed::runtime::EntitySide;
 using theseed::runtime::EntityState;
 using theseed::runtime::InMemoryRuntimeTransport;
 using theseed::runtime::PropertyType;
+using theseed::runtime::PropertyReplication;
 using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
+using theseed::runtime::TickScheduler;
+using theseed::runtime::TransportStats;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -68,6 +75,41 @@ static std::unique_ptr<BaseRuntime> makeRuntime(
     }
     return std::make_unique<BaseRuntime>(transport, store, 1);
 }
+
+class RecordingTransport final : public theseed::runtime::IRuntimeTransport {
+public:
+    SendResult send(RuntimeInvocation invocation) override {
+        sent.push_back(std::move(invocation));
+        ++stats_.messagesSent;
+        return SendResult::Accepted;
+    }
+
+    std::size_t receive(theseed::runtime::ComponentId,
+                        RuntimeInvocation*,
+                        std::size_t) override {
+        return 0;
+    }
+
+    std::size_t pendingCount() const override {
+        return sent.size();
+    }
+
+    void flush() override {
+        ++flushCount;
+    }
+
+    TransportStats stats() const override {
+        auto s = stats_;
+        s.outboundQueueDepth = sent.size();
+        return s;
+    }
+
+    std::vector<RuntimeInvocation> sent;
+    int flushCount = 0;
+
+private:
+    TransportStats stats_{};
+};
 
 static void testCreateEntity() {
     TEST("create entity with factory");
@@ -204,6 +246,107 @@ static void testAutoSave() {
     ok = ok && loaded->getProperty<std::int32_t>(0) == 100;
 
     if (ok) PASS(); else FAIL("auto-save failed");
+}
+
+static void testAutoSaveDoesNotClearRuntimeDirty() {
+    TEST("auto-save keeps pending runtime property sync dirty");
+
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto transport = std::make_shared<RecordingTransport>();
+    BaseRuntime rt(transport, store, 1);
+    auto def = makeAvatarDef();
+    rt.registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt.createEntity("Avatar");
+    auto id = entity->id();
+    entity->setProperty<std::int32_t>(0, 123);
+
+    rt.setAutoSaveInterval(std::chrono::milliseconds{100});
+
+    theseed::runtime::TickContext ctx;
+    ctx.tickIndex = 1;
+    ctx.deltaTime = std::chrono::milliseconds{150};
+    rt.tick(ctx);
+
+    bool ok = store->exists(id);
+    ok = ok && transport->sent.empty();
+    ok = ok && entity->isPropertyDirty(0);
+
+    rt.setCellEntityCall(id, 2);
+    ctx.tickIndex = 2;
+    ctx.deltaTime = std::chrono::milliseconds{1};
+    rt.tick(ctx);
+
+    ok = ok && transport->sent.size() == 1;
+    if (ok) {
+        ok = ok && transport->sent[0].method == "property.syncToCell";
+        auto deltas = PropertyReplication::decodeDelta(transport->sent[0].payload);
+        ok = ok && deltas.size() == 1;
+        ok = ok && deltas[0].propertyId == 0;
+        std::int32_t value = 0;
+        std::memcpy(&value, deltas[0].value.data(), sizeof(value));
+        ok = ok && value == 123;
+    }
+
+    if (ok) PASS(); else FAIL("runtime dirty was consumed by autosave");
+}
+
+static void testCellDeltaMarksPersistenceWithoutRuntimeEcho() {
+    TEST("cell delta marks persistence without base->cell echo");
+
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto transport = std::make_shared<RecordingTransport>();
+    BaseRuntime rt(transport, store, 1);
+    auto def = makeAvatarDef();
+    rt.registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt.createEntity("Avatar");
+    auto id = entity->id();
+    rt.setCellEntityCall(id, 2);
+    entity->clearDirtyFlags();
+
+    std::int32_t level = 44;
+    theseed::runtime::PropertyDelta delta;
+    delta.propertyId = 0;
+    delta.value.resize(sizeof(level));
+    std::memcpy(delta.value.data(), &level, sizeof(level));
+    auto encoded = PropertyReplication::encodeDelta(std::span<const theseed::runtime::PropertyDelta>(&delta, 1));
+
+    RuntimeInvocation invocation;
+    invocation.entityId = id;
+    invocation.targetComponent = 1;
+    invocation.entityType = "Avatar";
+    invocation.method = "property.syncToBase";
+    invocation.payload = std::move(encoded);
+
+    bool ok = rt.dispatchInvocation(invocation);
+    ok = ok && entity->getProperty<std::int32_t>(0) == 44;
+    ok = ok && !entity->isPropertyDirty(0);
+    ok = ok && entity->propertyBlock().persistenceDirtyMask().isDirty(0);
+
+    rt.setAutoSaveInterval(std::chrono::milliseconds{100});
+    theseed::runtime::TickContext ctx;
+    ctx.tickIndex = 1;
+    ctx.deltaTime = std::chrono::milliseconds{150};
+    rt.tick(ctx);
+
+    ok = ok && transport->sent.empty();
+
+    theseed::core::EntityData stored;
+    ok = ok && store->load(id, "Avatar", stored);
+    if (ok) {
+        bool foundLevel = false;
+        for (const auto& prop : stored.properties) {
+            if (prop.id != 0 || prop.rawValue.size() != sizeof(level)) continue;
+            std::int32_t storedLevel = 0;
+            std::memcpy(&storedLevel, prop.rawValue.data(), sizeof(storedLevel));
+            foundLevel = true;
+            ok = ok && storedLevel == 44;
+        }
+        ok = ok && foundLevel;
+    }
+
+    if (ok) PASS(); else FAIL("cell delta persistence/runtime dirty separation failed");
 }
 
 static void testSetCellEntityCall() {
@@ -405,6 +548,56 @@ static void testForEachEntity() {
     if (ok) PASS(); else FAIL("visited=" + std::to_string(visited.size()));
 }
 
+static void testSchedulerPhasesSyncBeforeFlush() {
+    TEST("scheduler phases: sync build stages before flush sends");
+
+    class SyncProbe final : public theseed::runtime::ITickable {
+    public:
+        explicit SyncProbe(std::shared_ptr<RecordingTransport> transport)
+            : transport_(std::move(transport)) {}
+
+        void tick(theseed::runtime::TickContext&) override {
+            sentDuringSync = transport_->sent.size();
+        }
+
+        std::size_t sentDuringSync = 0;
+
+    private:
+        std::shared_ptr<RecordingTransport> transport_;
+    };
+
+    auto transport = std::make_shared<RecordingTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    BaseRuntime rt(transport, store, 1);
+    auto def = makeAvatarDef();
+    rt.registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt.createEntity("Avatar");
+    rt.setCellEntityCall(entity->id(), 2);
+    entity->clearDirtyFlags();
+    entity->setProperty<std::int32_t>(0, 7);
+
+    TickScheduler scheduler(std::chrono::milliseconds{0});
+    rt.attach(scheduler);
+    SyncProbe probe(transport);
+    scheduler.registerTickable(theseed::runtime::TickPhase::SyncBuild, probe);
+
+    scheduler.runOnce();
+
+    bool ok = transport->sent.size() == 1;
+    ok = ok && probe.sentDuringSync == 0;
+    ok = ok && transport->flushCount == 1;
+    ok = ok && transport->sent[0].method == "property.syncToCell";
+    ok = ok && !entity->isPropertyDirty(0);
+
+    static_cast<void>(scheduler.unregisterTickable(theseed::runtime::TickPhase::SyncBuild, probe));
+    rt.detach(scheduler);
+
+    if (ok) PASS(); else FAIL("sent=" + std::to_string(transport->sent.size())
+                              + " syncSent=" + std::to_string(probe.sentDuringSync)
+                              + " flush=" + std::to_string(transport->flushCount));
+}
+
 int main() {
     std::cout << "BaseRuntime tests:\n";
 
@@ -414,6 +607,8 @@ int main() {
     testMultipleEntities();
     testSaveAndLoad();
     testAutoSave();
+    testAutoSaveDoesNotClearRuntimeDirty();
+    testCellDeltaMarksPersistenceWithoutRuntimeEcho();
     testSetCellEntityCall();
     testDispatchInvocation();
     testUnknownEntityType();
@@ -422,6 +617,7 @@ int main() {
     testFindEntitiesByType();
     testNameBasedPropertyAccess();
     testForEachEntity();
+    testSchedulerPhasesSyncBeforeFlush();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

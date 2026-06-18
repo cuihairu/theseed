@@ -5,9 +5,20 @@
 
 namespace theseed::runtime {
 
+namespace {
+
+bool isPersistableProperty(const PropertyDescriptor& desc) {
+    return desc.flags == PropertyFlag::None || hasFlag(desc.flags, PropertyFlag::Persistent);
+}
+
+}  // namespace
+
 void PropertyBlock::init(const EntityDef& def) {
     def_ = &def;
     dirtyMask_.resize(def.propertyCount());
+    viewDirtyMask_.resize(def.propertyCount());
+    clientDirtyMask_.resize(def.propertyCount());
+    persistenceDirtyMask_.resize(def.propertyCount());
     storage_.assign(def.storageSize(), std::byte{0});
 
     for (const auto& desc : def.properties()) {
@@ -36,12 +47,43 @@ const DirtyMask& PropertyBlock::dirtyMask() const {
     return dirtyMask_;
 }
 
+const DirtyMask& PropertyBlock::viewDirtyMask() const {
+    return viewDirtyMask_;
+}
+
+const DirtyMask& PropertyBlock::clientDirtyMask() const {
+    return clientDirtyMask_;
+}
+
+const DirtyMask& PropertyBlock::persistenceDirtyMask() const {
+    return persistenceDirtyMask_;
+}
+
 bool PropertyBlock::isDirty(PropertyId id) const {
     return dirtyMask_.isDirty(id);
 }
 
 void PropertyBlock::clearDirty() {
     dirtyMask_.clear();
+    viewDirtyMask_.clear();
+    clientDirtyMask_.clear();
+    persistenceDirtyMask_.clear();
+}
+
+void PropertyBlock::clearRuntimeDirty() {
+    dirtyMask_.clear();
+}
+
+void PropertyBlock::clearViewDirty() {
+    viewDirtyMask_.clear();
+}
+
+void PropertyBlock::clearClientDirty() {
+    clientDirtyMask_.clear();
+}
+
+void PropertyBlock::clearPersistenceDirty() {
+    persistenceDirtyMask_.clear();
 }
 
 std::string_view PropertyBlock::getString(PropertyId id) const {
@@ -61,7 +103,7 @@ void PropertyBlock::setString(PropertyId id, std::string_view value) {
     std::vector<std::byte> newData(value.size());
     std::memcpy(newData.data(), value.data(), value.size());
     varStorage_[id] = std::move(newData);
-    dirtyMask_.mark(id);
+    markDirty(id, PropertyDirtyTarget::All);
 
     auto& cur = varStorage_[id];
     fireVarCallback(id, oldVal, cur);
@@ -82,19 +124,32 @@ void PropertyBlock::setBlob(PropertyId id, std::span<const std::byte> value) {
 
     std::vector<std::byte> newData(value.begin(), value.end());
     varStorage_[id] = std::move(newData);
-    dirtyMask_.mark(id);
+    markDirty(id, PropertyDirtyTarget::All);
 
     auto& cur = varStorage_[id];
     fireVarCallback(id, oldVal, cur);
 }
 
 std::vector<PropertyDelta> PropertyBlock::buildDirtyDelta(PropertyFlag excludeFlags) const {
-    auto deltas = PropertyReplication::buildDirtyDelta(def(), data(), dirtyMask_, excludeFlags);
+    return buildDeltaFromMask(dirtyMask_, excludeFlags);
+}
+
+std::vector<PropertyDelta> PropertyBlock::buildViewDirtyDelta(PropertyFlag excludeFlags) const {
+    return buildDeltaFromMask(viewDirtyMask_, excludeFlags);
+}
+
+std::vector<PropertyDelta> PropertyBlock::buildClientDirtyDelta(PropertyFlag excludeFlags) const {
+    return buildDeltaFromMask(clientDirtyMask_, excludeFlags);
+}
+
+std::vector<PropertyDelta> PropertyBlock::buildDeltaFromMask(const DirtyMask& mask,
+                                                             PropertyFlag excludeFlags) const {
+    auto deltas = PropertyReplication::buildDirtyDelta(def(), data(), mask, excludeFlags);
 
     for (const auto& desc : def_->properties()) {
         if (!EntityDef::isVariableSized(desc.type)) continue;
         if (static_cast<std::uint32_t>(desc.flags) & static_cast<std::uint32_t>(excludeFlags)) continue;
-        if (!dirtyMask_.isDirty(desc.id)) continue;
+        if (!mask.isDirty(desc.id)) continue;
 
         auto it = varStorage_.find(desc.id);
         if (it == varStorage_.end()) continue;
@@ -133,6 +188,11 @@ std::vector<PropertyDelta> PropertyBlock::buildFullSnapshot(PropertyFlag exclude
 }
 
 void PropertyBlock::applyDelta(std::span<const PropertyDelta> deltas, bool markDirty) {
+    applyDelta(deltas, markDirty ? PropertyDirtyTarget::All : PropertyDirtyTarget::None);
+}
+
+void PropertyBlock::applyDelta(std::span<const PropertyDelta> deltas,
+                               PropertyDirtyTarget markTargets) {
     for (const auto& delta : deltas) {
         const auto& descriptor = def_->property(delta.propertyId);
 
@@ -160,8 +220,8 @@ void PropertyBlock::applyDelta(std::span<const PropertyDelta> deltas, bool markD
             }
         }
 
-        if (markDirty) {
-            dirtyMask_.mark(delta.propertyId);
+        if (markTargets != PropertyDirtyTarget::None) {
+            markDirty(delta.propertyId, markTargets);
         }
     }
 }
@@ -204,6 +264,23 @@ void PropertyBlock::fireVarCallback(PropertyId id, const std::vector<std::byte>&
     if (it == changeCallbacks_.end()) return;
 
     it->second(id, oldVal.data(), newVal.data(), newVal.size());
+}
+
+void PropertyBlock::markDirty(PropertyId id, PropertyDirtyTarget targets) {
+    if (hasDirtyTarget(targets, PropertyDirtyTarget::Runtime)) {
+        dirtyMask_.mark(id);
+    }
+    if (hasDirtyTarget(targets, PropertyDirtyTarget::View)) {
+        viewDirtyMask_.mark(id);
+    }
+    if (hasDirtyTarget(targets, PropertyDirtyTarget::Client)) {
+        clientDirtyMask_.mark(id);
+    }
+    if (hasDirtyTarget(targets, PropertyDirtyTarget::Persistence)) {
+        if (isPersistableProperty(def().property(id))) {
+            persistenceDirtyMask_.mark(id);
+        }
+    }
 }
 
 }  // namespace theseed::runtime

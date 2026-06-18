@@ -49,6 +49,13 @@ PropertyData* EntityData::findPropertyByName(const std::string& name) {
     return nullptr;
 }
 
+const PropertyData* EntityData::findPropertyByName(const std::string& name) const {
+    for (const auto& prop : properties) {
+        if (prop.name == name) return &prop;
+    }
+    return nullptr;
+}
+
 void encodeProperty(MemoryStream& stream, const PropertyData& prop) {
     stream.writeUint32(prop.id);
     stream.writeString(prop.name);

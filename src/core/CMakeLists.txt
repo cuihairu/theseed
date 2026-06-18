@@ -5,11 +5,13 @@ add_library(theseed_core
     BaseRuntime.cpp
     EntityDefRegistry.cpp
     BaseApp.cpp
-    CellApp.cpp)
+    CellApp.cpp
+    EntityQuery.cpp)
 
 target_link_libraries(theseed_core PUBLIC theseed_project_options)
 target_link_libraries(theseed_core PUBLIC theseed_login)
 target_link_libraries(theseed_core PUBLIC theseed_runtime)
+target_link_libraries(theseed_core PUBLIC theseed_ops)
 target_link_libraries(theseed_core PUBLIC theseed_foundation)
 
 target_include_directories(theseed_core

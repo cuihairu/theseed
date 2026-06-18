@@ -25,10 +25,14 @@ runtime::RuntimeInvocation RemoteEntityStore::request(
     // Pump until we get a response
     runtime::RuntimeInvocation resp;
     while (true) {
+        if (pumpFn_) pumpFn_();
         auto count = transport_->receive(localComponentId_, &resp, 1);
         if (count > 0) return resp;
-        // Yield briefly in real deployment; in tests transport is synchronous
     }
+}
+
+void RemoteEntityStore::setPumpFunction(PumpFn pumpFn) {
+    pumpFn_ = std::move(pumpFn);
 }
 
 bool RemoteEntityStore::load(core::EntityId id, const std::string& entityType,

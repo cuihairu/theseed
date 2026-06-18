@@ -90,6 +90,9 @@ int main() {
     if (transport->pendingCount() != 1) {
         return fail("ghost_sync_pending");
     }
+    if (transport->stats().messagesSent != 1) {
+        return fail("ghost_sync_not_flushed");
+    }
     if (realEntity.isPropertyDirty(hpId)) {
         return fail("ghost_sync_clear_dirty");
     }

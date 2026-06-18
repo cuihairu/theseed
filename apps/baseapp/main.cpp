@@ -1,5 +1,6 @@
 #include "theseed/core/BaseApp.h"
 #include "theseed/core/FileEntityStore.h"
+#include "theseed/db/RemoteEntityStore.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 #include "theseed/runtime/TickScheduler.h"
@@ -25,6 +26,11 @@ struct PeerConfig {
     std::uint16_t port;
 };
 
+struct DbConfig {
+    std::string host;
+    std::uint16_t port = 20003;
+};
+
 int main(int argc, char** argv) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
@@ -33,6 +39,7 @@ int main(int argc, char** argv) {
     std::string storePath = "data/entities";
     std::uint16_t clientPort = 20000;
     std::vector<PeerConfig> peers;
+    std::optional<DbConfig> dbConfig;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -43,7 +50,6 @@ int main(int argc, char** argv) {
         } else if (arg == "--store" && i + 1 < argc) {
             storePath = argv[++i];
         } else if (arg == "--peer" && i + 2 < argc) {
-            // --peer <componentId> <host:port>
             auto compId = static_cast<theseed::runtime::ComponentId>(std::stoi(argv[++i]));
             std::string addr = argv[++i];
             auto colon = addr.rfind(':');
@@ -53,16 +59,49 @@ int main(int argc, char** argv) {
             }
             peers.push_back({compId, addr.substr(0, colon),
                             static_cast<std::uint16_t>(std::stoi(addr.substr(colon + 1)))});
+        } else if (arg == "--db" && i + 1 < argc) {
+            std::string addr = argv[++i];
+            auto colon = addr.rfind(':');
+            if (colon == std::string::npos) {
+                std::cerr << "Invalid DB address: " << addr << std::endl;
+                return 1;
+            }
+            dbConfig = DbConfig{addr.substr(0, colon),
+                                static_cast<std::uint16_t>(std::stoi(addr.substr(colon + 1)))};
         }
     }
 
-    auto hub = std::make_shared<theseed::runtime::TransportHub>(
-        theseed::runtime::ComponentId{1});
-    auto store = std::make_shared<theseed::core::FileEntityStore>(storePath);
+    constexpr theseed::runtime::ComponentId kBaseAppComponentId{1};
+    constexpr theseed::runtime::ComponentId kDbAppComponentId{10};
+
+    auto hub = std::make_shared<theseed::runtime::TransportHub>(kBaseAppComponentId);
+
+    std::shared_ptr<theseed::core::IEntityStore> store;
+    if (dbConfig.has_value()) {
+        auto dbConn = theseed::runtime::TcpConnection::create();
+        if (!dbConn->connect(dbConfig->host, dbConfig->port)) {
+            std::cerr << "Failed to connect to DBApp at "
+                      << dbConfig->host << ":" << dbConfig->port << std::endl;
+            return 1;
+        }
+        auto dbTransport = std::make_shared<theseed::runtime::NetworkTransport>(dbConn);
+        hub->connectPeer(kDbAppComponentId, dbTransport);
+
+        auto remoteStore = std::make_shared<theseed::db::RemoteEntityStore>(
+            hub, kDbAppComponentId, kBaseAppComponentId);
+        remoteStore->setPumpFunction([&hub]() { hub->tick(); });
+        store = remoteStore;
+
+        std::cout << "Connected to DBApp at "
+                  << dbConfig->host << ":" << dbConfig->port << std::endl;
+    } else {
+        store = std::make_shared<theseed::core::FileEntityStore>(storePath);
+        std::cout << "Using local FileEntityStore at " << storePath << std::endl;
+    }
 
     theseed::core::BaseApp::Config config;
     config.entityDefPath = entityDefPath;
-    config.componentId = theseed::runtime::ComponentId{1};
+    config.componentId = kBaseAppComponentId;
     config.clientListenPort = clientPort;
 
     theseed::core::BaseApp app(std::move(config), hub, store);
@@ -75,7 +114,6 @@ int main(int argc, char** argv) {
     theseed::runtime::TickScheduler scheduler;
     app.attach(scheduler);
 
-    // Connect to CellApp peers
     for (const auto& peer : peers) {
         auto conn = theseed::runtime::TcpConnection::create();
         if (!conn->connect(peer.host, peer.port)) {

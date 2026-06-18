@@ -27,6 +27,15 @@ public:
     Witness& ensureWitness(Entity& owner, float viewRange);
     Witness* findWitness(EntityId ownerEntityId) const;
     const std::vector<PropertyDelta>* findStagedDelta(EntityId entityId) const;
+    std::vector<PropertyDelta> findStagedDelta(EntityId entityId,
+                                               PropertyFlag excludeFlags) const;
+    std::vector<AoIEvent> collectAoIEvents();
+
+    struct ObserverDelta {
+        EntityId observerId = 0;
+        std::vector<WitnessDelta> deltas;
+    };
+    std::vector<ObserverDelta> collectWitnessDeltas();
 
     void tick(TickContext& context) override;
     void sync(TickContext& context);
@@ -66,7 +75,9 @@ private:
     RefreshPump refreshPump_;
     SyncPump syncPump_;
     std::unordered_map<EntityId, WitnessBinding> witnesses_;
-    std::unordered_map<EntityId, std::vector<PropertyDelta>> stagedDeltas_;
+    std::unordered_map<EntityId, std::vector<PropertyDelta>> stagedViewDeltas_;
+    std::unordered_map<EntityId, std::vector<PropertyDelta>> stagedRuntimeDeltas_;
+    std::unordered_map<EntityId, Vector3> stagedPositions_;
 };
 
 }  // namespace theseed::runtime

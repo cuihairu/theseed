@@ -7,6 +7,7 @@
 
 using theseed::runtime::EntityDef;
 using theseed::runtime::PropertyBlock;
+using theseed::runtime::PropertyDirtyTarget;
 using theseed::runtime::PropertyType;
 
 namespace {
@@ -28,6 +29,17 @@ int main() {
     source.init(def);
     source.set<std::int32_t>(hpId, 100);
     source.set<float>(speedId, 2.5F);
+
+    if (!source.dirtyMask().any() || !source.viewDirtyMask().any()
+        || !source.clientDirtyMask().any() || !source.persistenceDirtyMask().any()) {
+        return fail("set_marks_all_dirty_targets");
+    }
+
+    source.clearPersistenceDirty();
+    if (!source.dirtyMask().any() || !source.viewDirtyMask().any()
+        || !source.clientDirtyMask().any() || source.persistenceDirtyMask().any()) {
+        return fail("clear_persistence_keeps_sync_dirty");
+    }
 
     const auto deltas = source.buildDirtyDelta();
     if (deltas.size() != 2) {
@@ -59,6 +71,17 @@ int main() {
     target.applyDelta(deltas, true);
     if (!target.isDirty(hpId) || !target.isDirty(speedId) || target.isDirty(manaId)) {
         return fail("apply_mark_dirty");
+    }
+
+    target.clearDirty();
+    target.applyDelta(deltas, PropertyDirtyTarget::Client | PropertyDirtyTarget::Persistence);
+    if (target.dirtyMask().any() || target.viewDirtyMask().any()) {
+        return fail("apply_targeted_no_runtime_or_view_dirty");
+    }
+    if (!target.clientDirtyMask().isDirty(hpId) || !target.clientDirtyMask().isDirty(speedId)
+        || !target.persistenceDirtyMask().isDirty(hpId)
+        || !target.persistenceDirtyMask().isDirty(speedId)) {
+        return fail("apply_targeted_marks_selected_dirty");
     }
 
     const auto encoded = theseed::runtime::PropertyReplication::encodeDelta(deltas);

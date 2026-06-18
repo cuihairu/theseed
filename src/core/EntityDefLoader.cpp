@@ -168,6 +168,47 @@ runtime::PropertyType parsePropertyType(const std::string& typeStr) {
     throw std::runtime_error("Unknown property type: " + typeStr);
 }
 
+void encodeNumericValue(runtime::PropertyType type, const std::string& str, std::byte* out) {
+    switch (type) {
+        case runtime::PropertyType::Int8:
+        case runtime::PropertyType::UInt8: {
+            auto v = static_cast<std::uint8_t>(std::stoi(str));
+            std::memcpy(out, &v, 1);
+            break;
+        }
+        case runtime::PropertyType::Int16:
+        case runtime::PropertyType::UInt16: {
+            auto v = static_cast<std::uint16_t>(std::stoi(str));
+            std::memcpy(out, &v, 2);
+            break;
+        }
+        case runtime::PropertyType::Int32:
+        case runtime::PropertyType::UInt32: {
+            auto v = static_cast<std::uint32_t>(std::stoi(str));
+            std::memcpy(out, &v, 4);
+            break;
+        }
+        case runtime::PropertyType::Int64:
+        case runtime::PropertyType::UInt64: {
+            auto v = static_cast<std::uint64_t>(std::stoll(str));
+            std::memcpy(out, &v, 8);
+            break;
+        }
+        case runtime::PropertyType::Float32: {
+            auto v = std::stof(str);
+            std::memcpy(out, &v, 4);
+            break;
+        }
+        case runtime::PropertyType::Float64: {
+            auto v = std::stod(str);
+            std::memcpy(out, &v, 8);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 }  // anonymous namespace
 
 std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xml) {
@@ -309,7 +350,29 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                     }
                 }
 
-                def->addProperty(std::move(name), type, 0, flags, std::move(defaultValue));
+                // Parse min/max constraints for numeric types
+                std::vector<std::byte> minValue;
+                std::vector<std::byte> maxValue;
+                auto minStr = findAttr(propNode, "minValue");
+                auto maxStr = findAttr(propNode, "maxValue");
+
+                if (!minStr.empty() && !runtime::EntityDef::isVariableSized(type)) {
+                    auto fixedSz = runtime::EntityDef::fixedSizeOfType(type);
+                    if (fixedSz > 0) {
+                        minValue.resize(fixedSz, std::byte{0});
+                        encodeNumericValue(type, minStr, minValue.data());
+                    }
+                }
+                if (!maxStr.empty() && !runtime::EntityDef::isVariableSized(type)) {
+                    auto fixedSz = runtime::EntityDef::fixedSizeOfType(type);
+                    if (fixedSz > 0) {
+                        maxValue.resize(fixedSz, std::byte{0});
+                        encodeNumericValue(type, maxStr, maxValue.data());
+                    }
+                }
+
+                def->addProperty(std::move(name), type, 0, flags, std::move(defaultValue),
+                                 std::move(minValue), std::move(maxValue));
             }
         } else if (child.tag == "Methods") {
             for (auto& methNode : child.children) {

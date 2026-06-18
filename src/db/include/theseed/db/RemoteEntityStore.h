@@ -4,6 +4,7 @@
 #include "theseed/runtime/RuntimeTransport.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,9 +13,13 @@ namespace theseed::db {
 
 class RemoteEntityStore final : public core::IEntityStore {
 public:
+    using PumpFn = std::function<void()>;
+
     RemoteEntityStore(std::shared_ptr<runtime::IRuntimeTransport> transport,
                       runtime::ComponentId dbComponentId,
                       runtime::ComponentId localComponentId);
+
+    void setPumpFunction(PumpFn pumpFn);
 
     bool load(core::EntityId id, const std::string& entityType,
               core::EntityData& out) override;
@@ -31,6 +36,7 @@ private:
     std::shared_ptr<runtime::IRuntimeTransport> transport_;
     runtime::ComponentId dbComponentId_;
     runtime::ComponentId localComponentId_;
+    PumpFn pumpFn_;
 };
 
 }  // namespace theseed::db

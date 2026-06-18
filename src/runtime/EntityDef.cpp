@@ -72,7 +72,8 @@ bool EntityDef::isVariableSized(PropertyType type) {
 }
 
 PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size_t size,
-                                   PropertyFlag flags, std::vector<std::byte> defaultValue) {
+                                   PropertyFlag flags, std::vector<std::byte> defaultValue,
+                                   std::vector<std::byte> minValue, std::vector<std::byte> maxValue) {
     if (name.empty()) {
         throw std::invalid_argument("property name is empty");
     }
@@ -88,6 +89,8 @@ PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size
     descriptor.offset = storageSize_;
     descriptor.flags = flags;
     descriptor.defaultValue = std::move(defaultValue);
+    descriptor.minValue = std::move(minValue);
+    descriptor.maxValue = std::move(maxValue);
 
     if (size == 0 && !isVariableSized(type)) {
         descriptor.size = fixedSizeOfType(type);

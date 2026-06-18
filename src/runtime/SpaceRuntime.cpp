@@ -97,12 +97,35 @@ Witness* SpaceRuntime::findWitness(EntityId ownerEntityId) const {
 }
 
 const std::vector<PropertyDelta>* SpaceRuntime::findStagedDelta(EntityId entityId) const {
-    const auto iter = stagedDeltas_.find(entityId);
-    if (iter == stagedDeltas_.end()) {
+    const auto iter = stagedViewDeltas_.find(entityId);
+    if (iter == stagedViewDeltas_.end()) {
         return nullptr;
     }
 
     return &iter->second;
+}
+
+std::vector<PropertyDelta> SpaceRuntime::findStagedDelta(EntityId entityId,
+                                                         PropertyFlag excludeFlags) const {
+    std::vector<PropertyDelta> result;
+    const auto iter = stagedRuntimeDeltas_.find(entityId);
+    if (iter == stagedRuntimeDeltas_.end()) {
+        return result;
+    }
+
+    const auto* entity = space_->findEntity(entityId);
+    if (entity == nullptr) {
+        return result;
+    }
+
+    for (const auto& delta : iter->second) {
+        const auto& desc = entity->propertyBlock().def().property(delta.propertyId);
+        if (static_cast<std::uint32_t>(desc.flags) & static_cast<std::uint32_t>(excludeFlags)) {
+            continue;
+        }
+        result.push_back(delta);
+    }
+    return result;
 }
 
 void SpaceRuntime::tick(TickContext& context) {
@@ -138,6 +161,7 @@ void SpaceRuntime::applyVelocity(Duration deltaTime) {
         };
         space_->updateEntityPosition(entity->id(), newPos);
         entity->notifyPositionChanged(*pos, newPos);
+        stagedPositions_[entity->id()] = newPos;
     }
 }
 
@@ -145,6 +169,7 @@ void SpaceRuntime::sync(TickContext& context) {
     static_cast<void>(context);
     stageDirtyEntities();
     collectWitnessDirty();
+    stagedPositions_.clear();
 }
 
 void SpaceRuntime::refreshWitnesses() {
@@ -166,19 +191,24 @@ void SpaceRuntime::tickControllers(Duration deltaTime) {
 }
 
 void SpaceRuntime::stageDirtyEntities() {
-    stagedDeltas_.clear();
+    stagedViewDeltas_.clear();
+    stagedRuntimeDeltas_.clear();
     for (auto* entity : space_->entities()) {
         if (entity == nullptr) {
             continue;
         }
 
-        const auto delta = entity->buildDirtyPropertyDelta();
-        if (delta.empty()) {
-            continue;
+        const auto viewDelta = entity->buildViewDirtyPropertyDelta();
+        if (!viewDelta.empty()) {
+            stagedViewDeltas_.emplace(entity->id(), viewDelta);
+            entity->clearViewDirtyFlags();
         }
 
-        stagedDeltas_.emplace(entity->id(), delta);
-        entity->clearDirtyFlags();
+        const auto runtimeDelta = entity->buildDirtyPropertyDelta();
+        if (!runtimeDelta.empty()) {
+            stagedRuntimeDeltas_.emplace(entity->id(), runtimeDelta);
+            entity->clearRuntimeDirtyFlags();
+        }
     }
 }
 
@@ -187,13 +217,36 @@ void SpaceRuntime::collectWitnessDirty() {
         static_cast<void>(entityId);
         for (const auto& view : binding.witness->snapshotView()) {
             const auto* delta = findStagedDelta(view.entityId);
-            if (delta == nullptr || delta->empty()) {
-                continue;
+            if (delta != nullptr && !delta->empty()) {
+                binding.witness->recordDirty(view.entityId, *delta);
             }
 
-            binding.witness->recordDirty(view.entityId, *delta);
+            auto posIt = stagedPositions_.find(view.entityId);
+            if (posIt != stagedPositions_.end()) {
+                binding.witness->recordPosition(view.entityId, posIt->second);
+            }
         }
     }
+}
+
+std::vector<AoIEvent> SpaceRuntime::collectAoIEvents() {
+    std::vector<AoIEvent> events;
+    for (auto& [entityId, binding] : witnesses_) {
+        static_cast<void>(entityId);
+        auto witnessEvents = binding.witness->flushAoIEvents();
+        events.insert(events.end(), witnessEvents.begin(), witnessEvents.end());
+    }
+    return events;
+}
+
+std::vector<SpaceRuntime::ObserverDelta> SpaceRuntime::collectWitnessDeltas() {
+    std::vector<ObserverDelta> result;
+    for (auto& [observerId, binding] : witnesses_) {
+        auto deltas = binding.witness->flushDeltas();
+        if (deltas.empty()) continue;
+        result.push_back({observerId, std::move(deltas)});
+    }
+    return result;
 }
 
 }  // namespace theseed::runtime

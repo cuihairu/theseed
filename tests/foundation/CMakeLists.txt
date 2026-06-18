@@ -51,3 +51,39 @@ target_link_libraries(
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_channel_router_test COMMAND theseed_channel_router_test)
+
+add_executable(theseed_metrics_test MetricsTest.cpp)
+
+target_link_libraries(
+    theseed_metrics_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_metrics_test COMMAND theseed_metrics_test)
+
+add_executable(theseed_logger_test LoggerTest.cpp)
+
+target_link_libraries(
+    theseed_logger_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_logger_test COMMAND theseed_logger_test)
+
+add_executable(theseed_tracing_test TracingTest.cpp)
+
+target_link_libraries(
+    theseed_tracing_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_tracing_test COMMAND theseed_tracing_test)
+
+add_executable(theseed_redis_provider_test RedisProviderTest.cpp)
+
+target_link_libraries(
+    theseed_redis_provider_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_redis_provider_test COMMAND theseed_redis_provider_test)

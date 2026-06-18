@@ -1,13 +1,18 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/Controller.h"
+#include "theseed/runtime/EntityRef.h"
+#include "theseed/runtime/StateMachine.h"
 
 #include <string_view>
+#include <utility>
 
 namespace theseed::runtime {
 
 namespace {
 
-bool supportsMethodSide(EntitySide entitySide, MethodSide methodSide) {
+}  // namespace
+
+bool Entity::supportsMethodSide(EntitySide entitySide, MethodSide methodSide) {
     switch (entitySide) {
     case EntitySide::Base:
         return methodSide == MethodSide::Base;
@@ -17,8 +22,6 @@ bool supportsMethodSide(EntitySide entitySide, MethodSide methodSide) {
 
     return false;
 }
-
-}  // namespace
 
 Entity::Entity(EntityId id, EntitySide side, const EntityDef& def)
     : id_(id), side_(side), def_(&def) {
@@ -164,6 +167,17 @@ void Entity::emit(std::string_view event, std::span<const std::byte> data) {
     for (auto it = range.first; it != range.second; ++it) {
         it->second(*this, event, data);
     }
+}
+
+void Entity::emitToClient(std::string_view event, std::span<const std::byte> data) {
+    ClientEvent ev;
+    ev.name = std::string(event);
+    ev.data.assign(data.begin(), data.end());
+    pendingClientEvents_.push_back(std::move(ev));
+}
+
+std::vector<Entity::ClientEvent> Entity::flushClientEvents() {
+    return std::exchange(pendingClientEvents_, {});
 }
 
 void Entity::pushInput(InputAction action) {
@@ -454,6 +468,7 @@ void Entity::destroy() {
     auto s = state_.load(std::memory_order_acquire);
     if (s == EntityState::Destroying || s == EntityState::Active || s == EntityState::Migrating) {
         state_.store(EntityState::Destroyed, std::memory_order_release);
+        *aliveFlag_ = false;
         clearBaseEntityCall();
         clearCellEntityCall();
         clearMethodHandlers();
@@ -542,8 +557,32 @@ void Entity::clearDirtyFlags() {
     properties_.clearDirty();
 }
 
+void Entity::clearRuntimeDirtyFlags() {
+    properties_.clearRuntimeDirty();
+}
+
+void Entity::clearViewDirtyFlags() {
+    properties_.clearViewDirty();
+}
+
+void Entity::clearClientDirtyFlags() {
+    properties_.clearClientDirty();
+}
+
+void Entity::clearPersistenceDirtyFlags() {
+    properties_.clearPersistenceDirty();
+}
+
 std::vector<PropertyDelta> Entity::buildDirtyPropertyDelta(PropertyFlag excludeFlags) const {
     return properties_.buildDirtyDelta(excludeFlags);
+}
+
+std::vector<PropertyDelta> Entity::buildViewDirtyPropertyDelta(PropertyFlag excludeFlags) const {
+    return properties_.buildViewDirtyDelta(excludeFlags);
+}
+
+std::vector<PropertyDelta> Entity::buildClientDirtyPropertyDelta(PropertyFlag excludeFlags) const {
+    return properties_.buildClientDirtyDelta(excludeFlags);
 }
 
 std::vector<PropertyDelta> Entity::buildFullPropertySnapshot(PropertyFlag excludeFlags) const {
@@ -552,6 +591,11 @@ std::vector<PropertyDelta> Entity::buildFullPropertySnapshot(PropertyFlag exclud
 
 void Entity::applyPropertyDelta(std::span<const PropertyDelta> deltas, bool markDirty) {
     properties_.applyDelta(deltas, markDirty);
+}
+
+void Entity::applyPropertyDelta(std::span<const PropertyDelta> deltas,
+                                PropertyDirtyTarget markTargets) {
+    properties_.applyDelta(deltas, markTargets);
 }
 
 void Entity::setPropertyChangedCallback(PropertyId id, PropertyChangeCallback callback) {
@@ -578,6 +622,28 @@ const PropertyBlock& Entity::propertyBlock() const {
 
 PropertyBlock& Entity::propertyBlock() {
     return properties_;
+}
+
+EntityRef Entity::ref() const {
+    return EntityRef::fromEntity(const_cast<Entity&>(*this));
+}
+
+const std::shared_ptr<bool>& Entity::aliveFlag() const {
+    return aliveFlag_;
+}
+
+StateMachine& Entity::fsm() {
+    if (!fsm_) {
+        fsm_ = std::make_unique<StateMachine>(*this);
+    }
+    return *fsm_;
+}
+
+const StateMachine& Entity::fsm() const {
+    if (!fsm_) {
+        fsm_ = std::make_unique<StateMachine>(const_cast<Entity&>(*this));
+    }
+    return *fsm_;
 }
 
 }  // namespace theseed::runtime

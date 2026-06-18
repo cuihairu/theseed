@@ -1,12 +1,46 @@
 #include "theseed/db/DBApp.h"
 #include "theseed/db/DBProtocol.h"
+#include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 
+#include <chrono>
 #include <cstring>
+#include <functional>
 #include <iostream>
 
 namespace theseed::db {
+
+namespace {
+
+class ScopedTimer final {
+public:
+    using Emitter = std::function<void(double)>;
+    explicit ScopedTimer(Emitter emitter)
+        : start_(std::chrono::steady_clock::now()), emitter_(std::move(emitter)) {}
+    ~ScopedTimer() {
+        if (emitter_) {
+            emitter_(std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - start_).count());
+        }
+    }
+    ScopedTimer(const ScopedTimer&) = delete;
+    ScopedTimer& operator=(const ScopedTimer&) = delete;
+
+private:
+    std::chrono::steady_clock::time_point start_;
+    Emitter emitter_;
+};
+
+theseed::foundation::Histogram& dbHistogram(const char* name, const char* desc) {
+    return theseed::foundation::MetricsRegistry::instance().histogram(
+        name,
+        theseed::foundation::Histogram::Boundaries{1.0, 5.0, 10.0, 25.0, 50.0,
+                                                    100.0, 250.0, 500.0, 1000.0, 2500.0},
+        desc);
+}
+
+}  // namespace
 
 DBApp::DBApp(Config config)
     : config_(std::move(config)) {
@@ -28,6 +62,33 @@ bool DBApp::init() {
                   << ":" << config_.listenPort << std::endl;
         return false;
     }
+
+    if (config_.ops.enabled) {
+        ops::ProcessInfo info{};
+        info.role = "DBApp";
+        info.version = "0.1.0";
+        info.startTime = std::chrono::system_clock::now();
+        info.componentId = config_.componentId;
+
+        opsInspector_ = std::make_unique<ops::OpsInspector>(std::move(info), [this] {
+            ops::RuntimeInfo rt{};
+            if (store_) {
+                rt.entityTypes = store_->listEntityTypes();
+            }
+            if (hub_) {
+                rt.transportStats = hub_->stats();
+            }
+            return rt;
+        });
+
+        ops::OpsServer::Config opsCfg{};
+        opsCfg.host = config_.ops.host;
+        opsCfg.port = config_.ops.port;
+        opsCfg.maxConnections = config_.ops.maxConnections;
+        opsServer_ = std::make_unique<ops::OpsServer>(opsCfg, *opsInspector_);
+        opsServer_->start();
+    }
+
     return true;
 }
 
@@ -35,6 +96,14 @@ void DBApp::tick() {
     acceptConnections();
     hub_->tick();
     processMessages();
+
+    if (hub_) {
+        transportStatsCollector_.collect(hub_->stats());
+    }
+
+    if (opsServer_) {
+        opsServer_->tick();
+    }
 }
 
 void DBApp::stop() {
@@ -74,10 +143,18 @@ void DBApp::handleInvocation(runtime::RuntimeInvocation& inv) {
         handleListIds(inv);
     } else if (method == DBMethod::kListTypes) {
         handleListTypes(inv);
+    } else if (method == DBMethod::kQueryAccount) {
+        handleQueryAccount(inv);
+    } else if (method == DBMethod::kCreateAccount) {
+        handleCreateAccount(inv);
     }
 }
 
 void DBApp::handleLoad(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_load_ms", "entity load latency in milliseconds").observe(ms);
+    });
+
     core::EntityId id;
     std::string entityType;
     if (!DBProtocol::decodeLoadRequest(inv.payload, id, entityType)) {
@@ -95,6 +172,10 @@ void DBApp::handleLoad(const runtime::RuntimeInvocation& inv) {
 }
 
 void DBApp::handleSave(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_save_ms", "entity save latency in milliseconds").observe(ms);
+    });
+
     core::EntityId id;
     core::EntityData data;
     if (!DBProtocol::decodeSaveRequest(inv.payload, id, data)) {
@@ -158,6 +239,107 @@ void DBApp::handleListTypes(const runtime::RuntimeInvocation& inv) {
     auto types = store_->listEntityTypes();
     auto resp = DBProtocol::encodeListTypesResponse(types);
     sendResponse(inv.sourceComponent, DBMethod::kListTypesOk,
+                 std::span<const std::byte>(resp.data(), resp.size()));
+}
+
+void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
+    std::string username;
+    if (!DBProtocol::decodeQueryAccountRequest(inv.payload, username)) {
+        auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
+        sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // Iterate through Account entities to find matching username
+    auto ids = store_->listIdsByType("Account");
+    for (auto id : ids) {
+        core::EntityData data;
+        if (!store_->load(id, "Account", data)) continue;
+
+        // Find "username" property
+        for (const auto& prop : data.properties) {
+            if (prop.name == "username") {
+                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                if (storedName == username) {
+                    // Found — extract password
+                    std::string password;
+                    for (const auto& p : data.properties) {
+                        if (p.name == "password") {
+                            password = std::string(p.rawValue.begin(), p.rawValue.end());
+                            break;
+                        }
+                    }
+                    auto resp = DBProtocol::encodeQueryAccountResponse(true, id, password);
+                    sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                                 std::span<const std::byte>(resp.data(), resp.size()));
+                    return;
+                }
+            }
+        }
+    }
+
+    // Not found
+    auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
+    sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                 std::span<const std::byte>(resp.data(), resp.size()));
+}
+
+void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
+    std::string username;
+    std::string password;
+    if (!DBProtocol::decodeCreateAccountRequest(inv.payload, username, password)) {
+        auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
+        sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // Check if account already exists
+    auto ids = store_->listIdsByType("Account");
+    for (auto id : ids) {
+        core::EntityData data;
+        if (!store_->load(id, "Account", data)) continue;
+        for (const auto& prop : data.properties) {
+            if (prop.name == "username") {
+                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                if (storedName == username) {
+                    auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
+                    sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+                                 std::span<const std::byte>(resp.data(), resp.size()));
+                    return;
+                }
+            }
+        }
+    }
+
+    // Create new account
+    auto newId = store_->allocId();
+    core::EntityData data;
+    data.id = newId;
+    data.entityType = "Account";
+
+    core::PropertyData usernameProp;
+    usernameProp.id = 0;
+    usernameProp.name = "username";
+    usernameProp.type = core::DataType::String;
+    usernameProp.rawValue.assign(
+        reinterpret_cast<const std::byte*>(username.data()),
+        reinterpret_cast<const std::byte*>(username.data()) + username.size());
+    data.properties.push_back(usernameProp);
+
+    core::PropertyData passwordProp;
+    passwordProp.id = 1;
+    passwordProp.name = "password";
+    passwordProp.type = core::DataType::String;
+    passwordProp.rawValue.assign(
+        reinterpret_cast<const std::byte*>(password.data()),
+        reinterpret_cast<const std::byte*>(password.data()) + password.size());
+    data.properties.push_back(passwordProp);
+
+    bool ok = store_->save(newId, data);
+    auto resp = DBProtocol::encodeCreateAccountResponse(ok, newId);
+    sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 

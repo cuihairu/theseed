@@ -1,4 +1,5 @@
 #include "theseed/runtime/TickScheduler.h"
+#include "theseed/foundation/Metrics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -130,6 +131,15 @@ void TickScheduler::runOnce() {
         context.elapsed = elapsed;
         ++currentTick_;
     }
+
+    // Phase B MVP metric: tick duration distribution (ms).
+    auto& tickMetric = theseed::foundation::MetricsRegistry::instance().histogram(
+        "tick_duration_ms",
+        theseed::foundation::Histogram::Boundaries{1.0, 2.0, 5.0, 10.0, 25.0, 50.0,
+                                                    100.0, 250.0, 500.0, 1000.0},
+        "tick wall-clock duration in milliseconds");
+    tickMetric.observe(
+        std::chrono::duration<double, std::milli>(elapsed).count());
 }
 
 void TickScheduler::run() {

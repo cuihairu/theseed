@@ -5,7 +5,13 @@ add_library(theseed_foundation
     MessageHeader.cpp
     Bundle.cpp
     Channel.cpp
-    ChannelRouter.cpp)
+    ChannelRouter.cpp
+    MetricsRegistry.cpp
+    Logger.cpp
+    Tracing.cpp
+    RedisProvider.cpp
+    SessionStore.cpp
+    RateLimiter.cpp)
 
 target_link_libraries(theseed_foundation PUBLIC theseed_project_options)
 

@@ -1,17 +1,22 @@
 add_library(
     theseed_runtime
     AOI.cpp
+    BackupTopologyCoordinator.cpp
+    BehaviorTree.cpp
     CellRuntime.cpp
     Controller.cpp
     DirtyMask.cpp
     Entity.cpp
     EntityCall.cpp
     EntityDef.cpp
+    EntityRef.cpp
     IORuntime.cpp
     EntityMigration.cpp
     GhostManager.cpp
+    GroupManager.cpp
     InMemoryBytePipe.cpp
     InvocationCodec.cpp
+    LoadProfiler.cpp
     NetworkTransport.cpp
     NetworkNode.cpp
     PipedTransport.cpp
@@ -22,8 +27,10 @@ add_library(
     Space.cpp
     TransportHub.cpp
     SpaceRuntime.cpp
+    StateMachine.cpp
     TcpConnection.cpp
     TcpListener.cpp
+    TransportStatsCollector.cpp
     Witness.cpp
     TickScheduler.cpp)
 

@@ -22,10 +22,14 @@ enum class ClientMessageType : std::uint8_t {
 
     // BaseApp client messages
     EnterGame = 10,
+    Action = 11,
     EnterGameResponse = 110,
     EntityEnter = 111,
     EntityLeave = 112,
     PropertySync = 113,
+    ActionForward = 114,
+    EntityEvent = 115,
+    SpaceChange = 116,
 };
 
 class LoginProtocol {

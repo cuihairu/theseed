@@ -20,6 +20,7 @@ std::vector<PropertyDelta> PropertyReplication::buildDirtyDelta(const EntityDef&
         if (static_cast<std::uint32_t>(descriptor.flags) & static_cast<std::uint32_t>(excludeFlags)) {
             return;
         }
+        if (EntityDef::isVariableSized(descriptor.type)) return;
 
         PropertyDelta delta;
         delta.propertyId = propertyId;

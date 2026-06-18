@@ -13,6 +13,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <memory>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +22,8 @@
 namespace theseed::runtime {
 
 class ControllerManager;
+class EntityRef;
+class StateMachine;
 struct Vector3;
 
 enum class EntitySide : std::uint8_t {
@@ -83,6 +87,13 @@ public:
     void unsubscribe(const std::string& event);
     void emit(std::string_view event, std::span<const std::byte> data = {});
 
+    struct ClientEvent {
+        std::string name;
+        std::vector<std::byte> data;
+    };
+    void emitToClient(std::string_view event, std::span<const std::byte> data = {});
+    std::vector<ClientEvent> flushClientEvents();
+
     void pushInput(InputAction action);
     void processInput();
     void clearInput();
@@ -141,6 +152,49 @@ public:
         return true;
     }
 
+    template <typename T>
+    bool validateProperty(const std::string& name, const T& value) const {
+        static_assert(std::is_trivially_copyable_v<T>);
+        auto* desc = def_->findProperty(name);
+        if (!desc) return false;
+        if (!desc->minValue.empty()) {
+            T minVal{};
+            std::memcpy(&minVal, desc->minValue.data(), sizeof(T));
+            if (value < minVal) return false;
+        }
+        if (!desc->maxValue.empty()) {
+            T maxVal{};
+            std::memcpy(&maxVal, desc->maxValue.data(), sizeof(T));
+            if (value > maxVal) return false;
+        }
+        return true;
+    }
+
+    template <typename T>
+    bool trySetProperty(const std::string& name, const T& value) {
+        if (!validateProperty<T>(name, value)) return false;
+        return setProperty<T>(name, value);
+    }
+
+    template <typename T>
+    T clampProperty(const std::string& name, const T& value) const {
+        static_assert(std::is_trivially_copyable_v<T>);
+        auto* desc = def_->findProperty(name);
+        if (!desc) return value;
+        T result = value;
+        if (!desc->minValue.empty()) {
+            T minVal{};
+            std::memcpy(&minVal, desc->minValue.data(), sizeof(T));
+            if (result < minVal) result = minVal;
+        }
+        if (!desc->maxValue.empty()) {
+            T maxVal{};
+            std::memcpy(&maxVal, desc->maxValue.data(), sizeof(T));
+            if (result > maxVal) result = maxVal;
+        }
+        return result;
+    }
+
     std::string_view getString(PropertyId id) const;
     void setString(PropertyId id, std::string_view value);
     std::string_view findString(const std::string& name) const;
@@ -151,9 +205,16 @@ public:
 
     bool isPropertyDirty(PropertyId id) const;
     void clearDirtyFlags();
+    void clearRuntimeDirtyFlags();
+    void clearViewDirtyFlags();
+    void clearClientDirtyFlags();
+    void clearPersistenceDirtyFlags();
     std::vector<PropertyDelta> buildDirtyPropertyDelta(PropertyFlag excludeFlags = PropertyFlag::None) const;
+    std::vector<PropertyDelta> buildViewDirtyPropertyDelta(PropertyFlag excludeFlags = PropertyFlag::None) const;
+    std::vector<PropertyDelta> buildClientDirtyPropertyDelta(PropertyFlag excludeFlags = PropertyFlag::None) const;
     std::vector<PropertyDelta> buildFullPropertySnapshot(PropertyFlag excludeFlags = PropertyFlag::None) const;
     void applyPropertyDelta(std::span<const PropertyDelta> deltas, bool markDirty = false);
+    void applyPropertyDelta(std::span<const PropertyDelta> deltas, PropertyDirtyTarget markTargets);
 
     using PropertyChangeCallback = std::function<void(Entity&, PropertyId,
                                                       const std::byte*, const std::byte*, std::size_t)>;
@@ -234,6 +295,46 @@ public:
         return baseCall_->callWith(*transport_, std::move(method), args...);
     }
 
+    // Typed method call using EntityDef method name — serializes args per MethodDescriptor
+    template <typename... Args>
+    SendResult callDefMethod(const std::string& methodName, const Args&... args) {
+        const auto* desc = def_->findMethod(methodName);
+        if (!desc) return SendResult::NotConnected;
+
+        switch (desc->side) {
+            case MethodSide::Cell:
+                return callCellWith(std::string(methodName), args...);
+            case MethodSide::Base:
+                return callBaseWith(std::string(methodName), args...);
+            default:
+                return SendResult::NotConnected;
+        }
+    }
+
+    // Typed method handler — auto-deserializes args per MethodDescriptor
+    template <typename... Args>
+    bool bindTypedMethodHandler(std::string method, std::function<void(Entity&, Args...)> handler) {
+        if (method.empty() || !handler) return false;
+
+        const auto* descriptor = def_->findMethod(method);
+        if (!descriptor || !supportsMethodSide(side_, descriptor->side)) return false;
+
+        auto wrapper = [h = std::move(handler)](Entity& e, std::span<const std::byte> payload) {
+            foundation::MemoryStream ms(payload.size());
+            ms.writeBytes(payload.data(), payload.size());
+            ms.resetRead();
+            // Read args in guaranteed left-to-right order
+            auto argsTuple = readArgsInOrder<Args...>(ms);
+            std::apply([&](auto&... as) { h(e, as...); }, argsTuple);
+        };
+
+        methodHandlers_.insert_or_assign(std::move(method), std::move(wrapper));
+        streamHandlers_.erase(method);
+        return true;
+    }
+
+    static bool supportsMethodSide(EntitySide entitySide, MethodSide methodSide);
+
     using EntityTimerCallback = std::function<void(Entity&)>;
     using TimerScheduleFn = std::function<foundation::TimerHandle(
         Duration delay, EntityTimerCallback callback)>;
@@ -269,7 +370,49 @@ public:
     void setOnControllerComplete(ControllerCallback cb);
     void notifyControllerComplete(ControllerId id, std::int32_t userArg, bool success);
 
+    EntityRef ref() const;
+    const std::shared_ptr<bool>& aliveFlag() const;
+
+    StateMachine& fsm();
+    const StateMachine& fsm() const;
+
 private:
+    template <typename T>
+    static T readTypedArg(foundation::MemoryStream& ms) {
+        if constexpr (std::is_same_v<T, std::int8_t>) return ms.readInt8();
+        else if constexpr (std::is_same_v<T, std::int16_t>) return ms.readInt16();
+        else if constexpr (std::is_same_v<T, std::int32_t>) return ms.readInt32();
+        else if constexpr (std::is_same_v<T, std::int64_t>) return ms.readInt64();
+        else if constexpr (std::is_same_v<T, std::uint8_t>) return ms.readUint8();
+        else if constexpr (std::is_same_v<T, std::uint16_t>) return ms.readUint16();
+        else if constexpr (std::is_same_v<T, std::uint32_t>) return ms.readUint32();
+        else if constexpr (std::is_same_v<T, std::uint64_t>) return ms.readUint64();
+        else if constexpr (std::is_same_v<T, float>) return ms.readFloat();
+        else if constexpr (std::is_same_v<T, double>) return ms.readDouble();
+        else if constexpr (std::is_same_v<T, bool>) return ms.readBool();
+        else if constexpr (std::is_same_v<T, std::string>) return ms.readString();
+        else {
+            static_assert(!sizeof(T*), "Unsupported method argument type");
+            return T{};
+        }
+    }
+
+    // Read args in guaranteed left-to-right order using initializer_list sequencing
+    template <typename... Args>
+    static std::tuple<Args...> readArgsInOrder(foundation::MemoryStream& ms) {
+        std::tuple<Args...> result{};
+        readArgsImpl<0, Args...>(ms, result);
+        return result;
+    }
+
+    template <std::size_t I, typename... Args>
+    static void readArgsImpl(foundation::MemoryStream& ms, std::tuple<Args...>& tup) {
+        if constexpr (I < sizeof...(Args)) {
+            std::get<I>(tup) = readTypedArg<std::tuple_element_t<I, std::tuple<Args...>>>(ms);
+            readArgsImpl<I + 1, Args...>(ms, tup);
+        }
+    }
+
     EntityId id_ = 0;
     EntitySide side_ = EntitySide::Base;
     std::atomic<EntityState> state_{EntityState::Creating};
@@ -280,6 +423,7 @@ private:
     std::unordered_map<std::string, StreamMethodHandler> streamHandlers_{};
     std::unordered_multimap<std::string, EventCallback> eventSubscriptions_;
     std::vector<InputAction> inputQueue_;
+    std::vector<ClientEvent> pendingClientEvents_;
     ActionHandler actionHandler_;
     LifecycleCallback onCreate_;
     LifecycleCallback onRestore_;
@@ -304,6 +448,8 @@ private:
     PositionProvider positionProvider_;
     mutable std::unique_ptr<ControllerManager> controllers_;
     ControllerCallback onControllerComplete_;
+    std::shared_ptr<bool> aliveFlag_{std::make_shared<bool>(true)};
+    mutable std::unique_ptr<StateMachine> fsm_;
 };
 
 }  // namespace theseed::runtime

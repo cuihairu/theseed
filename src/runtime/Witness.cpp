@@ -49,6 +49,7 @@ void Witness::onEnterView(Entity& entity, float distance) {
     entries_[entity.id()] = std::move(entry);
 
     if (owner_ != nullptr) {
+        pendingAoIEvents_.push_back({owner_->id(), entity.id(), AoIEventType::Enter});
         owner_->notifyEnterAoI(entity.id());
     }
 }
@@ -57,6 +58,7 @@ void Witness::onLeaveView(EntityId entityId) {
     entries_.erase(entityId);
 
     if (owner_ != nullptr) {
+        pendingAoIEvents_.push_back({owner_->id(), entityId, AoIEventType::Leave});
         owner_->notifyLeaveAoI(entityId);
     }
 }
@@ -123,13 +125,22 @@ void Witness::recordDirty(EntityId entityId, std::span<const PropertyDelta> prop
     bucket.insert(bucket.end(), properties.begin(), properties.end());
 }
 
+void Witness::recordPosition(EntityId entityId, const Vector3& position) {
+    auto iter = entries_.find(entityId);
+    if (iter == entries_.end()) return;
+    iter->second.stagedPosition = position;
+}
+
 std::vector<WitnessDelta> Witness::flushDeltas() {
     std::vector<WitnessDelta> result;
     result.reserve(entries_.size());
 
     for (auto& [entityId, entry] : entries_) {
         auto& bucket = entry.stagedDeltas[entry.detailLevel];
-        if (bucket.empty()) {
+        bool hasProperties = !bucket.empty();
+        bool hasPosition = entry.stagedPosition.has_value();
+
+        if (!hasProperties && !hasPosition) {
             continue;
         }
 
@@ -138,6 +149,8 @@ std::vector<WitnessDelta> Witness::flushDeltas() {
         delta.detailLevel = entry.detailLevel;
         delta.properties = std::move(bucket);
         bucket.clear();
+        delta.position = std::move(entry.stagedPosition);
+        entry.stagedPosition.reset();
         result.push_back(std::move(delta));
     }
 
@@ -145,6 +158,12 @@ std::vector<WitnessDelta> Witness::flushDeltas() {
         return lhs.entityId < rhs.entityId;
     });
     return result;
+}
+
+std::vector<AoIEvent> Witness::flushAoIEvents() {
+    auto events = std::move(pendingAoIEvents_);
+    pendingAoIEvents_.clear();
+    return events;
 }
 
 WitnessViewTrigger::WitnessViewTrigger(Witness& witness, Entity& owner, float range)

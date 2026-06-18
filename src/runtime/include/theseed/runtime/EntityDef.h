@@ -58,6 +58,8 @@ struct PropertyDescriptor {
     std::size_t size = 0;
     PropertyFlag flags = PropertyFlag::None;
     std::vector<std::byte> defaultValue;
+    std::vector<std::byte> minValue;
+    std::vector<std::byte> maxValue;
 };
 
 struct ArgDescriptor {
@@ -84,7 +86,9 @@ public:
 
     PropertyId addProperty(std::string name, PropertyType type, std::size_t size = 0,
                            PropertyFlag flags = PropertyFlag::None,
-                           std::vector<std::byte> defaultValue = {});
+                           std::vector<std::byte> defaultValue = {},
+                           std::vector<std::byte> minValue = {},
+                           std::vector<std::byte> maxValue = {});
 
     static std::size_t fixedSizeOfType(PropertyType type);
     static bool isVariableSized(PropertyType type);

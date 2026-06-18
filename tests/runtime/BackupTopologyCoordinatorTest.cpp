@@ -1,0 +1,203 @@
+#include "theseed/runtime/BackupTopologyCoordinator.h"
+
+#include <iostream>
+#include <unordered_set>
+
+using theseed::runtime::BackupRoute;
+using theseed::runtime::BackupTopologyCoordinator;
+using theseed::runtime::BackupTopologyVersion;
+using theseed::runtime::TopologyState;
+
+static int testsPassed = 0;
+static int testsFailed = 0;
+
+#define TEST(name)                                              \
+    do {                                                        \
+        std::cout << "  " << (name) << "... " << std::flush;    \
+    } while (0)
+
+#define PASS()                                                  \
+    do {                                                        \
+        std::cout << "OK\n";                                    \
+        ++testsPassed;                                          \
+    } while (0)
+
+#define FAIL(msg)                                               \
+    do {                                                        \
+        std::cout << "FAIL: " << (msg) << "\n";                 \
+        ++testsFailed;                                          \
+    } while (0)
+
+static void test_initial_state_stable() {
+    TEST("test_initial_state_stable");
+    BackupTopologyCoordinator c;
+    if (c.state() != TopologyState::Stable) { FAIL("expected Stable"); return; }
+    if (c.processCount() != 0) { FAIL("expected zero processes"); return; }
+    if (c.activeVersion().version != 0) { FAIL("expected version 0"); return; }
+    PASS();
+}
+
+static void test_register_unregister_process() {
+    TEST("test_register_unregister_process");
+    BackupTopologyCoordinator c;
+    if (!c.registerProcess(1)) { FAIL("register 1 failed"); return; }
+    if (!c.registerProcess(2)) { FAIL("register 2 failed"); return; }
+    if (c.registerProcess(1)) { FAIL("duplicate register should fail"); return; }
+    if (c.processCount() != 2) { FAIL("expected 2"); return; }
+    if (!c.hasProcess(2)) { FAIL("missing process 2"); return; }
+    if (!c.unregisterProcess(1)) { FAIL("unregister 1 failed"); return; }
+    if (c.hasProcess(1)) { FAIL("still has process 1"); return; }
+    if (c.processCount() != 1) { FAIL("expected 1 after unregister"); return; }
+    if (c.unregisterProcess(999)) { FAIL("unregister unknown should fail"); return; }
+    PASS();
+}
+
+static void test_route_for_requires_two_processes() {
+    TEST("test_route_for_requires_two_processes");
+    BackupTopologyCoordinator c;
+    if (c.routeFor(42).has_value()) { FAIL("route with 0 processes should be nullopt"); return; }
+    c.registerProcess(1);
+    if (c.routeFor(42).has_value()) { FAIL("route with 1 process should be nullopt"); return; }
+    c.registerProcess(2);
+    auto r = c.routeFor(42);
+    if (!r.has_value()) { FAIL("route with 2 processes should be value"); return; }
+    if (r->primary == r->backup) { FAIL("primary and backup must differ"); return; }
+    if (r->entityId != 42) { FAIL("entityId not echoed"); return; }
+    PASS();
+}
+
+static void test_route_for_is_deterministic() {
+    TEST("test_route_for_is_deterministic");
+    BackupTopologyCoordinator c;
+    for (int id : {1, 2, 3, 4, 5}) c.registerProcess(static_cast<theseed::runtime::ComponentId>(id));
+
+    const auto a = c.routeFor(7);
+    const auto b = c.routeFor(7);
+    if (!a.has_value() || !b.has_value()) { FAIL("route missing"); return; }
+    if (a->primary != b->primary || a->backup != b->backup) {
+        FAIL("route for same id differs across calls"); return;
+    }
+    PASS();
+}
+
+static void test_route_distributes_across_processes() {
+    TEST("test_route_distributes_across_processes");
+    BackupTopologyCoordinator c;
+    for (int id = 1; id <= 4; ++id) c.registerProcess(static_cast<theseed::runtime::ComponentId>(id));
+
+    std::unordered_set<theseed::runtime::ComponentId> seenPrimaries;
+    for (int i = 1; i <= 1000; ++i) {
+        const auto r = c.routeFor(static_cast<theseed::runtime::EntityId>(i));
+        if (!r.has_value()) { FAIL("route missing"); return; }
+        seenPrimaries.insert(r->primary);
+    }
+    if (seenPrimaries.size() < 3) { FAIL("hashing did not spread across processes"); return; }
+    PASS();
+}
+
+static void test_begin_rebuild_sets_priming() {
+    TEST("test_begin_rebuild_sets_priming");
+    BackupTopologyCoordinator c;
+    c.registerProcess(1);
+    c.registerProcess(2);
+
+    if (!c.beginRebuild(1, 100)) { FAIL("beginRebuild failed"); return; }
+    if (c.state() != TopologyState::Priming) { FAIL("state not Priming"); return; }
+    auto staging = c.stagingVersion();
+    if (!staging.has_value()) { FAIL("staging missing"); return; }
+    if (staging->version != 1) { FAIL("version should be 1"); return; }
+    if (staging->epoch != 100) { FAIL("epoch mismatch"); return; }
+    if (c.beginRebuild(2, 101)) { FAIL("concurrent beginRebuild should fail"); return; }
+    PASS();
+}
+
+static void test_ack_and_promote() {
+    TEST("test_ack_and_promote");
+    BackupTopologyCoordinator c;
+    c.registerProcess(1);
+    c.registerProcess(2);
+    c.registerProcess(3);
+
+    if (!c.beginRebuild(1, 50)) { FAIL("beginRebuild failed"); return; }
+    if (c.allAcked()) { FAIL("nothing acked yet"); return; }
+    if (c.promote()) { FAIL("promote should fail without acks"); return; }
+
+    const auto staging = *c.stagingVersion();
+    if (!c.ackPrimed(1, staging)) { FAIL("ack 1 failed"); return; }
+    if (c.allAcked()) { FAIL("only 1 of 3 acked"); return; }
+    if (c.ackPrimed(2, BackupTopologyVersion{99, 99})) { FAIL("ack with wrong version should fail"); return; }
+    if (c.ackPrimed(99, staging)) { FAIL("ack from unknown process should fail"); return; }
+
+    if (!c.ackPrimed(2, staging)) { FAIL("ack 2 failed"); return; }
+    if (!c.ackPrimed(3, staging)) { FAIL("ack 3 failed"); return; }
+    if (!c.allAcked()) { FAIL("all should be acked"); return; }
+
+    if (!c.promote()) { FAIL("promote failed"); return; }
+    if (c.state() != TopologyState::Stable) { FAIL("state should be Stable after promote"); return; }
+    if (c.stagingVersion().has_value()) { FAIL("staging should be cleared"); return; }
+    if (c.activeVersion().version != 1 || c.activeVersion().epoch != 50) {
+        FAIL("active version not promoted"); return;
+    }
+    PASS();
+}
+
+static void test_abort_returns_to_stable() {
+    TEST("test_abort_returns_to_stable");
+    BackupTopologyCoordinator c;
+    c.registerProcess(1);
+    c.registerProcess(2);
+    if (!c.beginRebuild(1, 7)) { FAIL("beginRebuild failed"); return; }
+    if (!c.abort()) { FAIL("abort failed"); return; }
+    if (c.state() != TopologyState::Stable) { FAIL("state not Stable after abort"); return; }
+    if (c.stagingVersion().has_value()) { FAIL("staging should be cleared"); return; }
+    // After abort, can begin again.
+    if (!c.beginRebuild(1, 8)) { FAIL("beginRebuild after abort failed"); return; }
+    PASS();
+}
+
+static void test_route_uses_active_epoch() {
+    TEST("test_route_uses_active_epoch");
+    BackupTopologyCoordinator c;
+    c.registerProcess(1);
+    c.registerProcess(2);
+    // activeVersion_.epoch starts at 0.
+    auto r1 = c.routeFor(5);
+    if (!r1.has_value() || r1->epoch != 0) { FAIL("epoch should be 0 initially"); return; }
+
+    if (!c.beginRebuild(1, 999)) { FAIL("beginRebuild failed"); return; }
+    const auto staging = *c.stagingVersion();
+    if (!c.ackPrimed(1, staging)) { FAIL("ack 1 failed"); return; }
+    if (!c.ackPrimed(2, staging)) { FAIL("ack 2 failed"); return; }
+    if (!c.promote()) { FAIL("promote failed"); return; }
+
+    auto r2 = c.routeFor(5);
+    if (!r2.has_value() || r2->epoch != 999) { FAIL("epoch not updated to 999"); return; }
+    PASS();
+}
+
+static void test_unregister_reindexes() {
+    TEST("test_unregister_reindexes");
+    BackupTopologyCoordinator c;
+    for (int id = 1; id <= 4; ++id) c.registerProcess(static_cast<theseed::runtime::ComponentId>(id));
+    if (!c.unregisterProcess(2)) { FAIL("unregister 2 failed"); return; }
+    if (!c.hasProcess(3) || !c.hasProcess(4)) { FAIL("reindex lost 3 or 4"); return; }
+    auto r = c.routeFor(100);
+    if (!r.has_value()) { FAIL("route should still work with 3 processes"); return; }
+    PASS();
+}
+
+int main() {
+    test_initial_state_stable();
+    test_register_unregister_process();
+    test_route_for_requires_two_processes();
+    test_route_for_is_deterministic();
+    test_route_distributes_across_processes();
+    test_begin_rebuild_sets_priming();
+    test_ack_and_promote();
+    test_abort_returns_to_stable();
+    test_route_uses_active_epoch();
+    test_unregister_reindexes();
+
+    std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
+    return testsFailed == 0 ? 0 : 1;
+}

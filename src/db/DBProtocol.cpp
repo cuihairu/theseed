@@ -250,4 +250,101 @@ bool DBProtocol::decodeListTypesResponse(std::span<const std::byte> payload,
     return true;
 }
 
+// --- Account protocol ---
+
+std::vector<std::byte> DBProtocol::encodeQueryAccountRequest(const std::string& username) {
+    foundation::MemoryStream ms;
+    writeString(ms, username);
+    return std::vector<std::byte>(ms.data(), ms.data() + ms.size());
+}
+
+std::vector<std::byte> DBProtocol::encodeQueryAccountResponse(bool found,
+                                                               core::EntityId entityId,
+                                                               const std::string& password) {
+    foundation::MemoryStream ms;
+    ms.writeUint8(found ? 1 : 0);
+    if (found) {
+        ms.writeUint64(entityId);
+        writeString(ms, password);
+    }
+    return std::vector<std::byte>(ms.data(), ms.data() + ms.size());
+}
+
+bool DBProtocol::decodeQueryAccountRequest(std::span<const std::byte> payload,
+                                            std::string& outUsername) {
+    std::size_t offset = 0;
+    return readString(payload, offset, outUsername);
+}
+
+bool DBProtocol::decodeQueryAccountResponse(std::span<const std::byte> payload,
+                                             bool& outFound,
+                                             core::EntityId& outEntityId,
+                                             std::string& outPassword) {
+    if (payload.empty()) return false;
+    outFound = static_cast<std::uint8_t>(payload[0]) != 0;
+    if (!outFound) {
+        outEntityId = 0;
+        outPassword.clear();
+        return true;
+    }
+    if (payload.size() < 9) return false;
+    outEntityId = static_cast<core::EntityId>(payload[1])
+                | (static_cast<core::EntityId>(payload[2]) << 8)
+                | (static_cast<core::EntityId>(payload[3]) << 16)
+                | (static_cast<core::EntityId>(payload[4]) << 24)
+                | (static_cast<core::EntityId>(payload[5]) << 32)
+                | (static_cast<core::EntityId>(payload[6]) << 40)
+                | (static_cast<core::EntityId>(payload[7]) << 48)
+                | (static_cast<core::EntityId>(payload[8]) << 56);
+    std::size_t offset = 9;
+    return readString(payload, offset, outPassword);
+}
+
+std::vector<std::byte> DBProtocol::encodeCreateAccountRequest(const std::string& username,
+                                                               const std::string& password) {
+    foundation::MemoryStream ms;
+    writeString(ms, username);
+    writeString(ms, password);
+    return std::vector<std::byte>(ms.data(), ms.data() + ms.size());
+}
+
+std::vector<std::byte> DBProtocol::encodeCreateAccountResponse(bool success,
+                                                                core::EntityId entityId) {
+    foundation::MemoryStream ms;
+    ms.writeUint8(success ? 1 : 0);
+    if (success) {
+        ms.writeUint64(entityId);
+    }
+    return std::vector<std::byte>(ms.data(), ms.data() + ms.size());
+}
+
+bool DBProtocol::decodeCreateAccountRequest(std::span<const std::byte> payload,
+                                             std::string& outUsername,
+                                             std::string& outPassword) {
+    std::size_t offset = 0;
+    if (!readString(payload, offset, outUsername)) return false;
+    return readString(payload, offset, outPassword);
+}
+
+bool DBProtocol::decodeCreateAccountResponse(std::span<const std::byte> payload,
+                                              bool& outSuccess,
+                                              core::EntityId& outEntityId) {
+    if (payload.empty()) return false;
+    outSuccess = static_cast<std::uint8_t>(payload[0]) != 0;
+    if (!outSuccess) {
+        outEntityId = 0;
+        return true;
+    }
+    if (payload.size() < 9) return false;
+    outEntityId = static_cast<core::EntityId>(payload[1])
+                | (static_cast<core::EntityId>(payload[2]) << 8)
+                | (static_cast<core::EntityId>(payload[3]) << 16)
+                | (static_cast<core::EntityId>(payload[4]) << 24)
+                | (static_cast<core::EntityId>(payload[5]) << 32)
+                | (static_cast<core::EntityId>(payload[6]) << 40)
+                | (static_cast<core::EntityId>(payload[7]) << 48)
+                | (static_cast<core::EntityId>(payload[8]) << 56);
+    return true;
+}
+
 }  // namespace theseed::db
