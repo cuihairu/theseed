@@ -231,6 +231,27 @@ static void test_emit_method_no_args() {
     PASS();
 }
 
+// 14. Deserialize 匹配服务端 keyed-delta 格式（PropertyReplication::encodeDelta）：
+//    [u32 count][repeat u32 propId, u32 len, value]，按 propId 路由，未知属性跳过。
+static void test_deserialize_keyed_delta() {
+    TEST("test_deserialize_keyed_delta");
+    EntityDef def("Avatar");
+    def.addProperty("level", PropertyType::Int32);    // id 0
+    def.addProperty("hp", PropertyType::Float32);     // id 1
+    auto [_, content] = CSharpEmitter().emitEntity(def);
+    // 头部：count 循环 + propId/len 读取
+    ASSERT_CONTAINS(content, "int count = reader.ReadInt32();");
+    ASSERT_CONTAINS(content, "uint propId = reader.ReadUInt32();");
+    ASSERT_CONTAINS(content, "int len = reader.ReadInt32();");
+    ASSERT_CONTAINS(content, "switch (propId)");
+    // 按 propertyId 路由的 case
+    ASSERT_CONTAINS(content, "case 0: // level");
+    ASSERT_CONTAINS(content, "case 1: // hp");
+    // 未知属性跳过（向前兼容）
+    ASSERT_CONTAINS(content, "reader.ReadBytes(len); // 跳过未知属性");
+    PASS();
+}
+
 int main() {
     test_csharp_type_mapping();
     test_emit_simple_entity();
@@ -245,6 +266,7 @@ int main() {
     test_vector3_serialization();
     test_custom_namespace();
     test_emit_method_no_args();
+    test_deserialize_keyed_delta();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;
