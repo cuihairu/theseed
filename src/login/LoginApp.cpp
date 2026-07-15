@@ -96,6 +96,12 @@ const std::vector<RealmInfo>& LoginApp::realms() const {
     return config_.realms;
 }
 
+void LoginApp::handleClientMessage(ClientSession* session,
+                                   ClientMessageType type,
+                                   std::span<const std::byte> payload) {
+    onClientMessage(session, type, payload);
+}
+
 runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
                                                 std::span<const std::byte> payload) {
     runtime::RuntimeInvocation inv;
@@ -162,10 +168,37 @@ void LoginApp::handleLogin(ClientSession* session,
                            const std::string& password) {
     LoginResponse resp;
 
+    // 限流：按 account 维度节流登录尝试。放在鉴权之前，避免无谓的 DB 往返。
+    if (config_.rateLimiter && !account.empty() &&
+        !config_.rateLimiter->tryConsume("login:" + account, config_.rateLimitConfig)) {
+        resp.success = false;
+        resp.error = "rate limited";
+        theseed::foundation::MetricsRegistry::instance()
+            .counter("login_rate_limited_count",
+                     "login attempts rejected by rate limiter")
+            .increment();
+        auto data = LoginProtocol::encodeLoginResponse(resp);
+        session->send(std::span<const std::byte>(data.data(), data.size()));
+        return;
+    }
+
+    // 记录成功登录后写入会话存储的辅助 lambda。
+    // realmId 在 login 阶段为空（SelectRealm 时才确定），这里先存基础会话，
+    // 由 handleSelectRealm 在确定 realm 后补写。
+    auto persistSession = [&](const std::string& token, std::int64_t userId) {
+        if (config_.sessionStore && !token.empty()) {
+            foundation::StoredSession s;
+            s.accountId = account;
+            s.userId = userId;
+            config_.sessionStore->save(token, s, config_.sessionTtl);
+        }
+    };
+
     if (config_.authType == "null") {
         resp.success = true;
         resp.token = SessionToken::issue(account, "");
         resp.realms = config_.realms;
+        persistSession(resp.token, 0);
     } else if (config_.authType == "db" && hub_) {
         // Query DBApp for account
         auto req = db::DBProtocol::encodeQueryAccountRequest(account);
@@ -183,6 +216,7 @@ void LoginApp::handleLogin(ClientSession* session,
             resp.success = true;
             resp.token = SessionToken::issue(account, "");
             resp.realms = config_.realms;
+            persistSession(resp.token, static_cast<std::int64_t>(accountId));
         } else if (!found) {
             // Auto-register: create new account
             auto createReq = db::DBProtocol::encodeCreateAccountRequest(account, password);
@@ -197,6 +231,7 @@ void LoginApp::handleLogin(ClientSession* session,
                 resp.success = true;
                 resp.token = SessionToken::issue(account, "");
                 resp.realms = config_.realms;
+                persistSession(resp.token, static_cast<std::int64_t>(accountId));
             } else {
                 resp.success = false;
                 resp.error = "account creation failed";
@@ -219,6 +254,7 @@ void LoginApp::handleLogin(ClientSession* session,
             resp.success = true;
             resp.token = SessionToken::issue(account, "");
             resp.realms = config_.realms;
+            persistSession(resp.token, 0);
         } else {
             resp.success = false;
             resp.error = "invalid credentials";

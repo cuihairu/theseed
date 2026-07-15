@@ -1,5 +1,8 @@
 #pragma once
 
+#include "theseed/foundation/RateLimiter.h"
+#include "theseed/foundation/RedisProvider.h"
+#include "theseed/foundation/SessionStore.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/LoginTypes.h"
 #include "theseed/ops/OpsInspector.h"
@@ -35,6 +38,15 @@ struct LoginAppConfig {
     runtime::ComponentId dbComponentId = 10;
     runtime::ComponentId localComponentId = 20;
     LoginAppOpsConfig ops;
+
+    // Redis 会话/限流集成（Phase B）。三者共享同一个 IRedisProvider。
+    // 全部留空（nullptr）时退化为旧行为：token 只发给客户端，不做持久化与限流。
+    std::shared_ptr<foundation::IRedisProvider> redis;
+    std::shared_ptr<foundation::SessionStore> sessionStore;
+    std::shared_ptr<foundation::RateLimiter> rateLimiter;
+    foundation::RateLimiter::Config rateLimitConfig;
+    // 会话 TTL。默认 1 小时。
+    foundation::RedisDuration sessionTtl = std::chrono::seconds(3600);
 };
 
 class LoginApp {
@@ -50,6 +62,12 @@ public:
     void stop();
 
     const std::vector<RealmInfo>& realms() const;
+
+    // 测试入口：在不需要 TCP 监听的情况下驱动消息分发（含限流与会话存储）。
+    // 生产路径由 acceptConnections 自动调用 onClientMessage，不需要此方法。
+    void handleClientMessage(ClientSession* session,
+                             ClientMessageType type,
+                             std::span<const std::byte> payload);
 
 private:
     void acceptConnections();
