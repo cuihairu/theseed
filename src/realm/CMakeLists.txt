@@ -7,6 +7,7 @@ target_link_libraries(
     PUBLIC theseed_project_options
     PUBLIC theseed_login
     PUBLIC theseed_runtime
+    PUBLIC theseed_ops
     PUBLIC theseed_foundation)
 
 target_include_directories(

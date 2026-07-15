@@ -1,5 +1,7 @@
 #include "theseed/core/CellApp.h"
+#include "theseed/foundation/Metrics.h"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace theseed::core {
@@ -34,7 +36,50 @@ bool CellApp::init() {
         }
     }
 
+    if (config_.ops.enabled) {
+        ops::ProcessInfo info{};
+        info.role = "CellApp";
+        info.version = "0.1.0";
+        info.startTime = std::chrono::system_clock::now();
+        info.componentId = config_.componentId;
+
+        opsInspector_ = std::make_unique<ops::OpsInspector>(std::move(info), [this] {
+            ops::RuntimeInfo rt{};
+            if (runtime_) {
+                rt.entityCount = runtime_->spaceRuntime().space().entityCount();
+            }
+            rt.entityTypes = registry_.entityTypes();
+            if (transport_) {
+                rt.transportStats = transport_->stats();
+            }
+            return rt;
+        });
+
+        ops::OpsServer::Config opsCfg{};
+        opsCfg.host = config_.ops.host;
+        opsCfg.port = config_.ops.port;
+        opsCfg.maxConnections = config_.ops.maxConnections;
+        opsServer_ = std::make_unique<ops::OpsServer>(opsCfg, *opsInspector_);
+        opsServer_->start();
+    }
+
     return true;
+}
+
+void CellApp::tick() {
+    // Phase B MVP metric：cell 侧实体数量。
+    if (runtime_) {
+        const auto count = runtime_->spaceRuntime().space().entityCount();
+        theseed::foundation::MetricsRegistry::instance()
+            .gauge("entity_count", "live entities held by this runtime")
+            .set(static_cast<std::int64_t>(count));
+    }
+    if (transport_) {
+        transportStatsCollector_.collect(transport_->stats());
+    }
+    if (opsServer_) {
+        opsServer_->tick();
+    }
 }
 
 void CellApp::attach(runtime::TickScheduler& scheduler) {

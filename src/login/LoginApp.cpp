@@ -65,6 +65,7 @@ void LoginApp::init() {
 }
 
 void LoginApp::tick() {
+    const auto tickStart = std::chrono::steady_clock::now();
     if (hub_) hub_->tick();
     acceptConnections();
     for (auto& session : sessions_) {
@@ -84,6 +85,15 @@ void LoginApp::tick() {
     if (opsServer_) {
         opsServer_->tick();
     }
+
+    // tick_duration_ms：LoginApp 不走 TickScheduler，自行观测，桶边界与之一致。
+    const auto elapsed = std::chrono::steady_clock::now() - tickStart;
+    theseed::foundation::MetricsRegistry::instance()
+        .histogram("tick_duration_ms",
+                   theseed::foundation::Histogram::Boundaries{
+                       1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
+                   "tick wall-clock duration in milliseconds")
+        .observe(std::chrono::duration<double, std::milli>(elapsed).count());
 }
 
 void LoginApp::stop() {

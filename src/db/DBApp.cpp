@@ -129,6 +129,17 @@ bool DBApp::init() {
 }
 
 void DBApp::tick() {
+    // tick_duration_ms：与 TickScheduler::runOnce 使用相同的桶边界，保证
+    // 跨进程指标口径一致（DBApp 不走 TickScheduler，故在此自行观测）。
+    ScopedTimer timer([](double ms) {
+        theseed::foundation::MetricsRegistry::instance()
+            .histogram("tick_duration_ms",
+                       theseed::foundation::Histogram::Boundaries{
+                           1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
+                       "tick wall-clock duration in milliseconds")
+            .observe(ms);
+    });
+
     acceptConnections();
     hub_->tick();
     processMessages();

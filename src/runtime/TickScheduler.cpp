@@ -1,5 +1,6 @@
 #include "theseed/runtime/TickScheduler.h"
 #include "theseed/foundation/Metrics.h"
+#include "theseed/foundation/Tracing.h"
 
 #include <algorithm>
 #include <chrono>
@@ -102,6 +103,11 @@ void TickScheduler::runOnce() {
         tasks.swap(pendingTasks_);
     }
 
+    // 关键链路 trace：整个 tick 作为一个 span。默认 emitter 是 no-op，
+    // 但 currentSpanContext 会被 Logger 注入到 tick 内的所有日志，
+    // 实现 log-trace 关联（MVP §12「关键链路 Trace」）。
+    auto tickSpan = theseed::foundation::startSpan("tick");
+
     const auto start = Clock::now();
     TickContext context;
     {
@@ -131,6 +137,10 @@ void TickScheduler::runOnce() {
         context.elapsed = elapsed;
         ++currentTick_;
     }
+
+    // span 收尾：记录耗时，便于 emitter 导出。
+    tickSpan.setAttribute("tick_duration_ms",
+                          std::chrono::duration<double, std::milli>(elapsed).count());
 
     // Phase B MVP metric: tick duration distribution (ms).
     auto& tickMetric = theseed::foundation::MetricsRegistry::instance().histogram(

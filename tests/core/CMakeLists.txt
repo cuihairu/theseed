@@ -52,6 +52,16 @@ target_link_libraries(
 
 add_test(NAME theseed_cell_app_test COMMAND theseed_cell_app_test)
 
+# Phase B：CellApp 可观测性整合测试（entity_count / transport stats）。
+add_executable(theseed_cell_app_observability_test CellAppObservabilityTest.cpp)
+
+target_link_libraries(
+    theseed_cell_app_observability_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_cell_app_observability_test COMMAND theseed_cell_app_observability_test)
+
 add_executable(theseed_integration_test IntegrationTest.cpp)
 
 target_link_libraries(
