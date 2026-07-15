@@ -1,6 +1,7 @@
 #pragma once
 
-#include "theseed/core/FileEntityStore.h"
+#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IAccountStore.h"
 #include "theseed/ops/OpsInspector.h"
 #include "theseed/ops/OpsServer.h"
 #include "theseed/runtime/RuntimeTransport.h"
@@ -26,7 +27,17 @@ public:
     struct Config {
         std::string listenHost = "0.0.0.0";
         std::uint16_t listenPort = 20003;
+        // FileEntityStore 的根目录（storeBackend == "file" 时使用）
         std::string storePath = "data/entities";
+        // 存储后端："file"（默认，FileEntityStore）或 "mysql"（MySQLEntityStore）
+        std::string storeBackend = "file";
+        // MySQL 连接配置（storeBackend == "mysql" 时使用）
+        std::string mysqlHost = "127.0.0.1";
+        std::uint16_t mysqlPort = 3306;
+        std::string mysqlUser = "theseed";
+        std::string mysqlPassword;
+        std::string mysqlDatabase = "theseed";
+        bool mysqlAutoCreateSchema = true;
         runtime::ComponentId componentId = 10;
         OpsConfig ops;
     };
@@ -61,7 +72,11 @@ private:
 
     Config config_;
     runtime::TcpListener listener_;
-    std::shared_ptr<core::FileEntityStore> store_;
+    // 后端无关的存储句柄。init() 根据 storeBackend 选择 FileEntityStore
+    // 或 MySQLEntityStore。FileEntityStore 不实现 IAccountStore，
+    // 此时 accountStore_ 为 nullptr，DBApp 回退到基于 store_ 的线性扫描。
+    std::shared_ptr<core::IEntityStore> store_;
+    std::shared_ptr<IAccountStore> accountStore_;
     std::shared_ptr<runtime::TransportHub> hub_;
     runtime::TransportStatsCollector transportStatsCollector_;
 

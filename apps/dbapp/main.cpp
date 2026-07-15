@@ -26,6 +26,22 @@ int main(int argc, char** argv) {
             config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--store" && i + 1 < argc) {
             config.storePath = argv[++i];
+        } else if (arg == "--backend" && i + 1 < argc) {
+            config.storeBackend = argv[++i];
+        } else if (arg == "--mysql-host" && i + 1 < argc) {
+            config.mysqlHost = argv[++i];
+        } else if (arg == "--mysql-port" && i + 1 < argc) {
+            config.mysqlPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+        } else if (arg == "--mysql-user" && i + 1 < argc) {
+            config.mysqlUser = argv[++i];
+        } else if (arg == "--mysql-password" && i + 1 < argc) {
+            config.mysqlPassword = argv[++i];
+        } else if (arg == "--mysql-database" && i + 1 < argc) {
+            config.mysqlDatabase = argv[++i];
+        } else if (arg == "--ops" && i + 1 < argc) {
+            config.ops.enabled = std::stoi(argv[++i]) != 0;
+        } else if (arg == "--ops-port" && i + 1 < argc) {
+            config.ops.port = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         }
     }
 
@@ -36,7 +52,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "DBApp listening on 0.0.0.0:" << config.listenPort << std::endl;
+    std::cout << "DBApp listening on 0.0.0.0:" << config.listenPort
+              << " backend=" << config.storeBackend;
+    if (config.storeBackend == "mysql") {
+        std::cout << " (" << config.mysqlUser << "@" << config.mysqlHost
+                  << ":" << config.mysqlPort << "/" << config.mysqlDatabase << ")";
+    } else {
+        std::cout << " path=" << config.storePath;
+    }
+    std::cout << std::endl;
 
     while (g_running) {
         app.tick();

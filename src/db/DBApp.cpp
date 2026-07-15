@@ -1,5 +1,9 @@
 #include "theseed/db/DBApp.h"
+#include "theseed/core/FileEntityStore.h"
 #include "theseed/db/DBProtocol.h"
+#if THESEED_HAS_MYSQL
+#include "theseed/db/MySQLEntityStore.h"
+#endif
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
@@ -54,7 +58,39 @@ DBApp::~DBApp() {
 }
 
 bool DBApp::init() {
+#if THESEED_HAS_MYSQL
+    if (config_.storeBackend == "mysql") {
+        MySQLEntityStore::Config mysqlCfg;
+        mysqlCfg.mysql.host = config_.mysqlHost;
+        mysqlCfg.mysql.port = config_.mysqlPort;
+        mysqlCfg.mysql.user = config_.mysqlUser;
+        mysqlCfg.mysql.password = config_.mysqlPassword;
+        mysqlCfg.mysql.database = config_.mysqlDatabase;
+        mysqlCfg.autoCreateSchema = config_.mysqlAutoCreateSchema;
+
+        auto mysqlStore = std::make_shared<MySQLEntityStore>(std::move(mysqlCfg));
+        if (!mysqlStore->init()) {
+            std::cerr << "DBApp: MySQL store init failed: " << mysqlStore->lastError()
+                      << std::endl;
+            return false;
+        }
+        store_ = mysqlStore;
+        accountStore_ = mysqlStore;  // MySQLEntityStore 同时实现 IAccountStore
+    } else {
+        store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
+        accountStore_ = nullptr;
+    }
+#else
+    if (config_.storeBackend == "mysql") {
+        std::cerr << "DBApp: storeBackend=mysql requested but theseed_db was built "
+                  << "without MySQL support (libmysql not available). Falling back to file."
+                  << std::endl;
+        config_.storeBackend = "file";
+    }
     store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
+    accountStore_ = nullptr;
+#endif
+
     hub_ = std::make_shared<runtime::TransportHub>(config_.componentId);
 
     if (!listener_.listen(config_.listenHost, config_.listenPort)) {
@@ -243,6 +279,10 @@ void DBApp::handleListTypes(const runtime::RuntimeInvocation& inv) {
 }
 
 void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_query_account_ms", "account query latency in milliseconds").observe(ms);
+    });
+
     std::string username;
     if (!DBProtocol::decodeQueryAccountRequest(inv.payload, username)) {
         auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
@@ -251,7 +291,18 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
         return;
     }
 
-    // Iterate through Account entities to find matching username
+    // 优先走 MySQL/索引表的后端快速路径
+    if (accountStore_) {
+        core::EntityId id = 0;
+        std::string password;
+        bool found = accountStore_->queryAccount(username, id, password);
+        auto resp = DBProtocol::encodeQueryAccountResponse(found, id, password);
+        sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // 回退：FileEntityStore 没有索引表，线性扫描 Account 实体
     auto ids = store_->listIdsByType("Account");
     for (auto id : ids) {
         core::EntityData data;
@@ -286,6 +337,10 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
 }
 
 void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_create_account_ms", "account create latency in milliseconds").observe(ms);
+    });
+
     std::string username;
     std::string password;
     if (!DBProtocol::decodeCreateAccountRequest(inv.payload, username, password)) {
@@ -295,6 +350,17 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // 优先走索引表后端
+    if (accountStore_) {
+        core::EntityId id = 0;
+        bool ok = accountStore_->createAccount(username, password, id);
+        auto resp = DBProtocol::encodeCreateAccountResponse(ok, id);
+        sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // 回退：FileEntityStore 线性扫描查重后插入
     // Check if account already exists
     auto ids = store_->listIdsByType("Account");
     for (auto id : ids) {
