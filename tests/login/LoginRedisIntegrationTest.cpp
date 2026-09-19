@@ -133,15 +133,10 @@ int main() {
         if (!success) FAIL("login should succeed");
         if (token.empty()) FAIL("token should be non-empty");
 
-        // 验证 SessionStore 里有这个 token
-        auto stored = config.sessionStore->load(token);
-        // config 已 move，用 app 内部的 store 不可直接访问；改为通过 redis 直接查
-        // 这里 config.sessionStore 已随 move 转移，需另寻验证途径。
-        // 改用 redis 直接查 session: 前缀。
-        (void)stored;
-        // 由于 config 被 move 进 app，这里改用 redis provider 验证：
+        // 验证 SessionStore 里有这个 token。
+        // config 已被 move 进 app（config.sessionStore 现为 null），
+        // 通过共享的 redis provider 直接查 session: 前缀。
         bool found = false;
-        // redis 仍持有引用（shared_ptr），可查
         auto val = redis->get("session:" + token);
         if (val && val->find("alice") != std::string::npos) found = true;
         if (!found) FAIL("session not persisted in redis under token key");
