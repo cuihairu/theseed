@@ -113,6 +113,7 @@ ProcessSummary queryCurrentProcess() {
     return summary;
 }
 
+#ifdef _WIN32
 std::vector<ProcessSummary> enumerateWindowsProcesses() {
     std::vector<ProcessSummary> processes;
     const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -164,6 +165,7 @@ std::vector<ProcessSummary> enumerateWindowsProcesses() {
     CloseHandle(snapshot);
     return processes;
 }
+#endif  // _WIN32
 
 #if defined(__linux__)
 bool isNumericDirectory(const std::filesystem::directory_entry& entry) {
@@ -343,7 +345,7 @@ bool LocalProcessSupervisor::start(const std::string& target) {
         return false;
     }
 
-    const auto tokens = splitCommandLine(target);
+    auto tokens = splitCommandLine(target);
     if (tokens.empty()) {
         return false;
     }

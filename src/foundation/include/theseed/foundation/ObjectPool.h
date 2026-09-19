@@ -9,6 +9,31 @@
 #include <new>
 #include <vector>
 
+namespace theseed::foundation::detail {
+
+// 跨平台对齐内存分配：Windows CRT 与 C++17 std::aligned_alloc 双路径。
+inline void* alignedAlloc(std::size_t size, std::size_t alignment) {
+#if defined(_WIN32)
+    return _aligned_malloc(size, alignment);
+#else
+    if (alignment < alignof(std::max_align_t)) {
+        alignment = alignof(std::max_align_t);
+    }
+    const std::size_t padded = (size + alignment - 1) / alignment * alignment;
+    return std::aligned_alloc(alignment, padded);
+#endif
+}
+
+inline void alignedFree(void* ptr) {
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
+}  // namespace theseed::foundation::detail
+
 namespace theseed::foundation {
 
 template <typename T>
@@ -100,7 +125,7 @@ ObjectPool<T>::ObjectPool(std::size_t blockSize, std::function<void(T&)> resetFn
 template <typename T>
 ObjectPool<T>::~ObjectPool() {
     for (auto& block : blocks_) {
-        _aligned_free(block.memory);
+        detail::alignedFree(block.memory);
     }
 }
 
@@ -109,7 +134,7 @@ void ObjectPool<T>::addBlock() {
     const auto alignment = alignof(T);
     const auto size = sizeof(T) * blockSize_;
 
-    auto* memory = _aligned_malloc(size, alignment);
+    auto* memory = detail::alignedAlloc(size, alignment);
     if (!memory) throw std::bad_alloc();
 
     Block block{memory, blockSize_};

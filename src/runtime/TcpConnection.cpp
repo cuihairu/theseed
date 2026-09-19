@@ -1,22 +1,18 @@
 #include "theseed/runtime/TcpConnection.h"
 
-#ifndef _WINSOCK2API_
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#endif
+#include "SocketDetail.h"
 
 #include <cstring>
-#include <stdexcept>
 
 namespace theseed::runtime {
 
 namespace {
 
-SOCKET toSocket(std::uintptr_t h) {
-    return static_cast<SOCKET>(h);
+detail::SocketHandle toSocket(std::uintptr_t h) {
+    return static_cast<detail::SocketHandle>(h);
 }
 
-std::uintptr_t fromSocket(SOCKET s) {
+std::uintptr_t fromSocket(detail::SocketHandle s) {
     return static_cast<std::uintptr_t>(s);
 }
 
@@ -27,25 +23,22 @@ TcpConnection::~TcpConnection() {
 }
 
 void TcpConnection::globalInit() {
-    WSADATA data;
-    WSAStartup(MAKEWORD(2, 2), &data);
+    detail::socketGlobalInit();
 }
 
 void TcpConnection::globalShutdown() {
-    WSACleanup();
+    detail::socketGlobalShutdown();
 }
 
 void TcpConnection::setNonBlocking() {
-    auto s = toSocket(socket_);
-    u_long mode = 1;
-    ioctlsocket(s, FIONBIO, &mode);
+    detail::setNonBlocking(toSocket(socket_));
 }
 
 bool TcpConnection::connect(const std::string& host, std::uint16_t port) {
     if (connected_) return false;
 
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET) return false;
+    detail::SocketHandle s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == detail::kInvalidSocket) return false;
 
     socket_ = fromSocket(s);
     setNonBlocking();
@@ -57,13 +50,10 @@ bool TcpConnection::connect(const std::string& host, std::uint16_t port) {
 
     auto result = ::connect(s,
                             reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    if (result == SOCKET_ERROR) {
-        int err = WSAGetLastError();
-        if (err != WSAEWOULDBLOCK) {
-            closesocket(s);
-            socket_ = 0;
-            return false;
-        }
+    if (result == detail::kSocketError && !detail::connectInProgress()) {
+        detail::closeSocket(s);
+        socket_ = 0;
+        return false;
     }
 
     connected_ = true;
@@ -84,7 +74,7 @@ void TcpConnection::setOnReceived(std::function<void(std::span<const std::byte>)
 
 void TcpConnection::close() {
     if (socket_ != 0) {
-        closesocket(toSocket(socket_));
+        detail::closeSocket(toSocket(socket_));
     }
     socket_ = 0;
     connected_ = false;
@@ -107,10 +97,9 @@ std::size_t TcpConnection::pumpWithResult() {
     // Read available data
     char buf[4096];
     while (true) {
-        auto n = recv(toSocket(socket_), buf, sizeof(buf), 0);
-        if (n == SOCKET_ERROR) {
-            int err = WSAGetLastError();
-            if (err != WSAEWOULDBLOCK) {
+        auto n = ::recv(toSocket(socket_), buf, sizeof(buf), 0);
+        if (n == detail::kSocketError) {
+            if (!detail::wouldBlock()) {
                 connected_ = false;
             }
             break;
@@ -137,12 +126,11 @@ std::size_t TcpConnection::pumpWithResult() {
 bool TcpConnection::trySendBuffered() {
     if (sendBuffer_.empty()) return true;
 
-    auto n = send(toSocket(socket_),
-                  reinterpret_cast<const char*>(sendBuffer_.data()),
-                  static_cast<int>(sendBuffer_.size()), 0);
-    if (n == SOCKET_ERROR) {
-        int err = WSAGetLastError();
-        if (err == WSAEWOULDBLOCK) {
+    auto n = ::send(toSocket(socket_),
+                    reinterpret_cast<const char*>(sendBuffer_.data()),
+                    static_cast<int>(sendBuffer_.size()), detail::kSendFlags);
+    if (n == detail::kSocketError) {
+        if (detail::wouldBlock()) {
             return false;
         }
         connected_ = false;

@@ -95,7 +95,7 @@ bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
 #else
 double queryMemoryUsage() {
 #if defined(__linux__)
-    sysinfo info{};
+    struct sysinfo info{};
     if (sysinfo(&info) == 0 && info.totalram != 0) {
         const auto total = static_cast<long double>(info.totalram) * info.mem_unit;
         const auto free = static_cast<long double>(info.freeram) * info.mem_unit;
