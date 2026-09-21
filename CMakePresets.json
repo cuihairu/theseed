@@ -32,7 +32,7 @@
       "description": "Debug build with g++",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_CXX_COMPILER": "/usr/bin/g++"
       }
     },
     {
