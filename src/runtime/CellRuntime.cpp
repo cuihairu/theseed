@@ -57,20 +57,6 @@ struct CellCreationPayload {
     float posZ = 0;
 };
 
-std::vector<std::byte> encodeCellCreation(EntityId entityId, ComponentId baseComponentId,
-                                            const Vector3& position, SpaceId spaceId) {
-    CellCreationPayload p;
-    p.spaceId = spaceId;
-    p.entityId = entityId;
-    p.baseComponentId = baseComponentId;
-    p.posX = position.x;
-    p.posY = position.y;
-    p.posZ = position.z;
-    std::vector<std::byte> payload(sizeof(p));
-    std::memcpy(payload.data(), &p, sizeof(p));
-    return payload;
-}
-
 bool decodeCellCreation(std::span<const std::byte> payload, CellCreationPayload& out) {
     if (payload.size() < sizeof(CellCreationPayload)) return false;
     std::memcpy(&out, payload.data(), sizeof(out));
@@ -83,13 +69,6 @@ std::vector<std::byte> encodeCellReady(EntityId entityId, ComponentId cellCompon
     std::memcpy(payload.data(), &entityId, sizeof(entityId));
     std::memcpy(payload.data() + sizeof(entityId), &cellComponentId, sizeof(cellComponentId));
     return payload;
-}
-
-bool decodeCellReady(std::span<const std::byte> payload, EntityId& entityId, ComponentId& cellComponentId) {
-    if (payload.size() != sizeof(EntityId) + sizeof(ComponentId)) return false;
-    std::memcpy(&entityId, payload.data(), sizeof(entityId));
-    std::memcpy(&cellComponentId, payload.data() + sizeof(entityId), sizeof(cellComponentId));
-    return true;
 }
 
 // entity.destroyCell payload: entityId(8) + baseComponentId(4) = 12

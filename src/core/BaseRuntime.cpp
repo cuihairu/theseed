@@ -15,10 +15,6 @@ namespace theseed::core {
 
 namespace {
 
-runtime::PropertyType dataTypeToPropertyType(DataType dt) {
-    return static_cast<runtime::PropertyType>(static_cast<std::uint8_t>(dt));
-}
-
 DataType propertyTypeToDataType(runtime::PropertyType pt) {
     return static_cast<DataType>(static_cast<std::uint8_t>(pt));
 }
@@ -77,19 +73,6 @@ void dataToEntity(const EntityData& data, runtime::Entity& entity) {
     }
 
     entity.clearDirtyFlags();
-}
-
-std::shared_ptr<runtime::EntityDef> getOrCreateDef(
-    const std::string& entityType,
-    std::unordered_map<std::string, std::shared_ptr<runtime::EntityDef>>& defs) {
-    auto it = defs.find(entityType);
-    if (it != defs.end()) {
-        return it->second;
-    }
-
-    auto def = std::make_shared<runtime::EntityDef>(entityType);
-    defs.emplace(entityType, def);
-    return def;
 }
 
 }  // namespace
