@@ -13,14 +13,33 @@
 - 与 `Telemetry` 的指标、日志、trace 联动
 - 更完整的单元测试与跨平台 CI 构建矩阵
 
-## MySQL 持久化后端（Phase B，已实现，待真实环境验证）
+## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 
-`MySQLEntityStore` 已实现并通过 stub 头文件语法检查（`-fsyntax-only` 全部无 error）。
-真实链接验证需要：
+`MySQLEntityStore` 已通过真实 MySQL 8.0.46 实例的完整验证：
+`MySqlEntityStoreTest` 22/22 通过，`theseed_dbapp --backend mysql` 启动冒烟通过。
+真实编译暴露并修复了三个客户端层 bug（prepared 查询悬垂指针、my_bool 移除、
+整数参数按 BLOB 绑定被严格模式拒绝），见提交 a27ef6b。
 
-- 系统前置依赖：`libtirpc-dev`（提供 `rpc/rpc.h`，libmysql 构建所需）—— `sudo apt-get install -y libtirpc-dev`
-- vcpkg 会编译完整 mysql-server 8.0.46 源码（~15-30 分钟）
-- 构建成功后 `theseed_db` 启用 `THESEED_HAS_MYSQL`，DBApp 可用 `--backend mysql`
-- 无 libmysql 时自动回退 FileEntityStore（条件编译保护）
-- 集成测试 `MySqlEntityStoreTest` 需配置 `THESEED_MYSQL_HOST` 等环境变量并连接真实 MySQL 服务
+真实构建前置依赖（vcpkg 编译 mysql-server 8.0.46 源码，~15-30 分钟）：
+
+- `libtirpc-dev`：提供 `rpc/rpc.h`（glibc 2.28+ 已移除 sunrpc 头）
+- `libncurses-dev`：提供系统 `term.h`。MySQL 的 CMake 在配置期检测
+  `CHECK_INCLUDE_FILES(term.h)` 时不会带 vcpkg 的 include 路径，缺失时
+  内嵌 libedit 编译失败（GCC 15 默认 C23 把隐式声明当硬错误）
+- 配置命令：`cmake --preset gcc-debug -D CMAKE_TOOLCHAIN_FILE=~/vcpkg/scripts/buildsystems/vcpkg.cmake -D VCPKG_MANIFEST_INSTALL=ON`
+  （`CMAKE_TOOLCHAIN_FILE` 只在全新缓存的首配生效）
+
+本地真实验证环境（podman，rootless）：
+
+```
+podman run -d --name theseed-mysql -e MYSQL_ROOT_PASSWORD=theseed_test_pw \
+  -e MYSQL_DATABASE=theseed_test -p 127.0.0.1:13306:3306 docker.io/library/mysql:8.0
+
+THESEED_MYSQL_HOST=127.0.0.1 THESEED_MYSQL_PORT=13306 THESEED_MYSQL_USER=root \
+THESEED_MYSQL_PASSWORD=theseed_test_pw THESEED_MYSQL_DATABASE=theseed_test \
+./build/gcc-debug/tests/db/theseed_mysql_store_test
+```
+
+- 无 libmysql 时自动回退 FileEntityStore（条件编译保护），集成测试自动跳过
+- 后续：PostgreSQL 后端（PostgreSQLEntityStore，实现同一 IEntityStore/IAccountStore 接口）
 
