@@ -436,6 +436,41 @@ static void test_all_numeric_types_round_trip() {
     if (ok) PASS();
 }
 
+static void test_filter_of_int64_and_double() {
+    TEST("QueryFilter::of int64/double overloads match same-typed props");
+    EntityData big;
+    big.entityType = "Avatar";
+    PropertyData exp;
+    exp.id = 1;
+    exp.name = "exp";
+    exp.type = DataType::Int64;  // 与 of(std::int64_t) 生成的 filter 同类型
+    exp.rawValue.resize(sizeof(std::int64_t));
+    const std::int64_t expValue = 5'000'000'000LL;  // 超 int32 范围，逼出 int64 编解码
+    std::memcpy(exp.rawValue.data(), &expValue, sizeof(std::int64_t));
+    big.properties.push_back(exp);
+    PropertyData ratio;
+    ratio.id = 2;
+    ratio.name = "ratio";
+    ratio.type = DataType::Float64;
+    ratio.rawValue.resize(sizeof(double));
+    const double v = 0.75;
+    std::memcpy(ratio.rawValue.data(), &v, sizeof(double));
+    big.properties.push_back(ratio);
+
+    // int64 与 int32 属性并存时靠 DataType 区分，不允许隐式混比。
+    if (!theseed::core::matchesFilter(
+            big, QueryFilter::of("exp", QueryOp::Ge, std::int64_t(4'999'999'999LL)))) {
+        FAIL("int64 filter should match int64-width prop");
+    }
+    if (!theseed::core::matchesFilter(big, QueryFilter::of("ratio", QueryOp::Lt, 0.8))) {
+        FAIL("double filter should match double prop");
+    }
+    if (theseed::core::matchesFilter(big, QueryFilter::of("ratio", QueryOp::Lt, 0.5))) {
+        FAIL("double filter above value should not match");
+    }
+    PASS();
+}
+
 static void test_compare_property_direct() {
     TEST("test_compare_property_direct and unordered cases");
     // 同类型三态
@@ -534,6 +569,7 @@ int main() {
     test_query_unknown_type();
     test_null_store_rejected();
     test_all_numeric_types_round_trip();
+    test_filter_of_int64_and_double();
     test_compare_property_direct();
     test_query_skips_load_failures();
 
