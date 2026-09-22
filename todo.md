@@ -33,9 +33,22 @@
 - `PostgreSQLEntityStoreTest` 补自隔离清理（表名含大写需引号），消除对
   新鲜库的隐式依赖
 
-当前覆盖（gcovr，含双库门控测试）：行 86.9%、函数 90.9%、分支 52.2%；
-≥25 行源文件全部 ≥75%。下一批缺口：`ProcessSupervisor`（fork 真进程的
-supervise 重启路径）、`EntityQuery`、`CellRuntime`/`BaseRuntime` 分支覆盖。
+当前覆盖（gcovr，含双库门控测试）：行 **89%**（2026-09-22 第二轮）。
+第二轮补齐两个点名缺口：
+
+- `ProcessSupervisor` 75%→92%：`ProcessSupervisorTest` fork 真子进程
+  （/bin/sleep、/bin/true）覆盖 start/stop 往返、restart 换 pid（旧 pid 用
+  waitpid ECHILD 验证已收尸）、reap 已退出子进程、析构兜底终止；
+  splitCommandLine/basenameOf 提为 public 直接测引号/空串分支。
+- `EntityQuery` 62%→95%：逐数值类型（含 8/16 位窄类型，按 DataType 宽度
+  手工编码——`QueryFilter::of` 窄整型会提升到 Int32 重载，须绕开）、
+  compareProperty 三态/unordered、LoadFailingStore 验证 query 跳过 load
+  失败、of() 全重载冒烟（int64/double 补齐）。剩余 miss 为 NRVO 下
+  `return f;` 归因伪影与 switch 后 unreachable 行，测试不可达。
+
+下一批缺口：`CellRuntime`（85%）/`BaseRuntime`（89%）分支覆盖。
+顺带发现：`CellRuntime.cpp` 匿名 ns 的 `encodeCellCreation`/`decodeCellReady`
+是死代码（gcc -Wunused-function 警告，Linux 构建从未调用）——下轮处理。
 
 ## 遗留事项
 
