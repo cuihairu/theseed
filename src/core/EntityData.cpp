@@ -1,6 +1,7 @@
 #include "theseed/core/EntityData.h"
 
 #include <cstring>
+#include <stdexcept>
 
 namespace theseed::core {
 
@@ -99,17 +100,27 @@ void encodeEntityData(MemoryStream& stream, const EntityData& data) {
 }
 
 bool decodeEntityData(MemoryStream& stream, EntityData& data) {
-    data.id = stream.readUint64();
-    data.entityType = stream.readString();
-    const auto count = stream.readUint32();
+    // 反序列化边界：截断/损坏的输入（网络载荷或磁盘文件）只允许返回 false，
+    // 不允许异常穿越到调用方的 tick 循环——MemoryStream 的读溢出抛
+    // std::runtime_error，曾让带畸形载荷的请求直接 terminate 服务进程。
+    try {
+        data.id = stream.readUint64();
+        data.entityType = stream.readString();
+        const auto count = stream.readUint32();
+        // 合理上限防御：垃圾 count 不允许触发超大分配。
+        constexpr std::uint32_t kMaxPropertyCount = 1u << 20;
+        if (count > kMaxPropertyCount) return false;
 
-    data.properties.resize(count);
-    for (std::uint32_t i = 0; i < count; ++i) {
-        if (!decodeProperty(stream, data.properties[i])) {
-            return false;
+        data.properties.resize(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (!decodeProperty(stream, data.properties[i])) {
+                return false;
+            }
         }
+        return true;
+    } catch (const std::exception&) {
+        return false;
     }
-    return true;
 }
 
 }  // namespace theseed::core

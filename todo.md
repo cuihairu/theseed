@@ -1,5 +1,44 @@
 # TODO
 
+## 测试覆盖率专项（2026-09-22，行 78.5%→86.9%，gcovr 实测）
+
+基线（gcc-coverage preset + gcovr）：行 78.5%、函数 85.3%、分支 46.0%。
+本轮以端到端 TCP 回环测试补齐 0% 文件，过程中发现并修复 5 个真实缺陷：
+
+1. `IRuntimeTransport` 缺 `tick()` 接口——`TransportHub::tick` 只 flush 不 pump，
+   TCP 服务端永远读不到入站字节（接口加默认实现，hub tick 调 tick()+flush()）
+2. `decodeEntityData` 解码边界异常穿透——畸形网络载荷（截断/垃圾长度）抛
+   `runtime_error` 直达服务进程 tick 循环并 terminate（改为边界内返回 false +
+   属性数上限 1<<20 防超大分配；DBProtocol 与 FileEntityStore 共用此边界）
+3. `OpsServer` 未知路径回 200——监控把打错的路径当成功（改 404，respond 支持
+   自定义 statusLine）
+4. `DBApp` 用函数级 `static` 分配 peerId——跨实例残留，同进程第二个 DBApp 把
+   客户端编成 2 号，回复按 sourceComponent 路由时静默丢弃
+5. **DBApp 回复路由与客户端自报身份不一致（协议级）**：服务端按本地分配的
+   peerId 注册连接，而客户端回复 target 取请求 sourceComponent——两者只在
+   客户端猜中 id=1 时巧合一致，LoginApp(localComponentId=20)→DBApp 的
+   生产链路实际全断。修法：`TransportHub::attachServerTransport`，服务端
+   连接由首条入站消息的 sourceComponent 自学习注册（`awaitingIdentity_`）
+
+新增测试（全部真 TCP 回环，非 mock）：
+
+- `DBAppE2ETest`（21 项）：file 双库门控场景，覆盖 init/tick/accept/全部
+  db.* 分发/账号线性扫描回退/畸形载荷错误分支/OpsServer 四端点/端口冲突；
+  mysql、postgresql 后端经环境变量门控在真库上验证
+- `RealmAppE2ETest`（7 项）：QueryRealms 往返/未知消息存活/ops 端点/断开清理
+- `LoginAppE2ETest`（16 项）：null+限流+SessionStore、password 回退、db 鉴权
+  三条路径（auto-register/正确/错误密码，后台线程驱动 DBApp）
+- `MachineSnapshotCodecTest`：text/JSON 格式化、全部转义分支、空进程列表
+- `BackupTopologyCoordinatorTest` 增补 processes() 排序与 reset()
+- `PostgreSQLEntityStoreTest` 补自隔离清理（表名含大写需引号），消除对
+  新鲜库的隐式依赖
+
+当前覆盖（gcovr，含双库门控测试）：行 86.9%、函数 90.9%、分支 52.2%；
+≥25 行源文件全部 ≥75%。下一批缺口：`ProcessSupervisor`（fork 真进程的
+supervise 重启路径）、`EntityQuery`、`CellRuntime`/`BaseRuntime` 分支覆盖。
+
+## 遗留事项
+
 当前只优先实现 `MachineAgent -> HostProbe -> ProcessSupervisor -> snapshot` 核心链路。
 以下事项暂不进入当前实现：
 

@@ -46,7 +46,7 @@ public:
 
     bool isConnected() const;
     void close();
-    void tick();
+    void tick() override;
 
 private:
     void flushOutbound();

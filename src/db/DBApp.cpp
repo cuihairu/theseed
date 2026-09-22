@@ -193,10 +193,11 @@ void DBApp::stop() {
 void DBApp::acceptConnections() {
     while (auto conn = listener_.accept()) {
         auto transport = std::make_shared<runtime::NetworkTransport>(conn);
-        // Assign sequential component IDs to connected BaseApps
-        static runtime::ComponentId nextPeer{1};
-        auto peerId = nextPeer++;
-        hub_->connectPeer(peerId, transport);
+        // 服务端模式注册：对端身份由其首条请求的 sourceComponent 自报，
+        // hub 收到首条消息时自动完成注册——回复才能路由回对端。
+        // （此前按本地分配的顺序号注册，与客户端自报的 sourceComponent
+        // 不一致时回复会被 hub 静默丢弃。）
+        hub_->attachServerTransport(transport);
     }
 }
 

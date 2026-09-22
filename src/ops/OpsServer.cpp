@@ -127,7 +127,8 @@ void OpsServer::servicePending() {
         } else {
             std::ostringstream body;
             body << "{\"error\":\"not found\",\"path\":\"" << path << "\"}";
-            respond(pc, body.str(), kContentJson.data());
+            // 未知路径必须回 404——回 200 会让监控把打错的路径当成功。
+            respond(pc, body.str(), kContentJson.data(), "HTTP/1.0 404 Not Found");
         }
         completed.push_back(i);
     }
@@ -141,9 +142,10 @@ void OpsServer::servicePending() {
     }
 }
 
-void OpsServer::respond(PendingConnection& pc, std::string body, const char* contentType) {
+void OpsServer::respond(PendingConnection& pc, std::string body,
+                        const char* contentType, const char* statusLine) {
     std::ostringstream resp;
-    resp << "HTTP/1.0 200 OK\r\n"
+    resp << statusLine << "\r\n"
          << "Content-Type: " << contentType << "\r\n"
          << "Content-Length: " << body.size() << "\r\n"
          << "Connection: close\r\n"

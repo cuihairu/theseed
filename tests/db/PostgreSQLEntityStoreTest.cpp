@@ -95,6 +95,13 @@ int main() {
     }
     std::cout << "PostgreSQLEntityStore connected" << std::endl;
 
+    // 自隔离：清掉历史数据（如 DBApp E2E 留下的行），行数断言才有意义。
+    // 表名含大写字母（建表带引号），DELETE 必须同样加引号。
+    store.executeRaw("DELETE FROM \"tbl_Avatar\"");
+    store.executeRaw("DELETE FROM \"tbl_Account\"");
+    store.executeRaw("DELETE FROM \"_account_index\"");
+    store.executeRaw("DELETE FROM \"_entity_ids\"");
+
     // --- save / load 往返 ---
     {
         auto avatar = makeAvatar(1, 42, 1234.5f, 7.25f);
