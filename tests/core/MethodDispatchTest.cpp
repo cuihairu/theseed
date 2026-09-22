@@ -143,6 +143,10 @@ static void testTypedMethodBaseToCell() {
     auto* base = c.baseApp->createEntity("Avatar");
     auto id = base->id();
 
+    // cellEntityCall 未建立：callCellWith 走 NotConnected 分支
+    if (base->callCellWith<float, std::int32_t>("takeDamage", 0.0f, std::int32_t(0)) !=
+        theseed::runtime::SendResult::NotConnected) FAIL("expected NotConnected before cell creation");
+
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
         return base->cellEntityCall() && base->cellEntityCall()->isValid();
@@ -202,6 +206,10 @@ static void testTypedMethodCellToBase() {
     auto* base = c.baseApp->createEntity("Avatar");
     auto id = base->id();
 
+    // baseEntityCall 未建立：callBaseWith 走 NotConnected 分支
+    if (base->callBaseWith<std::string, std::int32_t>("addScore", "kill_enemy", std::int32_t(0)) !=
+        theseed::runtime::SendResult::NotConnected) FAIL("expected NotConnected before base call");
+
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
         return base->cellEntityCall() && base->cellEntityCall()->isValid();
@@ -224,6 +232,13 @@ static void testTypedMethodCellToBase() {
         ok = score != nullptr && *score == 100;
     }
 
+    // cell 实体经 callDefMethod 走 Base side 成功路径（callBaseWith 的
+    // 单参数实例）。发送后不再 tick，接收端不会解析这个单参数流。
+    if (ok) {
+        ok = cell->callDefMethod<std::string>("addScore", "late") ==
+             theseed::runtime::SendResult::Accepted;
+    }
+
     std::filesystem::remove_all(dir);
     if (ok) PASS();
     else FAIL("typed method cell->base failed");
@@ -244,6 +259,8 @@ static void testCallDefMethod() {
         <Method name="heal" side="Cell">
             <Arg name="amount" type="Float32"/>
         </Method>
+        <Method name="saveData" side="Base"/>
+        <Method name="showUi" side="Client"/>
     </Methods>
 </EntityDef>
 )");
@@ -264,6 +281,16 @@ static void testCallDefMethod() {
 
     auto* base = c.baseApp->createEntity("Avatar");
     auto id = base->id();
+
+    // cellEntityCall 未建立：Cell side 经 callCellWith 落 NotConnected；
+    // baseEntityCall 未建立：Base side 经 callBaseWith 落 NotConnected；
+    // Client side 不属于 base/cell 任一侧，switch 落 default 返回 NotConnected
+    if (base->callDefMethod<float>("heal", 0.0f) != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for cell-side def method");
+    if (base->callDefMethod<std::string>("saveData", "x") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for base-side def method");
+    if (base->callDefMethod("showUi") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for client-side def method");
 
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
@@ -435,6 +462,11 @@ static void testMultipleTypedArgs() {
 
     auto* base = c.baseApp->createEntity("Avatar");
     auto id = base->id();
+
+    // cellEntityCall 未建立：callCellWith 走 NotConnected 分支
+    if (base->callCellWith<std::int32_t, float, std::string>(
+            "applyEffect", std::int32_t(0), 0.0f, std::string()) !=
+        theseed::runtime::SendResult::NotConnected) FAIL("expected NotConnected before cell creation");
 
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {

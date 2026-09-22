@@ -600,6 +600,15 @@ static void testBaseToCellTypedRemoteCall() {
     auto* baseEntity = c.baseApp->createEntity("Avatar");
     auto entityId = baseEntity->id();
 
+    // cellEntityCall 未建立：typed callCellWith 走 NotConnected 分支
+    if (baseEntity->callCellWith<std::int32_t>("takeDamage", 0) ==
+        theseed::runtime::SendResult::Accepted) {
+        TcpConnection::globalShutdown();
+        std::filesystem::remove_all(dir);
+        FAIL("expected NotConnected before cell creation");
+        return;
+    }
+
     c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
         return baseEntity->cellEntityCall() != nullptr && baseEntity->cellEntityCall()->isValid();

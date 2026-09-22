@@ -249,6 +249,28 @@ static void testClearCallback() {
     else FAIL("count=" + std::to_string(callCount));
 }
 
+// Test: empty typed callback unregisters via onPropertyChanged
+static void testNullTypedCallbackUnregisters() {
+    TEST("empty typed callback clears registration");
+
+    auto def = makeAvatarDef();
+    Entity entity(1, EntitySide::Base, *def);
+
+    int callCount = 0;
+    entity.onPropertyChanged<std::int32_t>(0,
+        [&](Entity&, std::int32_t, std::int32_t) { ++callCount; });
+    entity.setProperty<std::int32_t>(0, 5);
+    bool ok = callCount == 1;
+
+    // 传空 std::function：onPropertyChanged 内部转成 setPropertyChangedCallback(id, nullptr)
+    entity.onPropertyChanged<std::int32_t>(0, {});
+    entity.setProperty<std::int32_t>(0, 10);
+    ok = ok && callCount == 1;  // no additional call
+
+    if (ok) PASS();
+    else FAIL("count=" + std::to_string(callCount));
+}
+
 // Test: destroy clears all callbacks
 static void testDestroyClearsCallbacks() {
     TEST("destroy clears all callbacks");
@@ -347,6 +369,7 @@ int main() {
     testMultiplePropertyCallbacks();
     testOverwriteCallback();
     testClearCallback();
+    testNullTypedCallbackUnregisters();
     testDestroyClearsCallbacks();
     testCallbackReceivesEntityReference();
     testApplyDeltaMultipleCallbacks();
