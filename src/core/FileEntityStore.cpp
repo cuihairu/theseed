@@ -46,6 +46,13 @@ bool FileEntityStore::load(EntityId id, const std::string& entityType, EntityDat
     if (size <= 0) {
         return false;
     }
+
+    // 防御：伪文件系统（/proc、/sys 的 seq_file）seek 到尾会给出巨大假尺寸，
+    // 直接按它分配缓冲会 bad_alloc。实体数据文件有天然上限，超限即视为损坏。
+    constexpr std::streamoff kMaxEntityFileSize = 64 * 1024 * 1024;
+    if (size > kMaxEntityFileSize) {
+        return false;
+    }
     file.seekg(0);
 
     std::vector<std::byte> buffer(static_cast<std::size_t>(size));

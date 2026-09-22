@@ -359,6 +359,14 @@ static void testErrorPaths() {
         std::filesystem::permissions(dir / "Avatar" / "4.dat",
                                      std::filesystem::perms::owner_all);
     }
+#else
+    // Windows 下同样要有 4.dat，保持 listIdsByType 断言各平台一致
+    {
+        EntityData data;
+        data.id = 4;
+        data.entityType = "Avatar";
+        ok = ok && store.save(4, data);
+    }
 #endif
 
     // 目标位置被普通文件占用：ensureDir 失败 → save false
@@ -395,22 +403,18 @@ static void testErrorPaths() {
     }
 
 #ifndef _WIN32
-    // stat 尺寸撒谎的文件：sysfs 恒报 4096 但实际内容短得多 →
-    // tellg 得到 size>0 而 read 不足 → 读取流失败 → load false
+    // 伪文件系统目标：seq_file seek 到尾给出假尺寸（或目标缺失 open 失败）
+    // → 两条路径都必须 load false；产品侧对超大假尺寸有上限防御
     {
         std::error_code ec;
         std::filesystem::create_symlink(
             "/sys/kernel/mm/transparent_hugepage/enabled",
             dir / "Avatar" / "6.dat", ec);
         if (!ec) {
-            auto realSize = std::filesystem::file_size(
-                dir / "Avatar" / "6.dat", ec);
-            if (!ec && realSize > 0) {
-                EntityData out;
-                ok = ok && !store.load(6, "Avatar", out);
-            }
+            EntityData out;
+            ok = ok && !store.load(6, "Avatar", out);
+            std::filesystem::remove(dir / "Avatar" / "6.dat", ec);
         }
-        std::filesystem::remove(dir / "Avatar" / "6.dat");
     }
 #endif
 

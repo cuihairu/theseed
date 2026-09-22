@@ -343,6 +343,55 @@ static void testIsRunningFlag() {
     else FAIL("isRunning failed");
 }
 
+// Test 13: childCount 访问器与 Running 传播路径
+static void testChildCountAndRunningPaths() {
+    TEST("childCount accessors and Running propagation");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+
+    auto seq = sequence();
+    seq->addChild(action([&](Entity&) { return BehaviorStatus::Success; }));
+    seq->addChild(action([&](Entity&) { return BehaviorStatus::Success; }));
+    auto* seqPtr = seq.get();
+    BehaviorTree seqTree(std::move(seq));
+    bool ok = seqPtr->childCount() == 2;
+
+    auto sel = selector();
+    sel->addChild(action([&](Entity&) { return BehaviorStatus::Running; }));
+    auto* selPtr = sel.get();
+    BehaviorTree selTree(std::move(sel));
+    ok = ok && selPtr->childCount() == 1;
+    ok = ok && selTree.tick(e) == BehaviorStatus::Running;
+
+    auto inv = inverter(action([&](Entity&) { return BehaviorStatus::Running; }));
+    BehaviorTree invTree(std::move(inv));
+    ok = ok && invTree.tick(e) == BehaviorStatus::Running;
+
+    int runningCalls = 0;
+    auto repRun = repeat(action([&](Entity&) {
+        ++runningCalls;
+        return runningCalls == 1 ? BehaviorStatus::Running : BehaviorStatus::Success;
+    }), 2);
+    BehaviorTree repRunTree(std::move(repRun));
+    ok = ok && repRunTree.tick(e) == BehaviorStatus::Running;   // 子 Running 透传
+    ok = ok && repRunTree.tick(e) == BehaviorStatus::Running;   // 1/2 次完成
+    ok = ok && repRunTree.tick(e) == BehaviorStatus::Success;   // 2/2 完成
+    ok = ok && runningCalls == 3;
+
+    int failCalls = 0;
+    auto repFail = repeat(action([&](Entity&) {
+        ++failCalls;
+        return BehaviorStatus::Failure;
+    }), 1);
+    BehaviorTree repFailTree(std::move(repFail));
+    ok = ok && repFailTree.tick(e) == BehaviorStatus::Success;  // 子 Failure → Success
+    ok = ok && failCalls == 1;
+
+    if (ok) PASS();
+    else FAIL("running propagation wrong");
+}
+
 int main() {
     std::cout << "Behavior tree tests:\n";
 
@@ -358,6 +407,7 @@ int main() {
     testNestedTree();
     testResetReExecution();
     testIsRunningFlag();
+    testChildCountAndRunningPaths();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

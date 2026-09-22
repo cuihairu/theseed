@@ -420,6 +420,18 @@ int main() {
     } while (0)
     auto sqlBackendSection = [&](const char* backend) -> bool {
         const std::string backendName(backend);
+        TEST(backendName + " backend init fails on bad db port");
+        {
+            DBApp::Config badCfg;
+            badCfg.listenPort = freePort();
+            badCfg.storePath = storeDir + "_bad_" + backend;
+            badCfg.storeBackend = backend;
+            badCfg.dbPort = 1;  // 端口 1 无数据库服务
+            DBApp badApp(std::move(badCfg));
+            if (badApp.init()) FAIL_SECTION(backendName + "-backend init should fail");
+        }
+        PASS();
+
         TEST("DBApp boots with " + backendName + " backend");
         DBApp::Config scfg;
         scfg.listenPort = freePort();
@@ -472,6 +484,44 @@ int main() {
         if (!store.save(id, makeAvatar(id, 5))) FAIL_SECTION("save failed");
         EntityData out;
         if (!store.load(id, "Avatar", out)) FAIL_SECTION("load failed");
+        PASS();
+
+        // --- accountStore_ 快路径：SQL 索引而非线性扫描 ---
+        TEST(backendName + " backend account fast path (create/query/remove)");
+        RuntimeInvocation resp;
+        if (!sclient.request(DBMethod::kCreateAccount,
+                             DBProtocol::encodeCreateAccountRequest("fast_user", "pw"),
+                             sappTick, resp))
+            FAIL_SECTION("no response to createAccount fast path");
+        bool aok = false;
+        EntityId accountId = 0;
+        if (!DBProtocol::decodeCreateAccountResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                aok, accountId))
+            FAIL_SECTION("decode createAccount response failed");
+        if (!aok || accountId == 0) FAIL_SECTION("createAccount fast path rejected");
+
+        if (!sclient.request(DBMethod::kQueryAccount,
+                             DBProtocol::encodeQueryAccountRequest("fast_user"),
+                             sappTick, resp))
+            FAIL_SECTION("no response to queryAccount fast path");
+        bool found = false;
+        std::string fastPw;
+        if (!DBProtocol::decodeQueryAccountResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                found, accountId, fastPw))
+            FAIL_SECTION("decode queryAccount response failed");
+        if (!found) FAIL_SECTION("queryAccount fast path not found");
+
+        // handleRemove 畸形载荷：解码失败 → remove response(false)
+        if (!sclient.request(DBMethod::kRemove, {std::byte{0xFF}, std::byte{0x00}},
+                             sappTick, resp))
+            FAIL_SECTION("no response to malformed remove");
+        bool rok = true;
+        if (!DBProtocol::decodeRemoveResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()), rok))
+            FAIL_SECTION("decode remove response failed");
+        if (rok) FAIL_SECTION("malformed remove should report failure");
         PASS();
         return true;
     };
