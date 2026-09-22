@@ -6,7 +6,13 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 using namespace theseed::control::machine;
 
@@ -36,7 +42,11 @@ NodeSummary makeSummary() {
 
     ProcessSummary self;
     self.name = "db\"app\n";
+#ifdef _WIN32
+    self.pid = static_cast<std::uint32_t>(GetCurrentProcessId());
+#else
     self.pid = static_cast<std::uint32_t>(::getpid());
+#endif
     self.port = 20003;
     // 原始字符序列：0.1<TAB>0<反斜杠>r —— 覆盖 \t、\\、\r 三条转义分支。
     self.version = "0.1\t0\\r";
@@ -63,7 +73,12 @@ int main() {
     std::cout << "MachineSnapshotCodecTest:" << std::endl;
 
     const auto summary = makeSummary();
+
+#ifdef _WIN32
+    const auto pid = static_cast<std::uint32_t>(GetCurrentProcessId());
+#else
     const auto pid = static_cast<std::uint32_t>(::getpid());
+#endif
 
     TEST("formatSnapshotText renders host metrics and current process");
     const auto text = formatSnapshotText(summary);

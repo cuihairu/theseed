@@ -7,16 +7,20 @@ target_link_libraries(
 
 add_test(NAME DBAppTest COMMAND theseed_db_app_test)
 
-# DBApp 端到端测试：真实 TCP 回环驱动完整 tick 循环。
-# mysql/postgresql 场景由运行时环境变量门控，无需外部依赖即可跑 file 部分。
-add_executable(theseed_dbapp_e2e_test DBAppE2ETest.cpp)
+# 回环探针用 POSIX socket（arpa/inet.h、非阻塞 recv），Windows 暂不纳入；
+# 其余单元测试全平台跑。
+if(NOT WIN32)
+    # DBApp 端到端测试：真实 TCP 回环驱动完整 tick 循环。
+    # mysql/postgresql 场景由运行时环境变量门控，无需外部依赖即可跑 file 部分。
+    add_executable(theseed_dbapp_e2e_test DBAppE2ETest.cpp)
 
-target_link_libraries(
-    theseed_dbapp_e2e_test
-    PRIVATE theseed_project_options
-    PRIVATE theseed_db)
+    target_link_libraries(
+        theseed_dbapp_e2e_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
 
-add_test(NAME DBAppE2ETest COMMAND theseed_dbapp_e2e_test)
+    add_test(NAME DBAppE2ETest COMMAND theseed_dbapp_e2e_test)
+endif()
 
 # MySQL 集成测试：需要运行中的 MySQL 实例，未配置 THESEED_MYSQL_HOST 时测试自身跳过。
 # 仅在 theseed_db 启用了 MySQL 后端（THESEED_MYSQL_ENABLED 全局属性为 TRUE）时构建。

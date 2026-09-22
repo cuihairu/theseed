@@ -1,6 +1,7 @@
 #include "theseed/core/FileEntityStore.h"
 #include "theseed/core/EntityData.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -138,6 +139,9 @@ std::vector<EntityId> FileEntityStore::listIdsByType(const std::string& entityTy
             continue;
         }
     }
+    // directory_iterator 的顺序由 OS 决定；与 SQL 后端的 ORDER BY 保持一致，
+    // 按 id 升序输出。
+    std::sort(ids.begin(), ids.end());
     return ids;
 }
 
@@ -150,6 +154,7 @@ std::vector<std::string> FileEntityStore::listEntityTypes() {
         if (name.starts_with('_')) continue;
         types.push_back(std::move(name));
     }
+    std::sort(types.begin(), types.end());
     return types;
 }
 
