@@ -60,15 +60,6 @@ std::vector<std::byte> strToBytes(const std::string& s) {
         reinterpret_cast<const std::byte*>(s.data()) + s.size());
 }
 
-std::vector<std::byte> u64ToBytes(core::EntityId v) {
-    std::vector<std::byte> buf(sizeof(v));
-    std::memcpy(buf.data(), &v, sizeof(v));
-    return buf;
-}
-
-// 一个绑定参数：is_null + 数据字节。
-using Param = std::pair<bool, std::vector<std::byte>>;
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -216,8 +207,7 @@ bool MySQLEntityStore::save(core::EntityId id, const core::EntityData& data) {
     sql << "INSERT INTO `" << tbl << "` (`id`, `data`) VALUES (?, ?) "
         << "ON DUPLICATE KEY UPDATE `data` = VALUES(`data`)";
 
-    if (!conn_->executeParams(sql.str(),
-                              {Param{false, u64ToBytes(id)}, Param{false, std::move(blob)}})) {
+    if (!conn_->executeParams(sql.str(), {MySqlParam::u64(id), std::move(blob)})) {
         lastError_ = "save failed: " + conn_->lastError();
         return false;
     }
@@ -231,9 +221,8 @@ bool MySQLEntityStore::remove(core::EntityId id) {
     if (!ensureConnected()) return false;
 
     // Account 索引表清理（若该 id 是账号）
-    conn_->executeParams(
-        "DELETE FROM `_account_index` WHERE `entity_id` = ?",
-        {Param{false, u64ToBytes(id)}});
+    conn_->executeParams("DELETE FROM `_account_index` WHERE `entity_id` = ?",
+                         {MySqlParam::u64(id)});
 
     // 扫描所有已知表删除。MVP 表数量少，遍历 knownTables_ 即可；
     // 为避免漏删未缓存表，先用 listEntityTypes 补全一次。
@@ -244,7 +233,7 @@ bool MySQLEntityStore::remove(core::EntityId id) {
         auto tbl = tableName(entityType);
         std::ostringstream sql;
         sql << "DELETE FROM `" << tbl << "` WHERE `id` = ?";
-        if (!conn_->executeParams(sql.str(), {Param{false, u64ToBytes(id)}})) {
+        if (!conn_->executeParams(sql.str(), {MySqlParam::u64(id)})) {
             lastError_ = "remove failed: " + conn_->lastError();
             return false;
         }
@@ -323,7 +312,7 @@ bool MySQLEntityStore::queryAccount(const std::string& username,
     // 按 username 索引查询，参数化绑定防 SQL 注入。
     auto result = conn_->queryParams(
         "SELECT `entity_id`, `password` FROM `_account_index` WHERE `username` = ?",
-        {Param{false, strToBytes(username)}});
+        {strToBytes(username)});
     if (!result || !result->next()) return false;
     outId = result->asUint64(0);
     outPassword = result->asString(1);
@@ -341,7 +330,7 @@ bool MySQLEntityStore::createAccount(const std::string& username,
     // 先查重：username 来自调用方，参数化绑定防注入。
     auto dup = conn_->queryParams(
         "SELECT `entity_id` FROM `_account_index` WHERE `username` = ?",
-        {Param{false, strToBytes(username)}});
+        {strToBytes(username)});
     if (dup && dup->next()) {
         // 用户名已存在
         return false;
@@ -381,9 +370,7 @@ bool MySQLEntityStore::createAccount(const std::string& username,
             "VALUES (?, ?, ?) "
             "ON DUPLICATE KEY UPDATE `entity_id` = VALUES(`entity_id`), "
             "`password` = VALUES(`password`)",
-            {Param{false, strToBytes(username)},
-             Param{false, u64ToBytes(outId)},
-             Param{false, strToBytes(password)}})) {
+            {strToBytes(username), MySqlParam::u64(outId), strToBytes(password)})) {
         lastError_ = "createAccount index insert failed: " + conn_->lastError();
         return false;
     }

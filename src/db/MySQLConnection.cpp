@@ -1,7 +1,9 @@
 #include "theseed/db/MySQLConnection.h"
 
 #include <cstring>
-#include <mysql.h>
+// vcpkg libmysql port 全平台统一安装到 include/mysql/（INSTALL_INCLUDEDIR），
+// 因此使用 mysql/mysql.h 而非裸 mysql.h。
+#include <mysql/mysql.h>
 #include <sstream>
 
 namespace theseed::db {
@@ -172,7 +174,8 @@ bool MySQLConnection::connect() {
         mysql_options(&impl_->mysql, MYSQL_SET_CHARSET_NAME, config_.charset.c_str());
     }
     if (config_.autoReconnect) {
-        my_bool reconnect = 1;
+        // MySQL 8.0 客户端头中该选项为 bool*（旧 my_bool 已移除）
+        bool reconnect = true;
         mysql_options(&impl_->mysql, MYSQL_OPT_RECONNECT, &reconnect);
     }
 
@@ -240,9 +243,8 @@ std::optional<MySQLResult> MySQLConnection::query(const std::string& sql) {
     return MySQLResult(std::make_unique<MySQLResult::Impl>(res));
 }
 
-bool MySQLConnection::executeParams(
-    std::string_view sql,
-    const std::vector<std::pair<bool, std::vector<std::byte>>>& params) {
+bool MySQLConnection::executeParams(std::string_view sql,
+                                    const std::vector<MySqlParam>& params) {
     if (!ensureConnected()) return false;
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
@@ -273,19 +275,31 @@ bool MySQLConnection::executeParams(
 
     std::vector<MYSQL_BIND> binds(params.size());
     std::vector<unsigned long> lengths(params.size());
-    // 每个 is_null 标志必须存活到 execute 之后，因此放在 vector 里。
-    std::vector<my_bool> nullFlags(params.size(), 0);
+    // 每个 is_null 标志必须存活到 execute 之后。MySQL 8.0 头中 is_null 为
+    // bool*，且 std::vector<bool> 元素取不出真实地址，故用动态 bool 数组。
+    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());
     std::memset(binds.data(), 0, sizeof(MYSQL_BIND) * binds.size());
 
     for (std::size_t i = 0; i < params.size(); ++i) {
-        const auto& [isNull, data] = params[i];
-        nullFlags[i] = isNull ? 1 : 0;
-        lengths[i] = static_cast<unsigned long>(data.size());
-        binds[i].buffer_type = MYSQL_TYPE_BLOB;  // 统一按二进制串绑定，避免类型转换
-        binds[i].buffer = const_cast<char*>(reinterpret_cast<const char*>(data.data()));
-        binds[i].buffer_length = lengths[i];
-        binds[i].length = &lengths[i];
+        const auto& p = params[i];
+        nullFlags[i] = p.isNull;
+        lengths[i] = static_cast<unsigned long>(p.bytes.size());
         binds[i].is_null = &nullFlags[i];
+        if (p.isUint64) {
+            // 整数按真实类型绑定，避免二进制串进 BIGINT 被严格模式拒绝。
+            // buffer 指向 params 内的存储，存活至 execute 之后。
+            binds[i].buffer_type = MYSQL_TYPE_LONGLONG;
+            binds[i].buffer = const_cast<unsigned char*>(
+                reinterpret_cast<const unsigned char*>(&p.uint64Value));
+            binds[i].buffer_length = sizeof(p.uint64Value);
+            binds[i].is_unsigned = true;
+        } else {
+            binds[i].buffer_type = MYSQL_TYPE_BLOB;  // 统一按二进制串绑定，避免类型转换
+            binds[i].buffer =
+                const_cast<char*>(reinterpret_cast<const char*>(p.bytes.data()));
+            binds[i].buffer_length = lengths[i];
+            binds[i].length = &lengths[i];
+        }
     }
 
     if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
@@ -309,9 +323,8 @@ bool MySQLConnection::executeParams(
     return true;
 }
 
-std::optional<MySQLResult> MySQLConnection::queryParams(
-    std::string_view sql,
-    const std::vector<std::pair<bool, std::vector<std::byte>>>& params) {
+std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
+                                                        const std::vector<MySqlParam>& params) {
     if (!ensureConnected()) return std::nullopt;
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
@@ -326,6 +339,15 @@ std::optional<MySQLResult> MySQLConnection::queryParams(
         return std::nullopt;
     }
 
+    // 注意：这三个容器必须存活到 mysql_stmt_execute 之后——bind_param 只保存
+    // 指向它们的指针而不拷贝内容，若声明在下方 if 块内，块结束即析构，
+    // execute 会读到悬垂栈内存（曾导致参数被当作 NULL 发送，静默匹配 0 行）。
+    std::vector<MYSQL_BIND> binds(params.size());
+    std::vector<unsigned long> lengths(params.size());
+    // MySQL 8.0 头中 is_null 为 bool*，且 std::vector<bool> 元素取不出真实地址。
+    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());
+    std::memset(binds.data(), 0, sizeof(MYSQL_BIND) * binds.size());
+
     if (!params.empty()) {
         unsigned long paramCount = mysql_stmt_param_count(stmt);
         if (paramCount != params.size()) {
@@ -337,20 +359,24 @@ std::optional<MySQLResult> MySQLConnection::queryParams(
             return std::nullopt;
         }
 
-        std::vector<MYSQL_BIND> binds(params.size());
-        std::vector<unsigned long> lengths(params.size());
-        std::vector<my_bool> nullFlags(params.size(), 0);
-        std::memset(binds.data(), 0, sizeof(MYSQL_BIND) * binds.size());
-
         for (std::size_t i = 0; i < params.size(); ++i) {
-            const auto& [isNull, data] = params[i];
-            nullFlags[i] = isNull ? 1 : 0;
-            lengths[i] = static_cast<unsigned long>(data.size());
-            binds[i].buffer_type = MYSQL_TYPE_BLOB;
-            binds[i].buffer = const_cast<char*>(reinterpret_cast<const char*>(data.data()));
-            binds[i].buffer_length = lengths[i];
-            binds[i].length = &lengths[i];
+            const auto& p = params[i];
+            nullFlags[i] = p.isNull;
+            lengths[i] = static_cast<unsigned long>(p.bytes.size());
             binds[i].is_null = &nullFlags[i];
+            if (p.isUint64) {
+                binds[i].buffer_type = MYSQL_TYPE_LONGLONG;
+                binds[i].buffer = const_cast<unsigned char*>(
+                    reinterpret_cast<const unsigned char*>(&p.uint64Value));
+                binds[i].buffer_length = sizeof(p.uint64Value);
+                binds[i].is_unsigned = true;
+            } else {
+                binds[i].buffer_type = MYSQL_TYPE_BLOB;
+                binds[i].buffer =
+                    const_cast<char*>(reinterpret_cast<const char*>(p.bytes.data()));
+                binds[i].buffer_length = lengths[i];
+                binds[i].length = &lengths[i];
+            }
         }
 
         if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
@@ -388,7 +414,7 @@ std::optional<MySQLResult> MySQLConnection::queryParams(
     constexpr std::size_t kFetchBuf = 65536;  // 64KB per column per fetch
     std::vector<std::vector<std::byte>> colBufs(colCount);
     std::vector<unsigned long> colLens(colCount, 0);
-    std::vector<my_bool> colNulls(colCount, 0);
+    std::unique_ptr<bool[]> colNulls(new bool[colCount]());
     std::vector<MYSQL_BIND> outBinds(colCount);
     std::memset(outBinds.data(), 0, sizeof(MYSQL_BIND) * colCount);
     for (std::size_t i = 0; i < colCount; ++i) {

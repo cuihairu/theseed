@@ -28,6 +28,37 @@ struct MySQLConnectionConfig {
     bool autoReconnect = true;
 };
 
+// 一条预处理语句绑定参数，二进制安全：
+//   - 默认按字节串绑定（MYSQL_TYPE_BLOB），适用于字符串/二进制列
+//   - u64() 构造的整数按 MYSQL_TYPE_LONGLONG（无符号）绑定。
+//     注意不要把整数的原始字节按字节串绑进 BIGINT 列——严格模式下
+//     服务器会拒绝（ERROR 1366 Incorrect integer value）。
+struct MySqlParam {
+    MySqlParam() = default;
+    MySqlParam(std::vector<std::byte> data)  // 允许从字节串隐式转换
+        : bytes(std::move(data)) {}
+
+    // 无符号 64 位整数参数（如 EntityId）。
+    static MySqlParam u64(std::uint64_t value) {
+        MySqlParam p;
+        p.isUint64 = true;
+        p.uint64Value = value;
+        return p;
+    }
+
+    // SQL NULL 参数。
+    static MySqlParam null() {
+        MySqlParam p;
+        p.isNull = true;
+        return p;
+    }
+
+    bool isNull = false;
+    bool isUint64 = false;
+    std::uint64_t uint64Value = 0;
+    std::vector<std::byte> bytes;
+};
+
 // 一条 SQL 查询结果集的最小封装。仅前向遍历。
 // 通过 MySQLConnection::query() 返回，生命周期与 MySQLConnection 绑定。
 class MySQLResult {
@@ -87,14 +118,12 @@ public:
 
     // 预处理语句绑定参数执行（防 SQL 注入）。
     // params 中每个元素对应 sql 中的一个 '?'。二进制安全。
-    bool executeParams(std::string_view sql,
-                       const std::vector<std::pair<bool, std::vector<std::byte>>>& params);
+    bool executeParams(std::string_view sql, const std::vector<MySqlParam>& params);
 
     // 预处理语句执行带结果集的查询。参数格式同 executeParams。
     // 返回空 optional 表示执行失败（见 lastError）。
-    std::optional<MySQLResult> queryParams(
-        std::string_view sql,
-        const std::vector<std::pair<bool, std::vector<std::byte>>>& params);
+    std::optional<MySQLResult> queryParams(std::string_view sql,
+                                           const std::vector<MySqlParam>& params);
 
     // 查询最后一条 INSERT 的自增 ID。
     std::uint64_t lastInsertId() const;
