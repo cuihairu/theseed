@@ -47,7 +47,7 @@ MigrationEpoch decodeMigrationEpoch(std::span<const std::byte> payload) {
     return epoch;
 }
 
-// entity.createCell payload: spaceId(4) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4)
+// entity.createCell payload: spaceId(8, SpaceId) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4)
 struct CellCreationPayload {
     SpaceId spaceId = 0;
     EntityId entityId = 0;
@@ -222,7 +222,7 @@ bool CellRuntime::teleportEntity(EntityId entityId, SpaceId targetSpaceId, const
         spaceChanged.entityType = entity->entityType();
         spaceChanged.method = "entity.spaceChanged";
         spaceChanged.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
-        // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+        // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
         std::vector<std::byte> payload(sizeof(EntityId) + sizeof(SpaceId) + sizeof(float) * 3);
         auto* p = payload.data();
         std::memcpy(p, &entityId, sizeof(EntityId)); p += sizeof(EntityId);
@@ -719,7 +719,7 @@ bool CellRuntime::handleEntityAction(const RuntimeInvocation& invocation) {
 }
 
 bool CellRuntime::handleTeleport(const RuntimeInvocation& invocation) {
-    // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+    // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     auto& p = invocation.payload;
     if (p.size() < sizeof(EntityId) + sizeof(SpaceId) + sizeof(float) * 3) return false;
 

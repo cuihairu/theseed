@@ -561,7 +561,7 @@ bool BaseRuntime::requestCreateCell(runtime::EntityId entityId,
     auto* entity = findEntity(entityId);
     if (!entity) return false;
 
-    // Payload: spaceId(4) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
+    // Payload: spaceId(8, SpaceId) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
     constexpr std::size_t headerSize = sizeof(runtime::SpaceId) + sizeof(runtime::EntityId)
                                      + sizeof(runtime::ComponentId) + sizeof(float) * 3;
     auto snapshot = entity->buildFullPropertySnapshot(runtime::PropertyFlag::Base);
@@ -618,7 +618,7 @@ bool BaseRuntime::requestTeleport(runtime::EntityId entityId,
     auto* cellCall = entity->cellEntityCall();
     if (!cellCall || !cellCall->isValid()) return false;
 
-    // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+    // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     constexpr std::size_t payloadSize = sizeof(runtime::EntityId) + sizeof(runtime::SpaceId)
                                        + sizeof(float) * 3;
     std::vector<std::byte> payload(payloadSize);
@@ -885,7 +885,7 @@ bool BaseRuntime::handleWitnessSync(const runtime::RuntimeInvocation& invocation
 }
 
 bool BaseRuntime::handleSpaceChanged(const runtime::RuntimeInvocation& invocation) {
-    // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+    // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     auto& p = invocation.payload;
     constexpr std::size_t expectedSize = sizeof(runtime::EntityId) + sizeof(runtime::SpaceId)
                                        + sizeof(float) * 3;

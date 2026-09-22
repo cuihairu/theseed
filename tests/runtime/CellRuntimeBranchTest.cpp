@@ -113,10 +113,10 @@ std::vector<std::byte> teleportWire(EntityId entityId, SpaceId spaceId, Vector3 
 }
 
 // 与 CellRuntime.cpp 匿名 ns 的 CellCreationPayload 字段序一致：
-// spaceId(4) + entityId(8) + baseComponentId(4) + posX/Y/Z(4*3)；x64 ABI 下
-// spaceId 与 entityId 之间有 4 字节对齐填充，sizeof == 32。
+// spaceId(8, SpaceId) + entityId(8) + baseComponentId(4) + posX/Y/Z(4*3) = 32
+// （SpaceId 是 uint64；写成更窄的类型会因结构体 padding 读进栈垃圾）
 struct CreateCellWire final {
-    std::uint32_t spaceId = 0;
+    SpaceId spaceId = 0;
     EntityId entityId = 0;
     std::uint32_t baseComponentId = 0;
     float posX = 0;
@@ -167,6 +167,18 @@ bool drainMatches(InMemoryRuntimeTransport& transport, EntityId entityId,
     return false;
 }
 
+// send 一律拒绝的 transport：用于触发 beginMigration 的 send 失败分支
+class RejectingTransport final : public theseed::runtime::IRuntimeTransport {
+public:
+    theseed::runtime::SendResult send(RuntimeInvocation) override {
+        return theseed::runtime::SendResult::BackPressure;
+    }
+    std::size_t receive(ComponentId, RuntimeInvocation*, std::size_t) override { return 0; }
+    std::size_t pendingCount() const override { return 0; }
+    void flush() override {}
+    theseed::runtime::TransportStats stats() const override { return {}; }
+};
+
 }  // namespace
 
 int main() {
@@ -176,6 +188,9 @@ int main() {
 
     EntityDef monsterDef("Monster");
     monsterDef.addProperty("hp", PropertyType::Int32, sizeof(std::int32_t));
+
+    // factory 返回 null 的类型：迁移接收按 snapshot.entityType 查 factory
+    EntityDef brokenDef("Broken");
 
     // 实体加入 Space 后被 Space 持指针；必须活到 main 结束，否则 sync 阶段扫到悬垂
     std::list<Entity> keepAlive;
@@ -190,18 +205,28 @@ int main() {
     };
     CellRuntime cellA(makeSpace(100, "a_space"), transport, 11);
     CellRuntime cellB(makeSpace(200, "b_space"), transport, 22);
+    // send 一律拒绝的独立 runtime：触发 beginMigration 的 send 失败分支
+    CellRuntime rejectingRuntime(makeSpace(400, "reject_space"),
+                                 std::make_shared<RejectingTransport>(), 33);
 
     auto avatarFactory = [&](EntityId id, EntitySide side) {
         return std::make_unique<Entity>(id, side, def);
     };
     if (!cellA.registerEntityFactory("Avatar", avatarFactory) ||
-        !cellB.registerEntityFactory("Avatar", avatarFactory)) {
+        !cellB.registerEntityFactory("Avatar", avatarFactory) ||
+        !rejectingRuntime.registerEntityFactory("Avatar", avatarFactory)) {
         return fail("register_factory");
     }
     // 空类型名 / 空 factory 拒绝；重复注册为覆盖语义（insert_or_assign）
     if (cellA.registerEntityFactory("", avatarFactory)) return fail("empty_type_accepted");
     if (cellA.registerEntityFactory("Ghost", nullptr)) return fail("null_factory_accepted");
     if (!cellA.registerEntityFactory("Avatar", avatarFactory)) return fail("re_register");
+    // factory 返回 null 的类型（迁移接收时触发 factory 空产出分支）
+    if (!cellB.registerEntityFactory("Broken", [](EntityId, EntitySide) {
+            return std::unique_ptr<Entity>{};
+        })) {
+        return fail("register_broken_factory");
+    }
     ++g_checked;
 
     int hookCalls = 0;
@@ -683,6 +708,102 @@ int main() {
         if (cellA.pumpInbound() != 1) return fail("pump_one");
         // 未绑定 handler 的实体收到 method：dispatchInvocation → entity dispatch 不崩即可
         clearTransport(*transport);
+        ++g_checked;
+    }
+
+    // ---- N. 构造校验 / 访问器 / 迁移与 createCell 分支补充 ----------------
+    {
+        // 构造校验：空 spaceRuntime / 空 transport / 零 localComponentId
+        bool threw = false;
+        try {
+            CellRuntime bad(std::unique_ptr<SpaceRuntime>{}, transport, 11);
+            static_cast<void>(bad);
+        } catch (const std::invalid_argument&) { threw = true; }
+        if (!threw) return fail("ctor_null_space");
+
+        threw = false;
+        try {
+            CellRuntime bad(makeSpace(300, "c_space"), std::shared_ptr<InMemoryRuntimeTransport>{}, 11);
+            static_cast<void>(bad);
+        } catch (const std::invalid_argument&) { threw = true; }
+        if (!threw) return fail("ctor_null_transport");
+
+        threw = false;
+        try {
+            CellRuntime bad(makeSpace(300, "c_space"), transport, 0);
+            static_cast<void>(bad);
+        } catch (const std::invalid_argument&) { threw = true; }
+        if (!threw) return fail("ctor_zero_local_id");
+        ++g_checked;
+
+        // 访问器：spaceRuntime / transport / localComponentId / groupManager（const 与非 const）
+        if (cellA.spaceRuntime().space().id() != 100) return fail("accessor_space_runtime");
+        if (&cellA.transport() != static_cast<theseed::runtime::IRuntimeTransport*>(transport.get())) {
+            return fail("accessor_transport");
+        }
+        if (cellA.localComponentId() != 11) return fail("accessor_local_id");
+        static_cast<void>(&cellA.groupManager());
+        static_cast<void>(&static_cast<const CellRuntime&>(cellA).groupManager());
+        ++g_checked;
+
+        // beginMigration 的 transport 拒绝分支（send != Accepted）
+        auto& escaper3 = keepAlive.emplace_back(281, EntitySide::Cell, def);
+        addLocal(rejectingRuntime, escaper3, Vector3{1.0F, 0.0F, 0.0F});
+        if (rejectingRuntime.beginMigration(281, 44, 2)) return fail("migrate_begin_send_rejected");
+        ++g_checked;
+
+        // transfer 的 factory 返回 null 分支：snapshot.entityType="Broken" 的工厂产出空
+        // （applyMigrationTransfer 按 snapshot.entityType 查 factory，与 invocation.entityType 无关）
+        auto& wouldBe = keepAlive.emplace_back(263, EntitySide::Cell, brokenDef);
+        auto brokenSnapshot = EntityMigration::capture(wouldBe, 4, 11, 22,
+                                                       Vector3{3.0F, 0.0F, 0.0F}, 100);
+        if (cellB.dispatchInvocation(makeInv(263, 22, "Broken", "migration.transfer",
+                                             EntityMigration::encode(brokenSnapshot)))) {
+            return fail("migrate_transfer_factory_null");
+        }
+        ++g_checked;
+
+        // commit 载荷长度不为 8 字节：decodeMigrationEpoch 抛 invalid_argument
+        auto& router = keepAlive.emplace_back(273, EntitySide::Cell, def);
+        addLocal(cellA, router, Vector3{10.0F, 0.0F, 0.0F});
+        if (!cellA.beginMigration(273, 22, 7)) return fail("migrate_begin_273");
+        clearTransport(*transport);
+        threw = false;
+        try {
+            auto shortEpoch = epochWire(7);
+            shortEpoch.pop_back();
+            cellA.dispatchInvocation(makeInv(273, 11, "Avatar", "migration.commit", shortEpoch));
+        } catch (const std::invalid_argument&) { threw = true; }
+        if (!threw) return fail("commit_epoch_size_mismatch");
+        if (!cellA.clearMigrationRoute(273)) return fail("route_clear_273");
+        clearTransport(*transport);
+        ++g_checked;
+
+        // createCell 尾部 snapshot 损坏（decodeDelta 抛）→ 吞掉异常，实体照常创建
+        auto badSnapWire = createCellWire(0, 245, 55, Vector3{1.0F, 2.0F, 3.0F});
+        badSnapWire.push_back(std::byte{0xFF});
+        badSnapWire.push_back(std::byte{0xFF});
+        badSnapWire.push_back(std::byte{0xFF});
+        if (!cellA.handleCreateCell(makeInv(245, 11, "Avatar", "entity.createCell", badSnapWire))) {
+            return fail("create_cell_bad_snapshot");
+        }
+        auto* snapped = cellA.findEntity(245);
+        if (snapped == nullptr) return fail("create_cell_bad_snapshot_entity");
+        if (snapped->getProperty<std::int32_t>(hpId) != 0) return fail("create_cell_bad_snapshot_state");
+        ++g_checked;
+
+        // createCell 实体的定时器接线：零延迟 one-shot 与 periodic 都经 tick 触发
+        auto* timerEntity = cellA.findEntity(243);
+        if (timerEntity == nullptr) return fail("create_cell_timer_entity");
+        int timerFired = 0;
+        timerEntity->addTimer(std::chrono::milliseconds{0},
+                              [&timerFired](Entity&) { timerFired += 1; });
+        int periodicFired = 0;
+        timerEntity->addPeriodicTimer(std::chrono::milliseconds{0},
+                                      [&periodicFired](Entity&) { periodicFired += 1; });
+        scheduler.runOnce();
+        if (timerFired != 1) return fail("cell_entity_timer_one_shot");
+        if (periodicFired < 1) return fail("cell_entity_timer_periodic");
         ++g_checked;
     }
 
