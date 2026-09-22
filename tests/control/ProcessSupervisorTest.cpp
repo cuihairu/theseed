@@ -11,6 +11,9 @@
 #include <iostream>
 #include <string>
 #include <system_error>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 #include <thread>
 #include <vector>
 
@@ -209,6 +212,33 @@ static void test_destructor_terminates_remaining_children() {
 }
 #endif  // !_WIN32
 
+#ifndef _WIN32
+// fork 失败（RLIMIT_NPROC soft 压到 1 → EAGAIN）时 start 必须返回 false。
+// 恢复 limit 必须放在断言之前：EXPECT 失败不会提前返回，但保持环境干净。
+static void test_start_fork_failure() {
+    TEST("start fails when fork cannot create a child");
+    struct rlimit oldLimit {};
+    if (getrlimit(RLIMIT_NPROC, &oldLimit) != 0) {
+        PASS();  // 环境不支持，跳过
+        return;
+    }
+
+    struct rlimit tight = oldLimit;
+    tight.rlim_cur = 1;  // 当前 uid 已有进程数必然 >= 1 → fork EAGAIN
+    if (setrlimit(RLIMIT_NPROC, &tight) != 0) {
+        PASS();  // 权限不允许收紧，跳过
+        return;
+    }
+
+    LocalProcessSupervisor supervisor;
+    const bool started = supervisor.start("/bin/sleep 30");
+    setrlimit(RLIMIT_NPROC, &oldLimit);
+
+    EXPECT(!started, "start must be rejected when fork fails");
+    PASS();
+}
+#endif
+
 int main() {
     std::cout << "ProcessSupervisorTest:" << std::endl;
     test_split_command_line();
@@ -218,6 +248,7 @@ int main() {
     test_restart_replaces_child();
     test_reap_removes_exited_children();
     test_destructor_terminates_remaining_children();
+    test_start_fork_failure();
 #endif
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
