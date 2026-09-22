@@ -260,12 +260,13 @@ core::EntityId MySQLEntityStore::allocId() {
     if (!ensureConnected()) return 0;
 
     // 全局原子自增计数器（与 FileEntityStore 的 _next_id.dat 语义一致，
-    // 不区分实体类型）。LAST_INSERT_ID(expr) 把 expr 写入连接级状态，
-    // 随后 SELECT LAST_INSERT_ID() 取回。这是 MySQL 无需事务的
-    // 经典原子计数器模式。
+    // 首个 id 为 1，不区分实体类型）。LAST_INSERT_ID(expr) 把 expr 写入
+    // 连接级状态，随后 SELECT LAST_INSERT_ID() 取回，单语句原子完成。
+    // 两条分支都必须显式设值：若新建分支只存常量 1（表无自增列），
+    // SELECT LAST_INSERT_ID() 会返回 0，导致全新库上的首次分配必然失败。
     if (!conn_->execute(
             "INSERT INTO `_entity_ids` (`entity_type`, `next_id`) "
-            "VALUES ('__global__', 1) "
+            "VALUES ('__global__', LAST_INSERT_ID(1)) "
             "ON DUPLICATE KEY UPDATE `next_id` = LAST_INSERT_ID(`next_id` + 1)")) {
         lastError_ = "allocId upsert failed: " + conn_->lastError();
         return 0;
