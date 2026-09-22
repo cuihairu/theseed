@@ -345,6 +345,18 @@ static void testErrorPaths() {
         ok = ok && !store.load(3, "Avatar", out);
     }
 
+    // 超过 64MiB 上限的伪尺寸文件：resize 出 65MiB 稀疏文件（不占真实磁盘）
+    // → 防御性 size 检查拒绝 load
+    {
+        std::filesystem::create_directories(dir / "Avatar");
+        { std::ofstream f(dir / "Avatar" / "21.dat", std::ios::binary); f << 'x'; }
+        std::filesystem::resize_file(dir / "Avatar" / "21.dat",
+                                     64 * 1024 * 1024 + 1);
+        EntityData out;
+        ok = ok && !store.load(21, "Avatar", out);
+        std::filesystem::remove(dir / "Avatar" / "21.dat");
+    }
+
 #ifndef _WIN32
     // 文件存在但不可读：exists 通过、open 失败 → load false
     {

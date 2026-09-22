@@ -5,8 +5,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -145,6 +147,22 @@ int main() {
         if (second.diskUsage < 0.0 || second.diskUsage > 100.0) FAIL("disk usage out of range");
         PASS();
     }
+
+#ifndef _WIN32
+    // procfs 的 statvfs capacity 为 0：space() 结果走 error 分支，diskUsage 回落为 0。
+    // 恢复 cwd 要先于任何 FAIL（FAIL 直接 return 1）。
+    TEST("disk usage falls back to 0 on zero-capacity fs");
+    {
+        std::error_code ec;
+        const auto orig = std::filesystem::current_path(ec);
+        std::filesystem::current_path("/proc", ec);
+        theseed::control::machine::LocalHostProbe probe;
+        const auto onProc = probe.sample();
+        std::filesystem::current_path(orig, ec);
+        if (onProc.diskUsage != 0.0) FAIL("diskUsage should be 0 on /proc");
+        PASS();
+    }
+#endif
 
 #ifndef _WIN32
     // LocalProcessSupervisor：真实 fork/exec 一个 sleep 子进程，

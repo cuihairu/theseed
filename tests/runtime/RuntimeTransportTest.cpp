@@ -56,6 +56,27 @@ int main() {
     }
 
     std::array<RuntimeInvocation, 4> drained{};
+
+    // receive/drain 的非法参数直接返回 0，且不得扰动队列
+    if (transport.receive(0, drained.data(), drained.size()) != 0) {
+        return fail("receive_zero_component");
+    }
+    if (transport.receive(7, nullptr, drained.size()) != 0) {
+        return fail("receive_null_out");
+    }
+    if (transport.receive(7, drained.data(), 0) != 0) {
+        return fail("receive_zero_capacity");
+    }
+    if (transport.drain(nullptr, drained.size()) != 0) {
+        return fail("drain_null_out");
+    }
+    if (transport.drain(drained.data(), 0) != 0) {
+        return fail("drain_zero_capacity");
+    }
+    if (transport.pendingCount() != 1) {
+        return fail("param_checks_disturbed_queue");
+    }
+
     const auto drainedCount = transport.drain(drained.data(), drained.size());
     if (drainedCount != 1) {
         return fail("drain_count");

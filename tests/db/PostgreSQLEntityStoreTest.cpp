@@ -350,6 +350,87 @@ int main() {
         injected.executeRaw("DROP TABLE IF EXISTS \"tbl_Lt\"");
     }
 
+    // --- createSchema / ensureTable 失败路径：用同名对象占位拦截 DDL ---
+    {
+        auto cfg = pgConfigFromEnv();
+
+        // 同名 view 占住 _account_index：CREATE TABLE IF NOT EXISTS 遇到
+        // 非表对象会直接报错（IF NOT EXISTS 只对同型对象跳过）
+        {
+            theseed::db::PostgreSQLConnection admin(cfg);
+            CHECK(admin.connect(), "admin connect (view trap)");
+            admin.execute("DROP VIEW IF EXISTS _account_index");
+            admin.execute("DROP TABLE IF EXISTS _account_index");
+            CHECK(admin.execute("CREATE VIEW _account_index AS SELECT 1"),
+                  "create trap view");
+            PostgreSQLEntityStore::Config trap;
+            trap.pg = cfg;
+            {
+                PostgreSQLEntityStore store(std::move(trap));
+                CHECK(!store.init(), "init fails when _account_index is a view");
+                CHECK(store.lastError().find("_account_index") != std::string::npos,
+                      "error mentions _account_index");
+            }
+            CHECK(admin.execute("DROP VIEW _account_index"), "drop trap view");
+            PostgreSQLEntityStore::Config repair;
+            repair.pg = cfg;
+            PostgreSQLEntityStore store(std::move(repair));
+            CHECK(store.init(), "repair schema after view trap");
+        }
+
+        // 同名但缺列的表：CREATE TABLE IF NOT EXISTS 静默跳过，而
+        // CREATE INDEX ... (entity_id) 因列不存在报错
+        {
+            theseed::db::PostgreSQLConnection admin(cfg);
+            CHECK(admin.connect(), "admin connect (index trap)");
+            admin.execute("DROP INDEX IF EXISTS idx_account_entity_id");
+            admin.execute("DROP TABLE IF EXISTS idx_account_entity_id");
+            admin.execute("DROP TABLE IF EXISTS _account_index");
+            CHECK(admin.execute(
+                      "CREATE TABLE _account_index ("
+                      "  username VARCHAR(128) NOT NULL PRIMARY KEY,"
+                      "  password BYTEA NOT NULL)"),
+                  "create entity_id-less trap table");
+            PostgreSQLEntityStore::Config trap;
+            trap.pg = cfg;
+            PostgreSQLEntityStore store(std::move(trap));
+            CHECK(!store.init(), "init fails when index column missing");
+            // createSchema 的 index 分支前缀是 "create _account_index index failed"
+            CHECK(store.lastError().find("index failed") != std::string::npos,
+                  "error mentions index step");
+            CHECK(admin.execute("DROP TABLE _account_index"), "drop trap table");
+            PostgreSQLEntityStore::Config repair;
+            repair.pg = cfg;
+            PostgreSQLEntityStore repaired(std::move(repair));
+            CHECK(repaired.init(), "repair schema after index trap");
+        }
+
+        // 同名但缺 updated_at 列的实体表：save 走 ensureTable 的
+        // CREATE INDEX ON (updated_at) 失败
+        {
+            theseed::db::PostgreSQLConnection admin(cfg);
+            CHECK(admin.connect(), "admin connect (ensureTable trap)");
+            admin.execute("DROP TABLE IF EXISTS \"idx_updated_tbl_Cov\"");
+            admin.execute("DROP TABLE IF EXISTS \"tbl_Cov\"");
+            CHECK(admin.execute(
+                      "CREATE TABLE \"tbl_Cov\" ("
+                      "  id BIGINT NOT NULL PRIMARY KEY,"
+                      "  data BYTEA NOT NULL)"),
+                  "create updated_at-less trap table");
+            PostgreSQLEntityStore::Config trap;
+            trap.pg = cfg;
+            PostgreSQLEntityStore store(std::move(trap));
+            CHECK(store.init(), "init ok before ensureTable trap");
+            EntityData cov;
+            cov.entityType = "Cov";
+            CHECK(!store.save(1, cov), "save fails when ensureTable index column missing");
+            CHECK(store.lastError().find("index failed") != std::string::npos,
+                  "error mentions ensureTable index step");
+            CHECK(admin.execute("DROP TABLE \"tbl_Cov\""),
+                  "drop ensureTable trap table");
+        }
+    }
+
     std::cout << std::endl << "PostgreSQLEntityStoreTest: all passed" << std::endl;
     return 0;
 }

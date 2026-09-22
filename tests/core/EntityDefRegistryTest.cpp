@@ -421,6 +421,35 @@ static void testMergeFromIsIdempotent() {
 
 // --- Error paths: loadFile 失败分支与 EntityDef 直接构造的边界 ---
 
+static void testExtendsCycle() {
+    TEST("inheritance: extends cycle terminates without hanging");
+
+    std::string dir = "test_registry_cycle";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+
+    writeFile(dir + "/A.xml", R"(
+<EntityDef name="A" extends="B">
+    <Properties><Property name="pa" type="Int32"/></Properties>
+</EntityDef>
+)");
+    writeFile(dir + "/B.xml", R"(
+<EntityDef name="B" extends="A">
+    <Properties><Property name="pb" type="Int32"/></Properties>
+</EntityDef>
+)");
+
+    EntityDefRegistry registry;
+    bool ok = registry.loadDirectory(dir) == 2;
+
+    // 环不致命：resolved 标记让递归提前收敛，两个定义均可获取
+    ok = ok && registry.getDef("A") != nullptr;
+    ok = ok && registry.getDef("B") != nullptr;
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS(); else FAIL("cycle broke registry");
+}
+
 static void testLoadFileErrorPaths() {
     TEST("loadFile error paths / registerDef rejects");
 
@@ -510,6 +539,7 @@ int main() {
     testInheritanceMultiLevel();
     testInheritedDefCreatesEntity();
     testMissingParentHandled();
+    testExtendsCycle();
     testInheritanceWithFlags();
     testMergeFromIsIdempotent();
     testLoadFileErrorPaths();

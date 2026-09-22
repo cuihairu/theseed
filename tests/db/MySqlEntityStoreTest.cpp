@@ -310,6 +310,36 @@ int main() {
         injected.executeRaw("DROP TABLE IF EXISTS `tbl_Lt`");
     }
 
+    // --- createSchema 失败路径：trap 用户只对 _entity_ids 有表级全权，
+    // _account_index 的 CREATE TABLE 被权限拒绝 ---
+    {
+        auto cfg = configFromEnv();
+        theseed::db::MySQLConnection admin(cfg.mysql);
+        CHECK(admin.connect(), "admin connect (grant trap)");
+        admin.execute("DROP USER IF EXISTS 'trap_cov'@'%'");
+        CHECK(admin.execute("CREATE USER 'trap_cov'@'%' IDENTIFIED BY 'trap_pw'"),
+              "create trap user");
+        // 库级仅 DML：CREATE 需要的权限检查不通过；
+        // _entity_ids 单独授予表级 ALL（含 CREATE），IF NOT EXISTS 可通过
+        CHECK(admin.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON `" +
+                            cfg.mysql.database + "`.* TO 'trap_cov'@'%'"),
+              "grant db dml");
+        CHECK(admin.execute("GRANT ALL ON `" + cfg.mysql.database +
+                            "`.`_entity_ids` TO 'trap_cov'@'%'"),
+              "grant _entity_ids all");
+
+        auto trapCfg = cfg;
+        trapCfg.mysql.user = "trap_cov";
+        trapCfg.mysql.password = "trap_pw";
+        {
+            MySQLEntityStore store(trapCfg);
+            CHECK(!store.init(), "init denied at _account_index");
+            CHECK(store.lastError().find("_account_index") != std::string::npos,
+                  "error mentions _account_index");
+        }
+        admin.execute("DROP USER IF EXISTS 'trap_cov'@'%'");
+    }
+
     std::cout << "\nMySQLEntityStoreTest: all passed\n";
     return 0;
 }
