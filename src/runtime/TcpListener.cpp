@@ -27,6 +27,8 @@ TcpListener::~TcpListener() {
 bool TcpListener::listen(const std::string& host, std::uint16_t port, int backlog) {
     if (listening_) return false;
 
+    detail::socketEnsureInit();  // Windows 需先 WSAStartup；POSIX 为空操作
+
     detail::SocketHandle s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == detail::kInvalidSocket) return false;
 

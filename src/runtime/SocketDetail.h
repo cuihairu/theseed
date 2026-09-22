@@ -5,6 +5,7 @@
 
 #if defined(_WIN32)
 
+#include <mutex>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -27,11 +28,23 @@ inline void setNonBlocking(SocketHandle s) {
 }
 inline void closeSocket(SocketHandle s) { closesocket(s); }
 
-inline void socketGlobalInit() {
-    WSADATA data;
-    WSAStartup(MAKEWORD(2, 2), &data);
+// WSAStartup 必须在任何 socket() 之前执行。用 once 语义保证幂等，
+// 并让 connect/listen 自行调用（socketEnsureInit），调用方无需记得
+// 先做全局初始化——Linux 分支为空操作，行为不变。
+inline void socketEnsureInit() {
+    static std::once_flag flag;
+    std::call_once(flag, [] {
+        WSADATA data;
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
 }
-inline void socketGlobalShutdown() { WSACleanup(); }
+
+inline void socketGlobalInit() { socketEnsureInit(); }
+
+inline void socketGlobalShutdown() {
+    static std::once_flag flag;
+    std::call_once(flag, [] { WSACleanup(); });
+}
 
 }  // namespace theseed::runtime::detail
 
@@ -74,6 +87,7 @@ inline void setNonBlocking(SocketHandle s) {
 }
 inline void closeSocket(SocketHandle s) { ::close(s); }
 
+inline void socketEnsureInit() {}
 inline void socketGlobalInit() {}
 inline void socketGlobalShutdown() {}
 

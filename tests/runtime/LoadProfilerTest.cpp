@@ -73,14 +73,21 @@ static void test_smoothed_load_ema() {
         return;
     }
 
-    // Tick 2: another small scope; smoothed should be between first and current raw.
+    // Tick 2: another small scope; verify the EMA recurrence exactly:
+    // smoothed2 = alpha * raw2 + (1 - alpha) * smoothed1. Checking the
+    // identity (instead of monotonicity) keeps the test deterministic —
+    // Windows timer granularity makes raw2 vs raw1 ordering unreliable.
     {
         auto s2 = p.scope(1, "Avatar");
         sleepMs(4);
     }
     p.tick();
-    const float second = p.snapshot(1).smoothedLoad;
-    if (second < first - tol) { FAIL("second smoothed dipped below first unexpectedly"); return; }
+    const auto snap2 = p.snapshot(1);
+    const float secondExpected = 0.5F * snap2.rawLoad + 0.5F * first;
+    const float tol2 = 0.5F;
+    if (std::abs(snap2.smoothedLoad - secondExpected) > tol2) {
+        FAIL("second smoothed not ema recurrence of raw"); return;
+    }
     PASS();
 }
 
