@@ -20,11 +20,11 @@ using theseed::db::PostgreSQLEntityStore;
 // 未设置 THESEED_PG_HOST 时整体跳过（返回 0），CI 在无 PostgreSQL 环境下不会失败。
 //
 // 本地 podman 运行示例：
-//   podman run -d --name theseed-postgres -e POSTGRES_PASSWORD=theseed_test_pw \
+//   podman run -d --name theseed-postgres -e POSTGRES_PASSWORD=theseed_test_pw
 //     -e POSTGRES_DB=theseed_test -p 127.0.0.1:13307:5432 docker.io/library/postgres:16
 //
-//   THESEED_PG_HOST=127.0.0.1 THESEED_PG_PORT=13307 THESEED_PG_USER=postgres \
-//   THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test \
+//   THESEED_PG_HOST=127.0.0.1 THESEED_PG_PORT=13307 THESEED_PG_USER=postgres
+//   THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test
 //   ./theseed_pg_store_test
 
 namespace {
@@ -198,6 +198,156 @@ int main() {
         CHECK(password == "secret", "queryAccount password matches");
 
         CHECK(!store.queryAccount("nobody", id, password), "queryAccount miss returns false");
+    }
+
+    const auto envCfg = pgConfigFromEnv();
+
+    // --- sanitize：非法字符映射为下划线，合法字符原样保留 ---
+    {
+        auto weird = makeAvatar(10, 1, 1.0f, 2.0f);
+        weird.entityType = "P1-yer z";
+        CHECK(store.save(10, weird), "save dirty type name");
+        EntityData loaded;
+        CHECK(store.load(10, "P1-yer z", loaded), "load dirty type name");
+        CHECK(loaded.entityType == "P1-yer z", "dirty type round-trips");
+        store.executeRaw("DROP TABLE IF EXISTS \"tbl_P1_yer_z\"");
+    }
+
+    // --- executeRaw 拒绝坏 SQL ---
+    CHECK(!store.executeRaw("THIS IS NOT VALID SQL"), "executeRaw bad sql");
+
+    // --- 未 init 的 store：操作报 not initialized ---
+    {
+        PostgreSQLEntityStore ghost(PostgreSQLEntityStore::Config{});
+        EntityData loaded;
+        CHECK(!ghost.load(1, "Avatar", loaded), "ghost load rejected");
+        CHECK(ghost.lastError() == "store not initialized", "ghost error text");
+    }
+
+    // --- 坏端口：init 失败并带出连接错误 ---
+    {
+        auto bad = pgConfigFromEnv();
+        bad.port = 1;
+        PostgreSQLEntityStore::Config badCfg;
+        badCfg.pg = bad;
+        badCfg.autoCreateSchema = true;
+        PostgreSQLEntityStore refused(std::move(badCfg));
+        CHECK(!refused.init(), "init with dead port fails");
+        CHECK(refused.lastError().find("connect failed") != std::string::npos,
+              "connect error surfaced");
+    }
+
+    // --- 只读用户：connect 成功但 createSchema 的 DDL、ensureTable 被拒 ---
+    {
+        theseed::db::PostgreSQLConnection admin(envCfg);
+        CHECK(admin.connect(), "admin connect for ro user");
+        // 上次运行可能残留同名角色（授权依赖会阻止直接 DROP），先清依赖
+        admin.execute("DROP OWNED BY ro_cov");
+        admin.execute("DROP ROLE IF EXISTS ro_cov");
+        CHECK(admin.execute("CREATE USER ro_cov WITH PASSWORD 'cov_pw'"),
+              "create ro user");
+        CHECK(admin.execute("GRANT USAGE ON SCHEMA public TO ro_cov"),
+              "grant ro schema usage");
+        CHECK(admin.execute("GRANT SELECT ON ALL TABLES IN SCHEMA public TO ro_cov"),
+              "grant ro select");
+
+        auto ro = pgConfigFromEnv();
+        ro.user = "ro_cov";
+        ro.password = "cov_pw";
+        {
+            // autoCreateSchema=true：init 在 create _entity_ids 处被拒
+            PostgreSQLEntityStore::Config roSchema;
+            roSchema.pg = ro;
+            roSchema.autoCreateSchema = true;
+            PostgreSQLEntityStore readonly(roSchema);
+            CHECK(!readonly.init(), "ro init denied at createSchema");
+            CHECK(readonly.lastError().find("_entity_ids") != std::string::npos,
+                  "ro error mentions _entity_ids");
+        }
+        {
+            // autoCreateSchema=false：init 成功，但 save 的 ensureTable 被拒
+            PostgreSQLEntityStore::Config roPlain;
+            roPlain.pg = ro;
+            roPlain.autoCreateSchema = false;
+            PostgreSQLEntityStore readonly(roPlain);
+            CHECK(readonly.init(), "ro init without schema");
+            auto avatar = makeAvatar(1, 1, 1.0f, 0.0f);
+            CHECK(!readonly.save(1, avatar), "ro save denied");
+            CHECK(readonly.lastError().find("ensureTable failed") != std::string::npos,
+                  "ensureTable error surfaced");
+        }
+
+        admin.execute("DROP OWNED BY ro_cov");
+        admin.execute("DROP ROLE IF EXISTS ro_cov");
+    }
+
+    // --- config.connection 注入 + 表锁超时路径 ---
+    // 注入连接设 lock_timeout=1s：被 ACCESS EXCLUSIVE 锁阻塞的语句 1 秒即报错。
+    {
+        auto cfg = pgConfigFromEnv();
+        auto conn = std::make_shared<theseed::db::PostgreSQLConnection>(cfg);
+        CHECK(conn->connect(), "shared conn connect");
+        conn->execute("SET lock_timeout = '1s'");
+        PostgreSQLEntityStore::Config injCfg;
+        injCfg.pg = cfg;
+        injCfg.autoCreateSchema = false;
+        injCfg.connection = conn;
+        PostgreSQLEntityStore injected(std::move(injCfg));
+        CHECK(injected.init(), "init with injected connection");
+
+        // 先让 tbl_Avatar / tbl_Lt 进入 knownTables_ 缓存，锁测试只等一次
+        CHECK(injected.save(1, makeAvatar(1, 1, 1.0f, 0.0f)), "injected save avatar#1");
+        auto lt = makeAvatar(12, 1, 1.0f, 2.0f);
+        lt.entityType = "Lt";
+        CHECK(injected.save(12, lt), "injected save Lt");
+
+        theseed::db::PostgreSQLConnection locker(cfg);
+        CHECK(locker.connect(), "locker connect");
+
+        // save：tbl_Lt 被锁 → INSERT 等锁超时
+        CHECK(locker.execute("BEGIN"), "begin tx");
+        CHECK(locker.execute("LOCK TABLE \"tbl_Lt\" IN ACCESS EXCLUSIVE MODE"),
+              "lock tbl_Lt");
+        CHECK(!injected.save(12, lt), "save blocked by lock");
+        CHECK(locker.execute("ROLLBACK"), "unlock tbl_Lt");
+
+        // load：tbl_Avatar 被锁 → SELECT 等锁超时
+        CHECK(locker.execute("BEGIN"), "begin tx");
+        CHECK(locker.execute("LOCK TABLE \"tbl_Avatar\" IN ACCESS EXCLUSIVE MODE"),
+              "lock tbl_Avatar");
+        {
+            EntityData loaded;
+            CHECK(!injected.load(1, "Avatar", loaded), "load blocked by lock");
+        }
+        CHECK(locker.execute("ROLLBACK"), "unlock tbl_Avatar");
+
+        // remove：tbl_Avatar 被锁 → DELETE 等锁超时
+        CHECK(locker.execute("BEGIN"), "begin tx");
+        CHECK(locker.execute("LOCK TABLE \"tbl_Avatar\" IN ACCESS EXCLUSIVE MODE"),
+              "lock tbl_Avatar again");
+        CHECK(!injected.remove(1), "remove blocked by lock");
+        CHECK(locker.execute("ROLLBACK"), "unlock tbl_Avatar again");
+
+        // allocId：_entity_ids 被锁 → INSERT...RETURNING 等锁超时
+        CHECK(locker.execute("BEGIN"), "begin tx");
+        CHECK(locker.execute("LOCK TABLE _entity_ids IN ACCESS EXCLUSIVE MODE"),
+              "lock _entity_ids");
+        CHECK(injected.allocId() == 0, "allocId blocked by lock");
+        CHECK(locker.execute("ROLLBACK"), "unlock _entity_ids");
+
+        // createAccount：_account_index 被锁 → 查重失败视为不存在 →
+        // allocId 与主表写入成功 → 索引 INSERT 等锁超时
+        CHECK(locker.execute("BEGIN"), "begin tx");
+        CHECK(locker.execute("LOCK TABLE _account_index IN ACCESS EXCLUSIVE MODE"),
+              "lock _account_index");
+        {
+            theseed::core::EntityId blockedId = 0;
+            CHECK(!injected.createAccount("locked_out", "pw", blockedId),
+                  "createAccount blocked by lock");
+        }
+        CHECK(locker.execute("ROLLBACK"), "unlock _account_index");
+
+        injected.executeRaw("DROP TABLE IF EXISTS \"tbl_Lt\"");
     }
 
     std::cout << std::endl << "PostgreSQLEntityStoreTest: all passed" << std::endl;

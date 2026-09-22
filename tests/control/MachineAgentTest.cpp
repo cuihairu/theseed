@@ -146,6 +146,47 @@ int main() {
         PASS();
     }
 
+#ifndef _WIN32
+    // LocalProcessSupervisor：真实 fork/exec 一个 sleep 子进程，
+    // 走 start/snapshot(stop/restart) 主路径。fork 出的子进程走 _exit，
+    // 其分支计数不会写 gcda，但父进程路径全部生效。
+    TEST("local supervisor manages a real process");
+    {
+        LocalProcessSupervisor supervisor;
+        if (supervisor.start("")) FAIL("empty target should fail");
+        if (supervisor.start("   ")) FAIL("whitespace-only target should fail");
+
+        if (!supervisor.start("sleep 5")) FAIL("start sleep");
+        auto procs = supervisor.listProcesses();
+        std::uint32_t pid = 0;
+        for (const auto& p : procs) {
+            if (p.managed && p.name == "sleep") {
+                pid = p.pid;
+                break;
+            }
+        }
+        if (pid == 0) FAIL("managed sleep missing from listProcesses");
+
+        // restart：找到命令行 → terminate → 重新 start
+        if (!supervisor.restart(pid)) FAIL("restart sleep");
+
+        procs = supervisor.listProcesses();
+        std::uint32_t newPid = 0;
+        for (const auto& p : procs) {
+            if (p.managed && p.name == "sleep") {
+                newPid = p.pid;
+                break;
+            }
+        }
+        if (newPid == 0) FAIL("restarted sleep missing");
+
+        if (!supervisor.stop(newPid)) FAIL("stop sleep");
+        if (supervisor.stop(newPid)) FAIL("second stop should fail");
+        if (supervisor.restart(newPid)) FAIL("restart stopped pid should fail");
+        PASS();
+    }
+#endif
+
     std::cout << "MachineAgentTest: all passed" << std::endl;
     return 0;
 }

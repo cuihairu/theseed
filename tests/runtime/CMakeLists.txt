@@ -8,6 +8,15 @@ target_link_libraries(
 
 add_test(NAME theseed_runtime_framework_test COMMAND theseed_runtime_framework_test)
 
+add_executable(theseed_tcp_connection_test TcpConnectionTest.cpp)
+
+target_link_libraries(
+    theseed_tcp_connection_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_tcp_connection_test COMMAND theseed_tcp_connection_test)
+
 add_executable(theseed_entity_core_test EntityCoreTest.cpp)
 
 target_link_libraries(
