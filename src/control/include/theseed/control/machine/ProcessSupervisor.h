@@ -41,11 +41,14 @@ public:
     bool stop(std::uint32_t pid) override;
     bool restart(std::uint32_t pid) override;
 
+    // 命令行解析工具（无状态，start 内部也走这两个）：对外暴露以便
+    // CLI/测试直接复用，不必 fork 一个进程才能验证解析行为。
+    static std::vector<std::string> splitCommandLine(const std::string& commandLine);
+    static std::string basenameOf(const std::string& commandLine);
+
 private:
     struct ChildProcess;
 
-    static std::vector<std::string> splitCommandLine(const std::string& commandLine);
-    static std::string basenameOf(const std::string& commandLine);
     void reapManagedProcesses() const;
     bool terminateManagedProcess(std::uint32_t pid);
 
