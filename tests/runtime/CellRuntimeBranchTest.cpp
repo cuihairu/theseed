@@ -7,6 +7,7 @@
 #include "theseed/runtime/PropertyReplication.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -179,6 +181,34 @@ public:
     theseed::runtime::TransportStats stats() const override { return {}; }
 };
 
+// send 行为可开关的 transport：默认转发给内部 InMemory，reject_ 置真后拒绝，
+// 用于触发迁移路由转发时的 send 失败分支
+class SwitchableTransport final : public theseed::runtime::IRuntimeTransport {
+public:
+    explicit SwitchableTransport(std::shared_ptr<InMemoryRuntimeTransport> inner)
+        : inner_(std::move(inner)) {}
+
+    SendResult send(RuntimeInvocation invocation) override {
+        if (reject_.load(std::memory_order_relaxed)) {
+            return SendResult::Closed;
+        }
+        return inner_->send(std::move(invocation));
+    }
+    std::size_t receive(ComponentId targetComponent, RuntimeInvocation* out,
+                        std::size_t capacity) override {
+        return inner_->receive(targetComponent, out, capacity);
+    }
+    std::size_t pendingCount() const override { return inner_->pendingCount(); }
+    void flush() override { inner_->flush(); }
+    theseed::runtime::TransportStats stats() const override { return inner_->stats(); }
+
+    std::atomic<bool> reject_{false};
+    InMemoryRuntimeTransport& inner() { return *inner_; }
+
+private:
+    std::shared_ptr<InMemoryRuntimeTransport> inner_;
+};
+
 }  // namespace
 
 int main() {
@@ -208,13 +238,22 @@ int main() {
     // send 一律拒绝的独立 runtime：触发 beginMigration 的 send 失败分支
     CellRuntime rejectingRuntime(makeSpace(400, "reject_space"),
                                  std::make_shared<RejectingTransport>(), 33);
+    // send 可开关的 runtime：触发迁移路由转发时的 send 拒绝
+    auto switchTransport = std::make_shared<SwitchableTransport>(
+        std::make_shared<InMemoryRuntimeTransport>());
+    CellRuntime switchRuntime(makeSpace(600, "sw_space"), switchTransport, 77);
+    // 迁移路由窗口 TTL 1ms：触发路由过期 drop 分支
+    CellRuntime shortTtlRuntime(makeSpace(700, "ttl_space"), transport, 88,
+                                std::chrono::milliseconds{1});
 
     auto avatarFactory = [&](EntityId id, EntitySide side) {
         return std::make_unique<Entity>(id, side, def);
     };
     if (!cellA.registerEntityFactory("Avatar", avatarFactory) ||
         !cellB.registerEntityFactory("Avatar", avatarFactory) ||
-        !rejectingRuntime.registerEntityFactory("Avatar", avatarFactory)) {
+        !rejectingRuntime.registerEntityFactory("Avatar", avatarFactory) ||
+        !switchRuntime.registerEntityFactory("Avatar", avatarFactory) ||
+        !shortTtlRuntime.registerEntityFactory("Avatar", avatarFactory)) {
         return fail("register_factory");
     }
     // 空类型名 / 空 factory 拒绝；重复注册为覆盖语义（insert_or_assign）
@@ -804,6 +843,111 @@ int main() {
         scheduler.runOnce();
         if (timerFired != 1) return fail("cell_entity_timer_one_shot");
         if (periodicFired < 1) return fail("cell_entity_timer_periodic");
+        ++g_checked;
+    }
+
+    // ---- O. dispatch 具名分发 / 迁移 TTL / ghost sync / 路由转发拒绝 -----
+    {
+        // const spaceRuntime() 访问器
+        if (static_cast<const CellRuntime&>(cellA).spaceRuntime().space().id() != 100) {
+            return fail("accessor_space_runtime_const");
+        }
+        ++g_checked;
+
+        // dispatch 具名分发：entity.action / entity.teleport（跨空间到已存在的 400）
+        auto& dispatcher = keepAlive.emplace_back(313, EntitySide::Cell, def);
+        std::string gotAction;
+        dispatcher.setActionHandler(
+            [&](Entity&, std::string_view action, std::span<const std::byte>) {
+                gotAction = std::string(action);
+            });
+        addLocal(cellA, dispatcher, Vector3{2.0F, 0.0F, 0.0F});
+        if (!cellA.dispatchInvocation(makeInv(313, 11, "Avatar", "entity.action",
+                                              actionWire("fire", "")))) {
+            return fail("dispatch_action");
+        }
+        if (dispatcher.pendingInputCount() != 1) return fail("dispatch_action_queued");
+        dispatcher.processInput();
+        if (gotAction != "fire") return fail("dispatch_action_handler");
+        if (!cellA.dispatchInvocation(makeInv(313, 11, "Avatar", "entity.teleport",
+                                              teleportWire(313, 400, Vector3{3, 0, 0})))) {
+            return fail("dispatch_teleport");
+        }
+        // dispatch 未知 method：target 不匹配
+        if (cellA.dispatchInvocation(makeInv(313, 999, "Avatar", "nope.method", {}))) {
+            return fail("dispatch_unknown_method_target");
+        }
+        // dispatch 未知 method + target 匹配 + 未知实体
+        if (cellA.dispatchInvocation(makeInv(999, 11, "Avatar", "nope.method", {}))) {
+            return fail("dispatch_unknown_entity");
+        }
+        clearTransport(*transport);
+        ++g_checked;
+
+        // beginMigration：实体仍在 Space 名册但 coordinateSystem 节点丢失
+        // （entityPosition 无值）→ false
+        auto& lost = keepAlive.emplace_back(305, EntitySide::Cell, def);
+        addLocal(cellA, lost, Vector3{4.0F, 0.0F, 0.0F});
+        cellA.spaceRuntime().space().coordinateSystem().remove(305);
+        if (cellA.beginMigration(305, 22, 1)) return fail("migrate_begin_no_position");
+        cellA.removeEntity(305);
+        ++g_checked;
+
+        // forwardGhostMethod：manager 为 real 侧 → forwardToReal 返回空 → false
+        auto& ghostOwner = keepAlive.emplace_back(306, EntitySide::Cell, def);
+        addLocal(cellA, ghostOwner, Vector3{5.0F, 0.0F, 0.0F});
+        cellA.ensureRealGhost(ghostOwner, 44);
+        if (cellA.forwardGhostMethod(306, "castSpell", {})) return fail("forward_real_manager");
+        ++g_checked;
+
+        // syncRealGhosts：real ghost + 非 Active owner → continue
+        ghostOwner.beginDestroy();
+        scheduler.runOnce();
+        ++g_checked;
+
+        // syncRealGhosts：real ghost + staged delta → 向 ghost 推 ghost.sync
+        auto& synced = keepAlive.emplace_back(307, EntitySide::Cell, def);
+        addLocal(cellA, synced, Vector3{6.0F, 0.0F, 0.0F});
+        cellA.ensureRealGhost(synced, 45);
+        synced.setProperty<std::int32_t>(hpId, 77);
+        scheduler.runOnce();  // stage delta + syncRealGhosts 入队 + flush 发送
+        if (!drainMatches(*transport, 307, 45, "ghost.sync")) {
+            return fail("ghost_sync_delta_sent");
+        }
+        clearTransport(*transport);
+        ++g_checked;
+
+        // syncRealGhosts：real ghost owner 从未 addEntity（不在 entitySpaceMap_）
+        // → delta 查找失败 → continue
+        auto& stray = keepAlive.emplace_back(314, EntitySide::Cell, def);
+        stray.activate();
+        cellA.ensureRealGhost(stray, 46);
+        scheduler.runOnce();  // syncRealGhosts → delta lambda map 查找失败
+        clearTransport(*transport);
+        ++g_checked;
+
+        // routeMigratingInvocation：路由未过期但 forward send 被拒绝 → false
+        auto& fwd = keepAlive.emplace_back(311, EntitySide::Cell, def);
+        addLocal(switchRuntime, fwd, Vector3{1.0F, 0.0F, 0.0F});
+        if (!switchRuntime.beginMigration(311, 88, 1)) return fail("switch_migrate_begin");
+        switchTransport->reject_.store(true);
+        if (switchRuntime.dispatchInvocation(makeInv(311, 77, "Avatar", "castSpell", {}))) {
+            return fail("route_forward_rejected");
+        }
+        switchTransport->reject_.store(false);
+        ++g_checked;
+
+        // 路由窗口过期（TTL 1ms）：drop + 计数 + 路由被清除
+        auto& exp = keepAlive.emplace_back(312, EntitySide::Cell, def);
+        addLocal(shortTtlRuntime, exp, Vector3{1.0F, 0.0F, 0.0F});
+        if (!shortTtlRuntime.beginMigration(312, 89, 2)) return fail("ttl_migrate_begin");
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        if (shortTtlRuntime.dispatchInvocation(makeInv(312, 88, "Avatar", "castSpell", {}))) {
+            return fail("route_expired_drop");
+        }
+        // 过期 drop 顺带清除路由：再 clear 应 false
+        if (shortTtlRuntime.clearMigrationRoute(312)) return fail("route_expired_erased");
+        clearTransport(*transport);
         ++g_checked;
     }
 

@@ -28,7 +28,8 @@ public:
 
     CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
                 std::shared_ptr<IRuntimeTransport> transport,
-                ComponentId localComponentId);
+                ComponentId localComponentId,
+                Duration migrationRouteTtl = std::chrono::seconds{10});
     ~CellRuntime();
 
     SpaceRuntime& spaceRuntime();
@@ -172,6 +173,7 @@ private:
     std::unordered_map<std::string, EntityFactory> entityFactories_;
     std::unordered_map<EntityId, std::unique_ptr<Entity>> ownedEntities_;
     std::unordered_map<EntityId, MigrationRoute> migrationRoutes_;
+    Duration migrationRouteTtl_ = std::chrono::seconds{10};
     std::unordered_map<EntityId, GhostBinding> ghostBindings_;
     std::unique_ptr<foundation::TimerWheel> timerWheel_;
     std::unordered_map<EntityId, std::vector<foundation::TimerHandle>> entityTimers_;

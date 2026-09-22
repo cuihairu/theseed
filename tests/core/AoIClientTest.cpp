@@ -227,8 +227,9 @@ struct CollectorPipe {
         auto [a, b] = InMemoryBytePipe::createPair();
         cp->serverEnd = a;
         cp->clientEnd = b;
-        cp->clientEnd->setOnReceived([&](std::span<const std::byte> data) {
-            cp->received.insert(cp->received.end(), data.begin(), data.end());
+        auto* raw = cp.get();
+        cp->clientEnd->setOnReceived([raw](std::span<const std::byte> data) {
+            raw->received.insert(raw->received.end(), data.begin(), data.end());
         });
         return cp;
     }

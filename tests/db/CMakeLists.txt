@@ -20,6 +20,8 @@ if(NOT WIN32)
         PRIVATE theseed_db)
 
     add_test(NAME DBAppE2ETest COMMAND theseed_dbapp_e2e_test)
+    # 三个数据库测试共用同一套 theseed_test 库，建库/删库互踩，必须串行
+    set_tests_properties(DBAppE2ETest PROPERTIES RUN_SERIAL ON)
 endif()
 
 # MySQL 集成测试：需要运行中的 MySQL 实例，未配置 THESEED_MYSQL_HOST 时测试自身跳过。
@@ -34,6 +36,7 @@ if(THESEED_MYSQL_ENABLED)
         PRIVATE theseed_db)
 
     add_test(NAME MySQLEntityStoreTest COMMAND theseed_mysql_store_test)
+    set_tests_properties(MySQLEntityStoreTest PROPERTIES RUN_SERIAL ON)
 endif()
 
 # PostgreSQL 集成测试：需要运行中的 PostgreSQL 实例，未配置 THESEED_PG_HOST 时跳过。
@@ -47,4 +50,5 @@ if(THESEED_POSTGRESQL_ENABLED)
         PRIVATE theseed_db)
 
     add_test(NAME PostgreSQLEntityStoreTest COMMAND theseed_pg_store_test)
+    set_tests_properties(PostgreSQLEntityStoreTest PROPERTIES RUN_SERIAL ON)
 endif()

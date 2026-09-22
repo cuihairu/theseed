@@ -104,7 +104,8 @@ void CellRuntime::FlushPump::tick(TickContext& context) {
 
 CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
                          std::shared_ptr<IRuntimeTransport> transport,
-                         ComponentId localComponentId)
+                         ComponentId localComponentId,
+                         Duration migrationRouteTtl)
     : defaultSpaceId_(spaceRuntime ? spaceRuntime->space().id() : 0),
       transport_(std::move(transport)),
       localComponentId_(localComponentId),
@@ -113,6 +114,7 @@ CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
       syncBuildPump_(*this),
       flushPump_(*this),
       timerWheel_(std::make_unique<foundation::TimerWheel>()) {
+    migrationRouteTtl_ = migrationRouteTtl;
     if (!spaceRuntime) {
         throw std::invalid_argument("cell runtime requires space runtime");
     }
@@ -304,7 +306,7 @@ bool CellRuntime::beginMigration(EntityId entityId,
     migrationRoutes_[entityId] = MigrationRoute{
         .targetComponent = targetComponent,
         .epoch = epoch,
-        .expiry = Clock::now() + std::chrono::seconds{10},
+        .expiry = Clock::now() + migrationRouteTtl_,
     };
     return true;
 }
@@ -421,11 +423,8 @@ bool CellRuntime::dispatchInvocation(const RuntimeInvocation& invocation) {
 
     auto* manager = findGhostManager(invocation.entityId);
     if (manager != nullptr && manager->isGhost()) {
+        // forwardToReal 仅在 !isGhost() 时返回 nullopt，此处恒有值
         const auto forwarded = manager->forwardToReal(invocation.method, invocation.payload);
-        if (!forwarded.has_value()) {
-            return false;
-        }
-
         return transport_->send(*forwarded) == SendResult::Accepted;
     }
 
@@ -511,8 +510,9 @@ bool CellRuntime::applyMigrationCommit(const RuntimeInvocation& invocation) {
     entity->destroy();
     removeEntity(invocation.entityId);
     // Note: migrationRoutes_ is intentionally left in place. The route window
-    // (default TTL 10s) keeps catching straggler messages addressed to the old
-    // CellApp until either clearMigrationRoute() is called or the TTL expires.
+    // (constructor-configurable TTL, default 10s) keeps catching straggler
+    // messages addressed to the old CellApp until either clearMigrationRoute()
+    // is called or the TTL expires.
     return true;
 }
 
@@ -527,10 +527,12 @@ bool CellRuntime::routeMigratingInvocation(const RuntimeInvocation& invocation) 
         // a message arriving after the route window closed means the routing table
         // upstream has not finished updating. Surface as warn so it is observable.
         migrationRouteExpiredDropsCounter().increment();
+        std::vector<theseed::foundation::LogAttribute> attrs;
+        attrs.push_back({"entity_id", static_cast<std::int64_t>(invocation.entityId)});
+        attrs.push_back({"epoch", static_cast<std::int64_t>(iter->second.epoch)});
+        attrs.push_back({"method", invocation.method});
         theseed::foundation::logWarn("migration route window expired but message arrived",
-            {{"entity_id", static_cast<std::int64_t>(invocation.entityId)},
-             {"epoch", static_cast<std::int64_t>(iter->second.epoch)},
-             {"method", invocation.method}});
+                                     std::move(attrs));
         migrationRoutes_.erase(iter);
         return false;
     }
@@ -544,11 +546,8 @@ bool CellRuntime::routeMigratingInvocation(const RuntimeInvocation& invocation) 
     return false;
 }
 
+// 仅由 dispatchInvocation 调用（method 已保证为 "ghost.sync"）
 bool CellRuntime::applyGhostSync(const RuntimeInvocation& invocation) {
-    if (invocation.method != "ghost.sync") {
-        return false;
-    }
-
     if (invocation.targetComponent != localComponentId_) {
         return false;
     }
@@ -895,14 +894,16 @@ void CellRuntime::syncRealGhosts() {
             continue;
         }
 
-        const auto* delta = [&]() -> const std::vector<PropertyDelta>* {
-            auto spaceIt = entitySpaceMap_.find(entity->id());
-            if (spaceIt == entitySpaceMap_.end()) return nullptr;
-            auto* sr = findSpaceRuntime(spaceIt->second);
-            if (!sr) return nullptr;
-            return sr->findStagedDelta(entity->id());
-        }();
-        if (delta == nullptr || delta->empty()) {
+        auto spaceIt = entitySpaceMap_.find(entity->id());
+        if (spaceIt == entitySpaceMap_.end()) {
+            continue;
+        }
+        auto* sr = findSpaceRuntime(spaceIt->second);
+        if (!sr) {
+            continue;
+        }
+        const auto* staged = sr->findStagedDelta(entity->id());
+        if (staged == nullptr || staged->empty()) {
             continue;
         }
 
@@ -912,7 +913,7 @@ void CellRuntime::syncRealGhosts() {
         invocation.entityType = entity->entityType();
         invocation.method = "ghost.sync";
         invocation.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
-        invocation.payload = PropertyReplication::encodeDelta(*delta);
+        invocation.payload = PropertyReplication::encodeDelta(*staged);
         pendingRuntimeSync_.push_back(std::move(invocation));
     }
 }
@@ -969,20 +970,17 @@ void CellRuntime::flushAoIEvents() {
                 ms.writeBytes(reinterpret_cast<const std::byte*>(typeName.data()),
                               typeName.size());
             }
-            // Position
-            if (target->hasPosition()) {
-                auto pos = target->position();
-                ms.writeUint8(1);
-                std::byte fbuf[sizeof(float)];
-                std::memcpy(fbuf, &pos.x, sizeof(float));
-                ms.writeBytes(fbuf, sizeof(float));
-                std::memcpy(fbuf, &pos.y, sizeof(float));
-                ms.writeBytes(fbuf, sizeof(float));
-                std::memcpy(fbuf, &pos.z, sizeof(float));
-                ms.writeBytes(fbuf, sizeof(float));
-            } else {
-                ms.writeUint8(0);
-            }
+            // Position：AoI 事件的目标必然在 Space 中（addEntity 已 setPosition），
+            // 因此 flag 恒为 1
+            const auto pos = target->position();
+            ms.writeUint8(1);
+            std::byte fbuf[sizeof(float)];
+            std::memcpy(fbuf, &pos.x, sizeof(float));
+            ms.writeBytes(fbuf, sizeof(float));
+            std::memcpy(fbuf, &pos.y, sizeof(float));
+            ms.writeBytes(fbuf, sizeof(float));
+            std::memcpy(fbuf, &pos.z, sizeof(float));
+            ms.writeBytes(fbuf, sizeof(float));
 
             RuntimeInvocation inv;
             inv.entityId = event.observerId;
