@@ -21,6 +21,20 @@ else()
     message(STATUS "theseed_db: MySQL backend disabled (libmysql not found, file-only)")
 endif()
 
+# PostgreSQL 后端同样是可选的：libpq 不可用时仅回退，不影响其余编译。
+find_package(PostgreSQL QUIET)
+if(PostgreSQL_FOUND)
+    target_sources(theseed_db PRIVATE
+        PostgreSQLConnection.cpp
+        PostgreSQLEntityStore.cpp)
+    target_compile_definitions(theseed_db PUBLIC THESEED_HAS_POSTGRESQL=1)
+    target_link_libraries(theseed_db PRIVATE PostgreSQL::PostgreSQL)
+    set_property(GLOBAL PROPERTY theseed_postgresql_enabled TRUE)
+    message(STATUS "theseed_db: PostgreSQL backend enabled (libpq found)")
+else()
+    message(STATUS "theseed_db: PostgreSQL backend disabled (libpq not found)")
+endif()
+
 target_link_libraries(
     theseed_db
     PUBLIC theseed_project_options

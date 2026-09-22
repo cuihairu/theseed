@@ -20,3 +20,16 @@ if(THESEED_MYSQL_ENABLED)
 
     add_test(NAME MySQLEntityStoreTest COMMAND theseed_mysql_store_test)
 endif()
+
+# PostgreSQL 集成测试：需要运行中的 PostgreSQL 实例，未配置 THESEED_PG_HOST 时跳过。
+get_property(THESEED_POSTGRESQL_ENABLED GLOBAL PROPERTY theseed_postgresql_enabled)
+if(THESEED_POSTGRESQL_ENABLED)
+    add_executable(theseed_pg_store_test PostgreSQLEntityStoreTest.cpp)
+
+    target_link_libraries(
+        theseed_pg_store_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
+
+    add_test(NAME PostgreSQLEntityStoreTest COMMAND theseed_pg_store_test)
+endif()

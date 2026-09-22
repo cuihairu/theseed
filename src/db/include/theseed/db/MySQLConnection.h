@@ -1,5 +1,7 @@
 #pragma once
 
+#include "theseed/db/SqlParam.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -33,31 +35,8 @@ struct MySQLConnectionConfig {
 //   - u64() 构造的整数按 MYSQL_TYPE_LONGLONG（无符号）绑定。
 //     注意不要把整数的原始字节按字节串绑进 BIGINT 列——严格模式下
 //     服务器会拒绝（ERROR 1366 Incorrect integer value）。
-struct MySqlParam {
-    MySqlParam() = default;
-    MySqlParam(std::vector<std::byte> data)  // 允许从字节串隐式转换
-        : bytes(std::move(data)) {}
-
-    // 无符号 64 位整数参数（如 EntityId）。
-    static MySqlParam u64(std::uint64_t value) {
-        MySqlParam p;
-        p.isUint64 = true;
-        p.uint64Value = value;
-        return p;
-    }
-
-    // SQL NULL 参数。
-    static MySqlParam null() {
-        MySqlParam p;
-        p.isNull = true;
-        return p;
-    }
-
-    bool isNull = false;
-    bool isUint64 = false;
-    std::uint64_t uint64Value = 0;
-    std::vector<std::byte> bytes;
-};
+// 参数模型与 PostgreSQL 后端共用，见 SqlParam.h；MySqlParam 为兼容别名。
+using MySqlParam = SqlParam;
 
 // 一条 SQL 查询结果集的最小封装。仅前向遍历。
 // 通过 MySQLConnection::query() 返回，生命周期与 MySQLConnection 绑定。

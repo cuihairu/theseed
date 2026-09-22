@@ -3,6 +3,7 @@
   "version-string": "0.1.0",
   "builtin-baseline": "b5229343b4b80264ed51e89c6a7dcd0cbe85e9cc",
   "dependencies": [
-    "libmysql"
+    "libmysql",
+    "libpq"
   ]
 }

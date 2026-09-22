@@ -29,15 +29,18 @@ public:
         std::uint16_t listenPort = 20003;
         // FileEntityStore 的根目录（storeBackend == "file" 时使用）
         std::string storePath = "data/entities";
-        // 存储后端："file"（默认，FileEntityStore）或 "mysql"（MySQLEntityStore）
+        // 存储后端："file"（默认，FileEntityStore）、"mysql"（MySQLEntityStore）
+        // 或 "postgresql"（PostgreSQLEntityStore）
         std::string storeBackend = "file";
-        // MySQL 连接配置（storeBackend == "mysql" 时使用）
-        std::string mysqlHost = "127.0.0.1";
-        std::uint16_t mysqlPort = 3306;
-        std::string mysqlUser = "theseed";
-        std::string mysqlPassword;
-        std::string mysqlDatabase = "theseed";
-        bool mysqlAutoCreateSchema = true;
+        // SQL 后端连接配置（storeBackend == "mysql"/"postgresql" 时共用）。
+        // dbPort 默认值跟随 MySQL；dbapp 在 --backend postgresql 且未显式
+        // 指定端口时会改用 5432。
+        std::string dbHost = "127.0.0.1";
+        std::uint16_t dbPort = 3306;
+        std::string dbUser = "theseed";
+        std::string dbPassword;
+        std::string dbDatabase = "theseed";
+        bool dbAutoCreateSchema = true;
         runtime::ComponentId componentId = 10;
         OpsConfig ops;
     };

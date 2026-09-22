@@ -41,5 +41,49 @@ THESEED_MYSQL_PASSWORD=theseed_test_pw THESEED_MYSQL_DATABASE=theseed_test \
 ```
 
 - 无 libmysql 时自动回退 FileEntityStore（条件编译保护），集成测试自动跳过
-- 后续：PostgreSQL 后端（PostgreSQLEntityStore，实现同一 IEntityStore/IAccountStore 接口）
+
+## PostgreSQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
+
+`PostgreSQLEntityStore` 已通过真实 PostgreSQL 16 实例的完整验证：
+`PostgreSQLEntityStoreTest` 24/24 通过，全量 ctest 96/96，
+`theseed_dbapp --backend postgresql` 启动冒烟通过（`pg_stat_activity` 确认真实 libpq 连接），
+`--backend mysql` 回归冒烟通过（两个后端共用 `db*` 连接配置）。
+
+设计要点：
+
+- 与 `MySQLEntityStore` 实现同一 `IEntityStore`/`IAccountStore` 接口，存储模型
+  （每类型一张 `tbl_<Type>` 表 + BYTEA 序列化 blob）与 MySQL 版完全一致
+- `allocId` 用 PG 方言单语句原子完成：
+  `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING next_id`（无需 MySQL 的
+  LAST_INSERT_ID(expr) 两步），首 id 为 1
+- `DBApp` 经 `--backend file|mysql|postgresql` 选择后端；CLI 同时提供 `--mysql-*`
+  与 `--pg-*` 参数别名（写同一组 `db*` 配置字段，`--backend postgresql` 未指定
+  端口时默认 5432）；构建期缺 libpq 时回退 FileEntityStore
+- 共享参数模型 `SqlParam`（`u64()` 整数 / `str()` 文本 / 字节串 / `null()`）：
+  PG text 协议下字节串按 `\x...` 十六进制 + `::bytea` cast，文本参数必须原样
+  传（按 bytea 编码绑进 VARCHAR 列会存成 `"\\x..."` 字面文本）
+- PG 18 客户端头不再导出 `BYTEAOID`（移入 server 头 `catalog/pg_type_d.h`），
+  代码本地定义 `kByteaOid = 17`（目录表冻结常量）
+
+真实构建前置依赖（vcpkg 编译 PostgreSQL 18.4 客户端源码，meson + ninja）：
+
+- `bison` + `flex`：PG 源码需要生成 parser/lexer。无 sudo 时可用
+  `apt-get download bison flex && dpkg -x <deb> ~/.local/tools/` 解包，
+  配 `PATH` 与 `BISON_PKGDATADIR=~/.local/tools/usr/share/bison`
+  （bison 的数据文件编译期固定在 /usr/share/bison，缺失时报
+  `m4sugar.m4: cannot open`）
+- 配置命令同 MySQL 一节
+
+本地真实验证环境（podman，rootless）：
+
+```
+podman run -d --name theseed-postgres -e POSTGRES_PASSWORD=theseed_test_pw \
+  -e POSTGRES_DB=theseed_test -p 127.0.0.1:13307:5432 docker.io/library/postgres:16
+
+THESEED_PG_HOST=127.0.0.1 THESEED_PG_PORT=13307 THESEED_PG_USER=postgres \
+THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test \
+./build/gcc-debug/tests/db/theseed_pg_store_test
+```
+
+- 无 libpq 时自动回退 FileEntityStore（条件编译保护），集成测试自动跳过
 

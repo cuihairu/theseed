@@ -4,6 +4,9 @@
 #if THESEED_HAS_MYSQL
 #include "theseed/db/MySQLEntityStore.h"
 #endif
+#if THESEED_HAS_POSTGRESQL
+#include "theseed/db/PostgreSQLEntityStore.h"
+#endif
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
@@ -61,12 +64,12 @@ bool DBApp::init() {
 #if THESEED_HAS_MYSQL
     if (config_.storeBackend == "mysql") {
         MySQLEntityStore::Config mysqlCfg;
-        mysqlCfg.mysql.host = config_.mysqlHost;
-        mysqlCfg.mysql.port = config_.mysqlPort;
-        mysqlCfg.mysql.user = config_.mysqlUser;
-        mysqlCfg.mysql.password = config_.mysqlPassword;
-        mysqlCfg.mysql.database = config_.mysqlDatabase;
-        mysqlCfg.autoCreateSchema = config_.mysqlAutoCreateSchema;
+        mysqlCfg.mysql.host = config_.dbHost;
+        mysqlCfg.mysql.port = config_.dbPort;
+        mysqlCfg.mysql.user = config_.dbUser;
+        mysqlCfg.mysql.password = config_.dbPassword;
+        mysqlCfg.mysql.database = config_.dbDatabase;
+        mysqlCfg.autoCreateSchema = config_.dbAutoCreateSchema;
 
         auto mysqlStore = std::make_shared<MySQLEntityStore>(std::move(mysqlCfg));
         if (!mysqlStore->init()) {
@@ -76,9 +79,6 @@ bool DBApp::init() {
         }
         store_ = mysqlStore;
         accountStore_ = mysqlStore;  // MySQLEntityStore 同时实现 IAccountStore
-    } else {
-        store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
-        accountStore_ = nullptr;
     }
 #else
     if (config_.storeBackend == "mysql") {
@@ -87,9 +87,41 @@ bool DBApp::init() {
                   << std::endl;
         config_.storeBackend = "file";
     }
-    store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
-    accountStore_ = nullptr;
 #endif
+
+#if THESEED_HAS_POSTGRESQL
+    if (config_.storeBackend == "postgresql") {
+        PostgreSQLEntityStore::Config pgCfg;
+        pgCfg.pg.host = config_.dbHost;
+        pgCfg.pg.port = config_.dbPort;
+        pgCfg.pg.user = config_.dbUser;
+        pgCfg.pg.password = config_.dbPassword;
+        pgCfg.pg.database = config_.dbDatabase;
+        pgCfg.autoCreateSchema = config_.dbAutoCreateSchema;
+
+        auto pgStore = std::make_shared<PostgreSQLEntityStore>(std::move(pgCfg));
+        if (!pgStore->init()) {
+            std::cerr << "DBApp: PostgreSQL store init failed: " << pgStore->lastError()
+                      << std::endl;
+            return false;
+        }
+        store_ = pgStore;
+        accountStore_ = pgStore;  // PostgreSQLEntityStore 同时实现 IAccountStore
+    }
+#else
+    if (config_.storeBackend == "postgresql") {
+        std::cerr << "DBApp: storeBackend=postgresql requested but theseed_db was built "
+                  << "without PostgreSQL support (libpq not available). Falling back to file."
+                  << std::endl;
+        config_.storeBackend = "file";
+    }
+#endif
+
+    // file 后端兜底：显式选择 file，或请求的 SQL 后端在本构建中不可用。
+    if (config_.storeBackend == "file") {
+        store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
+        accountStore_ = nullptr;
+    }
 
     hub_ = std::make_shared<runtime::TransportHub>(config_.componentId);
 
