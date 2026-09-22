@@ -261,6 +261,19 @@ static void testCallDefMethod() {
         </Method>
         <Method name="saveData" side="Base"/>
         <Method name="showUi" side="Client"/>
+        <Method name="persist" side="Base"/>
+        <Method name="logHp" side="Base">
+            <Arg name="hp" type="Float32"/>
+        </Method>
+        <Method name="announce" side="Cell">
+            <Arg name="msg" type="String"/>
+        </Method>
+        <Method name="toast" side="Client">
+            <Arg name="msg" type="String"/>
+        </Method>
+        <Method name="fx" side="Client">
+            <Arg name="v" type="Float32"/>
+        </Method>
     </Methods>
 </EntityDef>
 )");
@@ -291,6 +304,15 @@ static void testCallDefMethod() {
         FAIL("expected NotConnected for base-side def method");
     if (base->callDefMethod("showUi") != theseed::runtime::SendResult::NotConnected)
         FAIL("expected NotConnected for client-side def method");
+    // base 实体的 baseEntityCall 恒无效：零参/float 的 Base side 也落
+    // callBaseWith 的 NotConnected 分支；string 的 Cell side 落
+    // callCellWith 的 NotConnected 分支
+    if (base->callDefMethod("persist") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for zero-arg base-side def method");
+    if (base->callDefMethod<float>("logHp", 0.0f) != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for base-side float def method");
+    if (base->callDefMethod<std::string>("announce", "") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for cell-side string def method");
 
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
@@ -299,6 +321,25 @@ static void testCallDefMethod() {
 
     auto result = base->callDefMethod<float>("heal", 50.0f);
     bool ok = result == theseed::runtime::SendResult::Accepted;
+
+    // 覆盖 callDefMethod 各 side/参数组合的剩余分支：
+    // - string 参数：Cell side 成功 + Client side 落 default（NotConnected）
+    // - float 参数：Base side 成功（cell 实体的 baseEntityCall 有效）+
+    //   Client side 落 default
+    // - 零参：Base side 成功（从 cell 实体发）
+    auto* cellE = c.cellApp->runtime().findEntity(id);
+    if (base->callDefMethod<std::string>("announce", "hi") != theseed::runtime::SendResult::Accepted)
+        FAIL("expected Accepted for cell-side string def method");
+    if (base->callDefMethod<std::string>("toast", "x") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for client-side string def method");
+    if (base->callDefMethod<float>("fx", 1.0f) != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected for client-side float def method");
+    if (cellE != nullptr) {
+        if (cellE->callDefMethod("persist") != theseed::runtime::SendResult::Accepted)
+            FAIL("expected Accepted for zero-arg base-side def method");
+        if (cellE->callDefMethod<float>("logHp", 50.0f) != theseed::runtime::SendResult::Accepted)
+            FAIL("expected Accepted for base-side float def method");
+    }
 
     c.tickUntil([&] { return healAmount > 0; }, 200);
 
@@ -343,6 +384,11 @@ static void testTypedMethodNoArgs() {
     auto* base = c.baseApp->createEntity("Avatar");
     auto id = base->id();
 
+    // cellEntityCall 未建立：零参 callDefMethod 走 callCellWith 的
+    // NotConnected 分支
+    if (base->callDefMethod("respawn") != theseed::runtime::SendResult::NotConnected)
+        FAIL("expected NotConnected before cell creation");
+
     c.baseApp->requestCreateCell(id, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {
         return base->cellEntityCall() && base->cellEntityCall()->isValid();
@@ -350,6 +396,11 @@ static void testTypedMethodNoArgs() {
 
     auto result = base->callCell("respawn");
     bool ok = result == theseed::runtime::SendResult::Accepted;
+
+    // 零参 callDefMethod 走 Cell side 成功路径（callCellWith 零参实例）。
+    // respawn handler 会被再触发一次，断言不受影响。
+    if (base->callDefMethod("respawn") != theseed::runtime::SendResult::Accepted)
+        FAIL("expected Accepted for zero-arg cell-side def method");
 
     c.tickUntil([&] { return respawnCalled; }, 200);
 

@@ -267,6 +267,16 @@ static void testNullTypedCallbackUnregisters() {
     entity.setProperty<std::int32_t>(0, 10);
     ok = ok && callCount == 1;  // no additional call
 
+    // float 实例走同一条空 callback 注销路径
+    float hpSet = 0;
+    entity.onPropertyChanged<float>(1,
+        [&](Entity&, float, float newVal) { hpSet = newVal; });
+    entity.setProperty<float>(1, 88.0f);
+    ok = ok && hpSet == 88.0f;
+    entity.onPropertyChanged<float>(1, {});
+    entity.setProperty<float>(1, 99.0f);
+    ok = ok && hpSet == 88.0f;  // callback cleared, no update
+
     if (ok) PASS();
     else FAIL("count=" + std::to_string(callCount));
 }
