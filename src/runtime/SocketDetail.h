@@ -41,10 +41,12 @@ inline void socketEnsureInit() {
 
 inline void socketGlobalInit() { socketEnsureInit(); }
 
-inline void socketGlobalShutdown() {
-    static std::once_flag flag;
-    std::call_once(flag, [] { WSACleanup(); });
-}
+// 不做真正的 WSACleanup：与 POSIX 分支的空操作对称，进程存续期内
+// Winsock 保持初始化。若在此清理，once 语义会让后续的 globalInit 与
+// connect/listen 的自愈初始化都变成无效操作，同进程的多轮 init/shutdown
+// 配对（测试进程的常态）在第二轮起全部失效；测试进程退出时由操作
+// 系统回收 Winsock 资源。
+inline void socketGlobalShutdown() {}
 
 }  // namespace theseed::runtime::detail
 

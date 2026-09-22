@@ -419,6 +419,81 @@ static void testMergeFromIsIdempotent() {
     if (ok) PASS(); else FAIL("first=" + std::to_string(first) + " second=" + std::to_string(second));
 }
 
+// --- Error paths: loadFile 失败分支与 EntityDef 直接构造的边界 ---
+
+static void testLoadFileErrorPaths() {
+    TEST("loadFile error paths / registerDef rejects");
+
+    EntityDefRegistry registry;
+    // 不存在的文件：loader 抛异常 → registry 捕获返回 false
+    bool ok = !registry.loadFile("no_such_def_file_xyz.xml");
+
+    // 非 XML 内容：root.children 为空 → loader 抛异常 → 捕获返回 false
+    writeFile("broken_def.xml", "this is not xml at all");
+    ok = ok && !registry.loadFile("broken_def.xml");
+
+    // 根标签不是 EntityDef → loader 抛 "Expected root tag" → 捕获返回 false
+    writeFile("broken_def.xml", "<WrongTag name=\"x\"/>");
+    ok = ok && !registry.loadFile("broken_def.xml");
+
+    // 合法 XML 但缺 name 属性 → 空类型名 → registry 拒绝
+    writeFile("broken_def.xml", "<EntityDef><Properties/></EntityDef>");
+    ok = ok && !registry.loadFile("broken_def.xml");
+    std::filesystem::remove("broken_def.xml");
+
+    // fixedSizeOfType 对可变长类型直接返回 0
+    ok = ok && EntityDef::fixedSizeOfType(PropertyType::String) == 0;
+    ok = ok && EntityDef::fixedSizeOfType(PropertyType::Blob) == 0;
+
+    // registerDef 拒绝空指针与空类型名
+    ok = ok && !registry.registerDef(nullptr);
+    ok = ok && !registry.registerDef(std::make_shared<EntityDef>(""));
+
+    // mergeFrom：属性重名拒绝；方法重名跳过（continue）不拒绝整个合并；
+    // 二次合并（已 inherited）拒绝
+    auto base = std::make_shared<EntityDef>("Base2");
+    base->addProperty("bhp", PropertyType::Int32);
+    // 可变长类型属性（String/Blob 的尺寸描述为 0）
+    base->addProperty("bname", PropertyType::String);
+    base->addProperty("bdata", PropertyType::Blob);
+    base->addMethod("shared", theseed::runtime::MethodSide::Cell);
+    auto childDup = std::make_shared<EntityDef>("ChildDup");
+    childDup->addProperty("bhp", PropertyType::Int32);
+    ok = ok && !childDup->mergeFrom(*base);  // bhp 重名 → false
+    auto child = std::make_shared<EntityDef>("Child2");
+    child->addProperty("cmp", PropertyType::Int32);
+    child->addMethod("shared", theseed::runtime::MethodSide::Cell);
+    ok = ok && child->mergeFrom(*base);      // 方法重名仅跳过，合并成功
+    ok = ok && !child->mergeFrom(*base);     // 二次合并 → false
+
+    // addMethod：空名与重名抛 invalid_argument
+    bool threw = false;
+    try {
+        child->addMethod("", theseed::runtime::MethodSide::Cell);
+    } catch (const std::invalid_argument&) { threw = true; }
+    ok = ok && threw;
+    threw = false;
+    child->addMethod("onTick", theseed::runtime::MethodSide::Cell);
+    try {
+        child->addMethod("onTick", theseed::runtime::MethodSide::Base);
+    } catch (const std::invalid_argument&) { threw = true; }
+    ok = ok && threw;
+
+    // property/method 越界抛 out_of_range
+    threw = false;
+    try {
+        static_cast<void>(child->property(999));
+    } catch (const std::out_of_range&) { threw = true; }
+    ok = ok && threw;
+    threw = false;
+    try {
+        static_cast<void>(child->method(999));
+    } catch (const std::out_of_range&) { threw = true; }
+    ok = ok && threw;
+
+    if (ok) PASS(); else FAIL("error path behavior wrong");
+}
+
 int main() {
     std::cout << "EntityDefRegistry tests:\n";
 
@@ -437,6 +512,7 @@ int main() {
     testMissingParentHandled();
     testInheritanceWithFlags();
     testMergeFromIsIdempotent();
+    testLoadFileErrorPaths();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -319,6 +320,105 @@ static void testBaseRuntimeIntegration() {
     else FAIL("integration simulation failed");
 }
 
+// Test: error paths — 空文件、目录冒充数据文件、权限拒绝、脏文件名、损坏的 id 计数器
+static void testErrorPaths() {
+    TEST("error paths: empty/corrupt/dir-as-file/permission/dirty names");
+
+    auto dir = std::filesystem::temp_directory_path() / "theseed_file_store_test_10";
+    std::filesystem::remove_all(dir);
+    FileEntityStore store(dir);
+    bool ok = true;
+
+    // 空数据文件：tellg=0 → load false
+    {
+        std::filesystem::create_directories(dir / "Avatar");
+        { std::ofstream f(dir / "Avatar" / "1.dat", std::ios::binary); }
+        EntityData out;
+        ok = ok && !store.load(1, "Avatar", out);
+    }
+
+    // 目录冒充数据文件：读取流失败 → load false
+    // （POSIX 打开目录成功但 read 报错；Windows 直接 is_open 失败）
+    {
+        std::filesystem::create_directories(dir / "Avatar" / "3.dat");
+        EntityData out;
+        ok = ok && !store.load(3, "Avatar", out);
+    }
+
+#ifndef _WIN32
+    // 文件存在但不可读：exists 通过、open 失败 → load false
+    {
+        EntityData data;
+        data.id = 4;
+        data.entityType = "Avatar";
+        ok = ok && store.save(4, data);
+        std::filesystem::permissions(dir / "Avatar" / "4.dat",
+                                     std::filesystem::perms::none);
+        EntityData out;
+        ok = ok && !store.load(4, "Avatar", out);
+        std::filesystem::permissions(dir / "Avatar" / "4.dat",
+                                     std::filesystem::perms::owner_all);
+    }
+#endif
+
+    // 目标位置被普通文件占用：ensureDir 失败 → save false
+    {
+        { std::ofstream f(dir / "Blocked"); f << 'x'; }
+        EntityData blk;
+        blk.id = 1;
+        blk.entityType = "Blocked";
+        ok = ok && !store.save(1, blk);
+    }
+
+    // 数据文件路径是目录：ofstream 打不开 → save false
+    {
+        std::filesystem::create_directories(dir / "Avatar" / "9.dat");
+        EntityData d9;
+        d9.id = 9;
+        d9.entityType = "Avatar";
+        ok = ok && !store.save(9, d9);
+    }
+
+    // id 计数器文件被截短：读取不足 sizeof(EntityId) → 回退从 1 分配
+    {
+        static_cast<void>(store.allocId());  // 写出正常的计数器
+        { std::ofstream f(dir / "_next_id.dat", std::ios::binary | std::ios::trunc); }
+        ok = ok && store.allocId() == 1;
+    }
+
+    // 非数字文件名：listIdsByType 跳过而不是崩溃
+    // （此时 Avatar 下有效数字名：1.dat 空文件与 4.dat；abc.dat 与目录 9.dat 被跳过）
+    {
+        { std::ofstream f(dir / "Avatar" / "abc.dat"); }
+        auto ids = store.listIdsByType("Avatar");
+        ok = ok && ids.size() == 2 && ids[0] == 1 && ids[1] == 4;
+    }
+
+#ifndef _WIN32
+    // stat 尺寸撒谎的文件：sysfs 恒报 4096 但实际内容短得多 →
+    // tellg 得到 size>0 而 read 不足 → 读取流失败 → load false
+    {
+        std::error_code ec;
+        std::filesystem::create_symlink(
+            "/sys/kernel/mm/transparent_hugepage/enabled",
+            dir / "Avatar" / "6.dat", ec);
+        if (!ec) {
+            auto realSize = std::filesystem::file_size(
+                dir / "Avatar" / "6.dat", ec);
+            if (!ec && realSize > 0) {
+                EntityData out;
+                ok = ok && !store.load(6, "Avatar", out);
+            }
+        }
+        std::filesystem::remove(dir / "Avatar" / "6.dat");
+    }
+#endif
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS();
+    else FAIL("error path behavior wrong");
+}
+
 int main() {
     std::cout << "File entity store tests:\n";
 
@@ -331,6 +431,7 @@ int main() {
     testOverwriteEntity();
     testSaveEmptyProperties();
     testBaseRuntimeIntegration();
+    testErrorPaths();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

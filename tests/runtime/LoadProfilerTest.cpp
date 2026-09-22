@@ -237,6 +237,43 @@ static void test_multiple_scope_in_one_tick_accumulates() {
     PASS();
 }
 
+static void test_aggregator_all_sorted_and_reset() {
+    TEST("test_aggregator_all_sorted_and_reset");
+    EntityTypeLoadAggregator agg;
+    EntityLoadSnapshot a;
+    a.entityId = 1;
+    a.entityType = "NPC";
+    a.rawLoad = 1.0F;
+    a.adjustedLoad = 1.0F;
+    EntityLoadSnapshot b;
+    b.entityId = 2;
+    b.entityType = "Avatar";
+    b.rawLoad = 2.0F;
+    b.adjustedLoad = 2.0F;
+    agg.record(a);
+    agg.record(b);
+
+    auto all = agg.all();
+    if (all.size() != 2) { FAIL("all should hold two types"); return; }
+    // all() 按 entityTypeId 字母序：Avatar < NPC
+    if (all[0].entityTypeId != "Avatar" || all[1].entityTypeId != "NPC") {
+        FAIL("all not sorted by type id"); return;
+    }
+
+    agg.reset();
+    if (!agg.all().empty()) { FAIL("reset should clear per-type state"); return; }
+    PASS();
+}
+
+static void test_ema_alpha_accessor() {
+    TEST("test_ema_alpha_accessor");
+    EntityLoadProfiler::Config cfg;
+    cfg.emaAlpha = 0.25F;
+    EntityLoadProfiler p(cfg);
+    if (std::abs(p.emaAlpha() - 0.25F) > 1e-6F) { FAIL("emaAlpha mismatch"); return; }
+    PASS();
+}
+
 int main() {
     test_scope_records_raw_load();
     test_smoothed_load_ema();
@@ -248,6 +285,8 @@ int main() {
     test_aggregator_groups_by_type();
     test_aggregator_ignores_empty_type();
     test_multiple_scope_in_one_tick_accumulates();
+    test_aggregator_all_sorted_and_reset();
+    test_ema_alpha_accessor();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;
