@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -88,6 +89,15 @@ int main() {
         return fail("mask_foreach");
     }
 
+    // mark 超出当前 word 数的位触发 words_ 扩容；越界位查询返回 false
+    mask.mark(100);
+    if (!mask.isDirty(100)) {
+        return fail("mask_mark_resize");
+    }
+    if (mask.isDirty(999)) {
+        return fail("mask_dirty_out_of_range");
+    }
+
     Entity entity(1001, EntitySide::Cell, def);
     if (entity.id() != 1001 || entity.side() != EntitySide::Cell) {
         return fail("entity_identity");
@@ -121,10 +131,36 @@ int main() {
         return fail("call_update");
     }
 
+    // 有效 call 上空方法名 → invalid_argument
+    bool threw = false;
+    try {
+        static_cast<void>(call.buildInvocation("", {}));
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    if (!threw) return fail("call_build_empty_method");
+
     call.invalidate();
     if (call.isValid()) {
         return fail("call_invalidate");
     }
+
+    // invalidate 后 targetComponent / buildInvocation 都抛 logic_error
+    threw = false;
+    try {
+        static_cast<void>(call.targetComponent());
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    if (!threw) return fail("call_target_invalid_throw");
+
+    threw = false;
+    try {
+        static_cast<void>(call.buildInvocation("m", {}));
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    if (!threw) return fail("call_build_invalid_throw");
 
     if (entity.state() != EntityState::Creating) {
         return fail("entity_initial_state");

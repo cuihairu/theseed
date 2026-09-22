@@ -48,8 +48,9 @@ NodeSummary makeSummary() {
     self.pid = static_cast<std::uint32_t>(::getpid());
 #endif
     self.port = 20003;
-    // 原始字符序列：0.1<TAB>0<反斜杠>r —— 覆盖 \t、\\、\r 三条转义分支。
-    self.version = "0.1\t0\\r";
+    // 原始字符序列：0.1<TAB>0<CR><反斜杠>r —— 覆盖 \t、\r、\\ 三条转义分支
+    //（"\\r" 是反斜杠 + 字母 r 两个字符，真正的回车必须写成 \r）。
+    self.version = "0.1\t0\r\\r";
     self.healthy = true;
     self.managed = true;
 
@@ -113,7 +114,7 @@ int main() {
         json.find("\"networkRxBytes\":100") == std::string::npos)
         FAIL("host JSON mismatch:\n" + json);
     if (json.find("\"name\":\"db\\\"app\\n\"") == std::string::npos ||
-        json.find("\"version\":\"0.1\\t0\\\\r\"") == std::string::npos)
+        json.find("\"version\":\"0.1\\t0\\r\\\\r\"") == std::string::npos)
         FAIL("string escaping mismatch:\n" + json);
     if (json.find("\"pid\":" + std::to_string(pid) + ",") == std::string::npos ||
         json.find("\"healthy\":true") == std::string::npos ||

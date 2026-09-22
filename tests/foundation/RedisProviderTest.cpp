@@ -171,6 +171,15 @@ static void test_session_decode_rejects_garbage() {
     PASS();
 }
 
+static void test_session_decode_rejects_bad_user_id() {
+    TEST("test_session_decode_rejects_non_numeric_user_id");
+    auto bad = SessionStore::decode("acc-1\x1f"
+                                    "realm-1\x1f"
+                                    "not-a-number\nmeta");
+    if (bad.has_value()) { FAIL("decode should reject non-numeric userId"); return; }
+    PASS();
+}
+
 // --- RateLimiter tests ---
 
 static void test_rate_limiter_allows_within_capacity() {
@@ -273,6 +282,7 @@ int main() {
     test_session_revoke();
     test_session_refresh_extends_ttl();
     test_session_decode_rejects_garbage();
+    test_session_decode_rejects_bad_user_id();
 
     test_rate_limiter_allows_within_capacity();
     test_rate_limiter_refills_over_time();
