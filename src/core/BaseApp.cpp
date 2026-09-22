@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::core {
 

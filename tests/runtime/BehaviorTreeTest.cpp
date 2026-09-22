@@ -2,8 +2,10 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstdint>
 #include <iostream>
 #include <memory>
+#include <utility>
 
 using theseed::runtime::BehaviorStatus;
 using theseed::runtime::BehaviorTree;

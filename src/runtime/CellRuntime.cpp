@@ -5,8 +5,14 @@
 #include "theseed/foundation/TimerWheel.h"
 
 #include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace theseed::runtime {

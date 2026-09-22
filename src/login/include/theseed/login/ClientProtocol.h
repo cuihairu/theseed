@@ -2,7 +2,9 @@
 
 #include "theseed/login/LoginProtocol.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 

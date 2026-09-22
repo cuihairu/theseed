@@ -2,7 +2,9 @@
 #include "theseed/foundation/Metrics.h"
 
 #include <chrono>
+#include <cstdint>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::core {
 

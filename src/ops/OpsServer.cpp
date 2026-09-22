@@ -3,8 +3,11 @@
 #include "theseed/runtime/TcpConnection.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace theseed::ops {
 

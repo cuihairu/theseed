@@ -3,6 +3,7 @@
 #include "theseed/runtime/TcpListener.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>

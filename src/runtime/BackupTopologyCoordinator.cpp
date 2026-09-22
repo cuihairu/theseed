@@ -1,6 +1,9 @@
 #include "theseed/runtime/BackupTopologyCoordinator.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <stdexcept>
 
 namespace theseed::runtime {

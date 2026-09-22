@@ -1,6 +1,8 @@
 #include "theseed/runtime/DirtyMask.h"
 
 #include <bit>
+#include <cstddef>
+#include <cstdint>
 
 namespace theseed::runtime {
 

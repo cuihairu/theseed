@@ -9,8 +9,10 @@
 #include "theseed/runtime/TransportHub.h"
 #include "theseed/runtime/TransportStatsCollector.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace theseed::db {

@@ -2,11 +2,13 @@
 
 #include "theseed/db/SqlParam.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace theseed::db {

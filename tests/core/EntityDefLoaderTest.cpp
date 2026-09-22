@@ -4,6 +4,7 @@
 #include "theseed/runtime/EntityDef.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>

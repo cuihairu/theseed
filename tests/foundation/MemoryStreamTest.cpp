@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 
 using theseed::foundation::MemoryStream;
 

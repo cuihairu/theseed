@@ -1,5 +1,7 @@
 #include "theseed/core/EntityData.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 

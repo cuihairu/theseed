@@ -3,6 +3,7 @@
 #include "theseed/runtime/Witness.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 

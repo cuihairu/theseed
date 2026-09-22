@@ -2,7 +2,11 @@
 
 #include "SocketDetail.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <functional>
+#include <utility>
 
 namespace theseed::runtime {
 

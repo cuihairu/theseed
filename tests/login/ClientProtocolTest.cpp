@@ -2,6 +2,7 @@
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/SessionToken.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <span>

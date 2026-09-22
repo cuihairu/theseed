@@ -2,10 +2,12 @@
 #include "theseed/core/IEntityStore.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::core::DataType;

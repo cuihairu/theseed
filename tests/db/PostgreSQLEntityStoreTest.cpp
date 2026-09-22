@@ -1,11 +1,13 @@
 #include "theseed/core/EntityData.h"
 #include "theseed/db/PostgreSQLEntityStore.h"
 
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 
 using theseed::core::EntityData;
 using theseed::core::PropertyData;

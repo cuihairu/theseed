@@ -2,6 +2,7 @@
 
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>

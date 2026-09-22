@@ -12,9 +12,12 @@
 #include "theseed/runtime/TcpConnection.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <utility>
 
 namespace theseed::db {
 
@@ -355,13 +358,18 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
         // Find "username" property
         for (const auto& prop : data.properties) {
             if (prop.name == "username") {
-                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                // std::byte 不能隐式 assign 给 char（char_traits<char> 不接受），
+                // 必须经 reinterpret_cast 显式转换字节序列。
+                const auto bytesOf = [](const std::vector<std::byte>& raw) {
+                    return std::string(reinterpret_cast<const char*>(raw.data()), raw.size());
+                };
+                const std::string storedName = bytesOf(prop.rawValue);
                 if (storedName == username) {
                     // Found — extract password
                     std::string password;
                     for (const auto& p : data.properties) {
                         if (p.name == "password") {
-                            password = std::string(p.rawValue.begin(), p.rawValue.end());
+                            password = bytesOf(p.rawValue);
                             break;
                         }
                     }
@@ -412,7 +420,9 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
         if (!store_->load(id, "Account", data)) continue;
         for (const auto& prop : data.properties) {
             if (prop.name == "username") {
-                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                const std::string storedName(
+                    reinterpret_cast<const char*>(prop.rawValue.data()),
+                    prop.rawValue.size());
                 if (storedName == username) {
                     auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
                     sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,

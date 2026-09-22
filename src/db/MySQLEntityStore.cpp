@@ -2,9 +2,11 @@
 #include "theseed/foundation/Metrics.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <functional>
 #include <sstream>
+#include <utility>
 
 namespace theseed::db {
 

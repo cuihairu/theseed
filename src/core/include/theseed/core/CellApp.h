@@ -9,6 +9,8 @@
 #include "theseed/runtime/SpaceRuntime.h"
 #include "theseed/runtime/TransportStatsCollector.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>

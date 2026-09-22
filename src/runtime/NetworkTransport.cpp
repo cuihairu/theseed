@@ -1,6 +1,10 @@
 #include "theseed/runtime/NetworkTransport.h"
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <utility>
 
 namespace theseed::runtime {

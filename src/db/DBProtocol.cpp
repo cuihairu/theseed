@@ -1,7 +1,10 @@
 #include "theseed/db/DBProtocol.h"
 #include "theseed/foundation/MemoryStream.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <utility>
 
 namespace theseed::db {
 

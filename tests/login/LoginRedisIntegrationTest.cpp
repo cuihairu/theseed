@@ -8,12 +8,14 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace theseed::login;

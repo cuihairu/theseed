@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 
 namespace theseed::scripting {
 

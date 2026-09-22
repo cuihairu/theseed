@@ -2,10 +2,11 @@
 // 覆盖转义分支、当前进程优先展示、空进程列表与布尔渲染。
 #include "theseed/control/machine/MachineSnapshotCodec.h"
 
-#include <unistd.h>
 
+#include <cstdint>
 #include <iostream>
 #include <string>
+#include <unistd.h>
 
 using namespace theseed::control::machine;
 

@@ -4,7 +4,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
 #include <thread>
+#include <utility>
 
 namespace theseed::runtime {
 

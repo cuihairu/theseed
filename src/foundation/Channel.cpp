@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 #include "theseed/foundation/Channel.h"
 
 namespace theseed::foundation {

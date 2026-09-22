@@ -1,6 +1,9 @@
 #include "theseed/control/machine/MachineAgent.h"
 
 #include <charconv>
+#include <cstdint>
+#include <memory>
+#include <utility>
 
 namespace theseed::control::machine {
 

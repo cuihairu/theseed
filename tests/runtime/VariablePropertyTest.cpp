@@ -1,10 +1,12 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 using theseed::runtime::Entity;
 using theseed::runtime::EntityDef;

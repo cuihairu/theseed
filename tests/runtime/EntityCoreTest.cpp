@@ -5,8 +5,10 @@
 #include "theseed/runtime/PropertyBlock.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <span>
 #include <string>
 #include <vector>
 

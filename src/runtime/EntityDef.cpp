@@ -1,5 +1,6 @@
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstddef>
 #include <stdexcept>
 #include <string_view>
 #include <utility>

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <utility>
 
 using theseed::scripting::ChangeType;
 using theseed::scripting::DiffChange;

@@ -12,14 +12,17 @@
 #include "theseed/runtime/NetworkTransport.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using theseed::core::BaseApp;

@@ -1,7 +1,10 @@
 #include "theseed/foundation/SessionStore.h"
 
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace theseed::foundation {
 

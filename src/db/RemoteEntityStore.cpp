@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <utility>
 #include "theseed/db/RemoteEntityStore.h"
 #include "theseed/db/DBProtocol.h"
 

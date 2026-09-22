@@ -12,7 +12,11 @@
 #include "theseed/runtime/TcpListener.h"
 #include "theseed/runtime/TransportStatsCollector.h"
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>

@@ -1,7 +1,9 @@
 #include "theseed/foundation/ChannelRouter.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 
 using theseed::foundation::Channel;
 using theseed::foundation::ChannelRouter;

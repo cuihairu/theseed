@@ -2,6 +2,7 @@
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>

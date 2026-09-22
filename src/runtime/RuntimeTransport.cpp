@@ -1,5 +1,8 @@
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
+#include <deque>
+#include <mutex>
 #include <utility>
 
 namespace theseed::runtime {

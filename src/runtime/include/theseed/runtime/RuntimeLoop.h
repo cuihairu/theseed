@@ -3,6 +3,8 @@
 #include "theseed/runtime/IORuntime.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include <chrono>
+#include <cstddef>
 #include <memory>
 
 namespace theseed::runtime {

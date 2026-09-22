@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace theseed::foundation {

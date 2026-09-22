@@ -4,10 +4,14 @@
 #include "theseed/runtime/SpaceRuntime.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
 using theseed::runtime::Duration;
 using theseed::runtime::Entity;

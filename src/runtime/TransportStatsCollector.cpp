@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "theseed/runtime/TransportStatsCollector.h"
 
 namespace theseed::runtime {

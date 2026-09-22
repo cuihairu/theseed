@@ -1,6 +1,8 @@
 #include "theseed/foundation/Logger.h"
 #include "theseed/foundation/Tracing.h"
 
+#include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <iomanip>
 #include <iostream>

@@ -1,8 +1,11 @@
 #include "theseed/runtime/PropertyReplication.h"
 
 #include <bit>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::runtime {
 

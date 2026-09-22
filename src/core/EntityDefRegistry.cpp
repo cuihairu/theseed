@@ -1,9 +1,13 @@
 #include "theseed/core/EntityDefRegistry.h"
 #include "theseed/core/EntityDefLoader.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <memory>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace theseed::core {
 

@@ -1,11 +1,17 @@
 #include "theseed/db/PostgreSQLConnection.h"
 
-#include <libpq-fe.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <libpq-fe.h>
+#include <memory>
+#include <optional>
 #include <sstream>
+#include <string_view>
+#include <utility>
 
 namespace theseed::db {
 

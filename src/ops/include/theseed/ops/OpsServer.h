@@ -3,6 +3,7 @@
 #include "theseed/ops/OpsInspector.h"
 #include "theseed/runtime/TcpListener.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>

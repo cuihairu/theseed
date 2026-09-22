@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 using theseed::core::CellApp;
 using theseed::foundation::MetricsRegistry;

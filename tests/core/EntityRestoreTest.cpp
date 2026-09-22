@@ -5,6 +5,7 @@
 #include "theseed/runtime/PipedTransport.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <fstream>

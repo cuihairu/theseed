@@ -5,12 +5,14 @@
 #include "theseed/runtime/InMemoryBytePipe.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace theseed::login;

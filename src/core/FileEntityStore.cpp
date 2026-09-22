@@ -1,8 +1,11 @@
 #include "theseed/core/FileEntityStore.h"
 #include "theseed/core/EntityData.h"
 
+#include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace theseed::core {
 

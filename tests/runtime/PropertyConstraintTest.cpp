@@ -3,6 +3,7 @@
 #include "theseed/runtime/EntityRef.h"
 
 #include <cmath>
+#include <cstddef>
 #include <iostream>
 #include <memory>
 #include <string>

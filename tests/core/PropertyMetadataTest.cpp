@@ -5,11 +5,13 @@
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 using theseed::core::BaseRuntime;
 using theseed::core::EntityDefLoader;

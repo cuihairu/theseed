@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include <string>
 
 namespace theseed::login {
 

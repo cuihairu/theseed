@@ -13,6 +13,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <span>
 
 namespace theseed::runtime {
 

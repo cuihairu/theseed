@@ -7,8 +7,10 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>

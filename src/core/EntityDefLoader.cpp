@@ -1,12 +1,16 @@
 #include "theseed/core/EntityDefLoader.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace theseed::core {
 

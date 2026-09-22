@@ -1,7 +1,10 @@
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <utility>
 
 namespace theseed::login {
 

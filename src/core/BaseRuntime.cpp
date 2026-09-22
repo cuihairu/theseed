@@ -3,8 +3,13 @@
 #include "theseed/runtime/PropertyReplication.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 
 namespace theseed::core {
 

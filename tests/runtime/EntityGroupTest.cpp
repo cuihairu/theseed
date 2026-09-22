@@ -3,8 +3,10 @@
 #include "theseed/runtime/EntityRef.h"
 #include "theseed/runtime/GroupManager.h"
 
+#include <cstddef>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 
 using theseed::runtime::Entity;

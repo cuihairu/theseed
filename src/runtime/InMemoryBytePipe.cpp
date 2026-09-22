@@ -1,3 +1,7 @@
+#include <cstddef>
+#include <functional>
+#include <mutex>
+#include <utility>
 #include "theseed/runtime/InMemoryBytePipe.h"
 
 namespace theseed::runtime {

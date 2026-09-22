@@ -9,12 +9,14 @@
 #include "theseed/runtime/TcpConnection.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 using theseed::core::BaseApp;
 using theseed::core::CellApp;

@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 
 namespace theseed::foundation {
 

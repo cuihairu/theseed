@@ -2,6 +2,7 @@
 
 #include "theseed/runtime/IBytePipe.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>

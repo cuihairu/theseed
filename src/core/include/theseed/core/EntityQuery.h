@@ -3,8 +3,10 @@
 #include "theseed/core/EntityData.h"
 #include "theseed/core/IEntityStore.h"
 
-#include <memory>
+#include <compare>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 

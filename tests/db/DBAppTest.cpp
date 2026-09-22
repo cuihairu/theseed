@@ -6,11 +6,13 @@
 #include "theseed/runtime/PipedTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 

@@ -8,10 +8,13 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::core::BaseRuntime;

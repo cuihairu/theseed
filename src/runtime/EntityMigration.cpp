@@ -1,7 +1,10 @@
 #include "theseed/runtime/EntityMigration.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <type_traits>

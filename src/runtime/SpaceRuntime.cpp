@@ -1,6 +1,10 @@
 #include "theseed/runtime/SpaceRuntime.h"
 #include "theseed/runtime/Controller.h"
 
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 

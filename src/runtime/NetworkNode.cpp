@@ -1,6 +1,8 @@
 #include "theseed/runtime/NetworkNode.h"
 #include "theseed/runtime/TcpConnection.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace theseed::runtime {

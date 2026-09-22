@@ -1,10 +1,16 @@
 #include "theseed/db/MySQLConnection.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mysql/mysql.h>
+#include <optional>
+#include <sstream>
+#include <string_view>
+#include <utility>
 // vcpkg libmysql port 全平台统一安装到 include/mysql/（INSTALL_INCLUDEDIR），
 // 因此使用 mysql/mysql.h 而非裸 mysql.h。
-#include <mysql/mysql.h>
-#include <sstream>
 
 namespace theseed::db {
 

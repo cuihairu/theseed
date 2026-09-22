@@ -2,7 +2,11 @@
 #include "theseed/runtime/Entity.h"
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::runtime {
 

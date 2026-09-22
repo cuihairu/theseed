@@ -1,10 +1,12 @@
 #include "theseed/runtime/InvocationCodec.h"
 #include "theseed/runtime/PipedTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::runtime::DeliveryClass;

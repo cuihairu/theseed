@@ -3,10 +3,12 @@
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 
 using theseed::foundation::MemoryStream;
