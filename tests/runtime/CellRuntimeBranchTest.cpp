@@ -926,6 +926,21 @@ int main() {
         clearTransport(*transport);
         ++g_checked;
 
+        // syncRealGhosts：owner 的 entitySpaceMap_ 指向已销毁的空间。
+        // 实体被直接从 Space 名册移除（绕过 CellRuntime::removeEntity），
+        // destroySpace 只清名册内实体 → map 条目与 ghost binding 残留，
+        // findSpaceRuntime 返回空 → continue
+        if (!cellA.createSpace(700, "orphan_space")) return fail("create_orphan_space");
+        auto& orphan = keepAlive.emplace_back(316, EntitySide::Cell, def);
+        cellA.addEntity(orphan, Vector3{7.0F, 0.0F, 0.0F}, 700);
+        orphan.activate();
+        cellA.ensureRealGhost(orphan, 48);
+        cellA.findSpaceRuntime(700)->space().removeEntity(316);
+        if (!cellA.destroySpace(700)) return fail("destroy_orphan_space");
+        scheduler.runOnce();  // syncRealGhosts → 空间已销毁 → continue
+        clearTransport(*transport);
+        ++g_checked;
+
         // routeMigratingInvocation：路由未过期但 forward send 被拒绝 → false
         auto& fwd = keepAlive.emplace_back(311, EntitySide::Cell, def);
         addLocal(switchRuntime, fwd, Vector3{1.0F, 0.0F, 0.0F});

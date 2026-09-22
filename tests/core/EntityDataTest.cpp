@@ -197,6 +197,33 @@ static void testInMemoryStoreSaveLoad() {
     if (ok) PASS(); else FAIL("save/load failed");
 }
 
+static void testInMemoryStoreListEntityTypes() {
+    TEST("InMemoryEntityStore listEntityTypes");
+
+    InMemoryEntityStore store;
+    EntityData a;
+    a.id = store.allocId();
+    a.entityType = "Player";
+    EntityData b;
+    b.id = store.allocId();
+    b.entityType = "Monster";
+    EntityData c;
+    c.id = store.allocId();
+    c.entityType = "Player";
+
+    bool ok = store.save(a.id, a) && store.save(b.id, b) && store.save(c.id, c);
+
+    // 返回值按字母序去重
+    const auto types = store.listEntityTypes();
+    ok = ok && types.size() == 2;
+    ok = ok && types[0] == "Monster" && types[1] == "Player";
+
+    const auto players = store.listIdsByType("Player");
+    ok = ok && players.size() == 2;
+
+    if (ok) PASS(); else FAIL("listEntityTypes failed");
+}
+
 static void testInMemoryStoreRemove() {
     TEST("InMemoryEntityStore remove");
 
@@ -250,6 +277,7 @@ int main() {
     testEntityDataEncodeDecode();
     testInMemoryStoreSaveLoad();
     testInMemoryStoreRemove();
+    testInMemoryStoreListEntityTypes();
     testInMemoryStoreLoadMissing();
     testInMemoryStoreAllocId();
 

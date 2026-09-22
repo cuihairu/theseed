@@ -60,6 +60,17 @@ static void test_health_json_basic() {
     PASS();
 }
 
+static void test_health_json_escapes_tab() {
+    TEST("test_health_json_escapes_tab");
+    auto info = makeInfo();
+    info.version = "9.9\t9";
+    OpsInspector insp(info, [] { return RuntimeInfo{}; });
+    const auto out = insp.renderHealthJson();
+
+    if (!contains(out, "\"version\":\"9.9\\t9\"")) { FAIL("tab not escaped"); return; }
+    PASS();
+}
+
 static void test_health_uptime_nonneg() {
     TEST("test_health_uptime_nonneg");
     OpsInspector insp(makeInfo(), [] { return RuntimeInfo{}; });
@@ -199,6 +210,7 @@ static void test_runtime_transport_stats_reflected() {
 
 int main() {
     test_health_json_basic();
+    test_health_json_escapes_tab();
     test_health_uptime_nonneg();
     test_inspect_json_contains_runtime();
     test_inspect_json_empty_entity_types();
