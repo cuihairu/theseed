@@ -8,6 +8,7 @@
 using theseed::runtime::Entity;
 using theseed::runtime::EntityDef;
 using theseed::runtime::EntitySide;
+using theseed::runtime::PropertyFlag;
 using theseed::runtime::PropertyType;
 using theseed::runtime::SingleCellTopology;
 using theseed::runtime::Space;
@@ -158,6 +159,61 @@ int main() {
         if (!threw) {
             return fail("space_duplicate_entity");
         }
+    }
+
+    // SpaceRuntime 错误路径与 witness 生命周期边缘
+    {
+        // null space 构造拒绝
+        bool threw = false;
+        try {
+            SpaceRuntime bad(nullptr);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("runtime_null_space");
+        }
+
+        auto rtTopo = std::make_unique<SingleCellTopology>(1);
+        auto rtSpace = std::make_unique<Space>(300, "edge_rt", std::move(rtTopo));
+        rtSpace->initialize(SpaceConfig{});
+        SpaceRuntime rt(std::move(rtSpace));
+
+        Entity watcher(10, EntitySide::Cell, def);
+        Entity stray(11, EntitySide::Cell, def);
+        rt.addEntity(watcher, Vector3{});
+        rt.addEntity(stray, Vector3{50.0F, 0.0F, 0.0F});
+
+        // findWitness：未知 id → nullptr
+        if (rt.findWitness(999) != nullptr) {
+            return fail("find_witness_unknown");
+        }
+
+        // 二次 ensureWitness 同 owner：复用既有 binding 并 updateRange
+        auto& first = rt.ensureWitness(watcher, 10.0F);
+        auto& second = rt.ensureWitness(watcher, 12.0F);
+        if (&first != &second) {
+            return fail("ensure_witness_reuse");
+        }
+
+        // removeEntity：卸载并清除绑定该 owner 的 witness
+        rt.removeEntity(watcher.id());
+        if (rt.findWitness(watcher.id()) != nullptr) {
+            return fail("remove_clears_witness");
+        }
+
+        // staged delta：实体标脏 → tick 收集 → 绕过 SpaceRuntime 直接从
+        // space 移除 → 条目仍在但实体查不到（findEntity 为空的防御分支）
+        TickScheduler rtScheduler(std::chrono::milliseconds{0});
+        rt.attach(rtScheduler);
+        stray.setProperty<std::int32_t>(hpId, 5);
+        rtScheduler.runOnce();
+        rt.space().removeEntity(stray.id());
+        const auto staged = rt.findStagedDelta(stray.id(), PropertyFlag::None);
+        if (!staged.empty()) {
+            return fail("staged_survives_entity_removal");
+        }
+        rt.detach(rtScheduler);
     }
 
     return EXIT_SUCCESS;

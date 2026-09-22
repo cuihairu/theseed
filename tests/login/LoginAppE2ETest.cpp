@@ -415,12 +415,15 @@ int main() {
         });
 
         const std::uint16_t listenPort = freePort();
+        const std::uint16_t opsPort = freePort();
         LoginAppConfig cfg;
         cfg.listenHost = "127.0.0.1";
         cfg.listenPort = listenPort;
         cfg.authType = "db";
         cfg.dbHost = "127.0.0.1";
         cfg.dbPort = dbListenPort;
+        cfg.ops.enabled = true;
+        cfg.ops.port = opsPort;
 
         LoginApp app(std::move(cfg));
         TEST("init (authType=db connects to DBApp)");
@@ -462,6 +465,33 @@ int main() {
             FAIL("no response");
         if (!decodeLoginResponse(payload, lr) || lr.success || lr.error != "invalid credentials")
             FAIL("wrong password should be rejected, got error='" + lr.error + "'");
+        PASS();
+
+        TEST("ops /inspect in db mode reports transport stats");
+        {
+            auto opsTick = [&app] { app.tick(); };
+            std::string respLine;
+            if (!httpProbe(opsPort, "GET /inspect", respLine, opsTick))
+                FAIL("no response from ops /inspect");
+            if (respLine.find(" 200 ") == std::string::npos)
+                FAIL("/inspect -> " + respLine.substr(0, 30));
+        }
+        PASS();
+
+        TEST("second LoginApp on the same port cannot take over");
+        {
+            LoginAppConfig cfg2;
+            cfg2.listenHost = "127.0.0.1";
+            cfg2.listenPort = listenPort;  // 已被 app 监听
+            cfg2.authType = "db";
+            cfg2.dbHost = "127.0.0.1";
+            cfg2.dbPort = dbListenPort;
+            LoginApp app2(std::move(cfg2));
+            app2.init();  // listen 失败 → 直接返回，不影响 app
+        }
+        // 原 app 仍然可用
+        if (!client.request(appTick, ClientMessageType::QueryRealms, {}, type, payload))
+            FAIL("first LoginApp unresponsive after takeover attempt");
         PASS();
 
         dbRunning.store(false);
