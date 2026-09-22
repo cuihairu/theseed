@@ -1,10 +1,13 @@
+#include "theseed/runtime/Controller.h"
 #include "theseed/runtime/DirtyMask.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityCall.h"
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/PropertyBlock.h"
+#include "theseed/runtime/StateMachine.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -12,10 +15,12 @@
 #include <string>
 #include <vector>
 
+using theseed::foundation::MemoryStream;
 using theseed::runtime::DirtyMask;
 using theseed::runtime::Entity;
 using theseed::runtime::EntityCall;
 using theseed::runtime::EntityDef;
+using theseed::runtime::EntityId;
 using theseed::runtime::EntitySide;
 using theseed::runtime::EntityState;
 using theseed::runtime::DeliveryClass;
@@ -23,6 +28,8 @@ using theseed::runtime::MethodSide;
 using theseed::runtime::PropertyId;
 using theseed::runtime::PropertyType;
 using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
+using theseed::runtime::Vector3;
 
 namespace {
 
@@ -169,6 +176,85 @@ int main() {
 
     if (entity.dispatchMethod("missingSpell", invocation.payload)) {
         return fail("entity_dispatch_missing");
+    }
+
+    // --- 错误路径与惰性初始化 ---
+    {
+        // bindMethodHandler：空名 / 空 handler / 未知方法 → false
+        if (entity.bindMethodHandler("", [](Entity&, std::span<const std::byte>) {})) {
+            return fail("bind_method_empty_name");
+        }
+        if (entity.bindMethodHandler("castSpell", nullptr)) {
+            return fail("bind_method_null_handler");
+        }
+        if (entity.bindMethodHandler("noSuchSpell", [](Entity&, std::span<const std::byte>) {})) {
+            return fail("bind_method_unknown");
+        }
+
+        // bindStreamMethodHandler：空名 / 空 handler / side 不匹配 → false
+        if (entity.bindStreamMethodHandler("", [](Entity&, MemoryStream&) {})) {
+            return fail("bind_stream_empty_name");
+        }
+        if (entity.bindStreamMethodHandler("castSpell", nullptr)) {
+            return fail("bind_stream_null_handler");
+        }
+        if (entity.bindStreamMethodHandler("basePing", [](Entity&, MemoryStream&) {})) {
+            return fail("bind_stream_side_mismatch");
+        }
+
+        // dispatchInvocation：id / 类型不匹配 → false
+        RuntimeInvocation wrongId = invocation;
+        wrongId.entityId = 9999;
+        if (entity.dispatchInvocation(wrongId)) {
+            return fail("dispatch_wrong_id");
+        }
+        RuntimeInvocation wrongType = invocation;
+        wrongType.entityType = "Monster";
+        if (entity.dispatchInvocation(wrongType)) {
+            return fail("dispatch_wrong_type");
+        }
+
+        // queryEntityPosition：无 provider → nullopt；有 provider → 透传
+        if (entity.queryEntityPosition(42).has_value()) {
+            return fail("query_position_no_provider");
+        }
+        entity.setPositionProvider([](EntityId) {
+            return std::optional<Vector3>{Vector3{1.0F, 2.0F, 3.0F}};
+        });
+        const auto provided = entity.queryEntityPosition(42);
+        if (!provided.has_value() || provided->x != 1.0F) {
+            return fail("query_position_provider");
+        }
+
+        // transport()：默认 nullptr → callCell/callBase 均 NotConnected
+        if (entity.transport() != nullptr) {
+            return fail("transport_initial");
+        }
+        if (entity.callCell("castSpell") != SendResult::NotConnected ||
+            entity.callBase("basePing") != SendResult::NotConnected) {
+            return fail("call_not_connected");
+        }
+
+        // 定时器：未注入调度函数或回调为空 → 空 handle
+        if (entity.addTimer(std::chrono::milliseconds(5), nullptr)) {
+            return fail("timer_null_callback");
+        }
+        if (entity.addPeriodicTimer(std::chrono::milliseconds(5), nullptr)) {
+            return fail("periodic_null_callback");
+        }
+
+        // const 懒初始化：fsm() / controllers() 的 const 版本各自惰性建实例。
+        // 先单独触发 const 版本——比较表达式两侧的求值顺序未指定，若 gcc
+        // 先求右侧的非 const 调用，const 分支会因实例已存在而被跳过。
+        const Entity& frozen = entity;
+        static_cast<void>(frozen.fsm().state());
+        static_cast<void>(frozen.controllers().count());
+        if (frozen.fsm().state() != entity.fsm().state()) {
+            return fail("fsm_lazy_init");
+        }
+        if (frozen.controllers().count() != entity.controllers().count()) {
+            return fail("controllers_lazy_init");
+        }
     }
 
     entity.setProperty<std::int32_t>(hpId, 75);

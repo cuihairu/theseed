@@ -513,6 +513,29 @@ int main() {
             FAIL_SECTION("decode queryAccount response failed");
         if (!found) FAIL_SECTION("queryAccount fast path not found");
 
+        // 正常 remove 清掉账号与索引行——固定用户名的快路径测试必须自清理，
+        // 否则下一次运行会因 username 唯一性被拒（flaky）。
+        if (!sclient.request(DBMethod::kRemove,
+                             DBProtocol::encodeRemoveRequest(accountId),
+                             sappTick, resp))
+            FAIL_SECTION("no response to account remove");
+        bool removed = false;
+        if (!DBProtocol::decodeRemoveResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                removed))
+            FAIL_SECTION("decode remove response failed");
+        if (!removed) FAIL_SECTION("account remove should succeed");
+
+        if (!sclient.request(DBMethod::kQueryAccount,
+                             DBProtocol::encodeQueryAccountRequest("fast_user"),
+                             sappTick, resp))
+            FAIL_SECTION("no response to post-remove queryAccount");
+        if (!DBProtocol::decodeQueryAccountResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                found, accountId, fastPw))
+            FAIL_SECTION("decode post-remove queryAccount response failed");
+        if (found) FAIL_SECTION("account should be gone after remove");
+
         // handleRemove 畸形载荷：解码失败 → remove response(false)
         if (!sclient.request(DBMethod::kRemove, {std::byte{0xFF}, std::byte{0x00}},
                              sappTick, resp))
