@@ -355,6 +355,31 @@ static void testSameStateTransition() {
     else FAIL("callback count=" + std::to_string(callbackCount));
 }
 
+// Test 10: availableTransitions with no current state returns all states
+static void testAvailableTransitionsWithoutState() {
+    TEST("FSM: availableTransitions before setState lists every state");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+
+    auto& fsm = e.fsm();
+    fsm.addState("Idle");
+    fsm.addState("Moving");
+    fsm.addState("Dead");
+
+    // 尚未 setState：currentState_ 为空，返回全部已注册状态
+    auto all = fsm.availableTransitions();
+    bool ok = all.size() == 3;
+
+    fsm.setState("Idle");
+    fsm.addTransition("Idle", "Moving");
+    auto fromIdle = fsm.availableTransitions();
+    ok = ok && fromIdle.size() == 1 && fromIdle[0] == "Moving";
+
+    if (ok) PASS();
+    else FAIL("availableTransitions mismatch");
+}
+
 int main() {
     std::cout << "State machine tests:\n";
 
@@ -366,6 +391,7 @@ int main() {
     testAvailableTransitions();
     testReset();
     testMultipleEntities();
+    testAvailableTransitionsWithoutState();
     testStatesQuery();
     testCircularTransitions();
     testCallbackEntity();

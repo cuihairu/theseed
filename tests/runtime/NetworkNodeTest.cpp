@@ -212,6 +212,26 @@ static void testSchedulerLifecycleAndFailedConnect() {
     TcpConnection::globalShutdown();
 }
 
+static void testSchedulerRunLoopStops() {
+    TEST("scheduler run loop: sleep-paced and busy-paced variants stop cleanly");
+
+    // tickInterval > 0：sleep_until 节拍分支
+    TickScheduler paced(std::chrono::milliseconds{2});
+    std::thread pacedLoop([&] { paced.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds{12});
+    paced.requestStop();
+    pacedLoop.join();
+
+    // tickInterval == 0：yield 忙等分支
+    TickScheduler busy(std::chrono::milliseconds{0});
+    std::thread busyLoop([&] { busy.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    busy.requestStop();
+    busyLoop.join();
+
+    PASS();
+}
+
 int main() {
     std::cout << "NetworkNode tests:\n";
 
@@ -220,6 +240,7 @@ int main() {
     testDisconnectPeer();
     testPeerCount();
     testSchedulerLifecycleAndFailedConnect();
+    testSchedulerRunLoopStops();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -677,6 +677,29 @@ static void testLoaderErrorBranches() {
     PASS();
 }
 
+static void testBoolMinMaxFallsThroughEncoder() {
+    TEST("bool property with minValue hits encoder default branch");
+
+    // encodeNumericValue 只为数值类型写了 case；Bool 带 minValue 时
+    // 走 switch 的 default（空实现），属性照常注册。
+    const char* xml = R"(
+<EntityDef name="Flagged">
+    <Properties>
+        <Property name="pvp" type="Bool" minValue="0" maxValue="1"/>
+    </Properties>
+</EntityDef>
+)";
+
+    auto def = EntityDefLoader::loadFromString(xml);
+    bool ok = def != nullptr;
+    const auto* prop = ok ? def->findProperty("pvp") : nullptr;
+    ok = ok && prop != nullptr && prop->type == PropertyType::Bool;
+    ok = ok && prop->minValue.size() == 1 && prop->maxValue.size() == 1;
+    ok = ok && prop->minValue[0] == std::byte{0} && prop->maxValue[0] == std::byte{0};
+
+    if (ok) PASS(); else FAIL("bool min/max load failed");
+}
+
 int main() {
     std::cout << "EntityDefLoader tests:\n";
 
@@ -699,6 +722,7 @@ int main() {
     testXmlDeclCommentsAndMinMax();
     testNumericDefaultValues();
     testLoaderErrorBranches();
+    testBoolMinMaxFallsThroughEncoder();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

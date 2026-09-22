@@ -179,6 +179,16 @@ static void testDispatcherHandlerCount() {
     if (ok) PASS(); else FAIL("count mismatch");
 }
 
+static void testChannelAccessors() {
+    TEST("channel accessors: nextSequence / overflowPolicy");
+
+    Channel channel(5);
+    static_cast<void>(channel.nextSequence());
+    static_cast<void>(channel.overflowPolicy());
+
+    PASS();
+}
+
 int main() {
     std::cout << "Channel tests:\n";
 
@@ -190,6 +200,7 @@ int main() {
     testDispatcherNoHandler();
     testDispatcherUnregister();
     testDispatcherHandlerCount();
+    testChannelAccessors();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

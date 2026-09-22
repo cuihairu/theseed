@@ -220,6 +220,23 @@ static void testRegistryTypeConflictAndJsonVariants() {
     if (ok) PASS(); else FAIL("type conflict/json variants wrong");
 }
 
+static void testRegistryJsonHistogramSnapshot() {
+    TEST("registry renderJson serializes histogram snapshot");
+    MetricsRegistry::instance().reset();
+    auto& h = MetricsRegistry::instance().histogram(
+        "j_hist", Histogram::Boundaries{1.0, 2.0, 5.0}, "histogram json");
+    h.observe(0.5);
+    h.observe(1.5);
+    h.observe(9.0);
+
+    auto json = MetricsRegistry::instance().renderJson();
+    bool ok = json.find("\"type\":\"histogram\"") != std::string::npos;
+    ok = ok && json.find("\"count\":3") != std::string::npos;
+    ok = ok && json.find("\"buckets\":[") != std::string::npos;
+
+    if (ok) PASS(); else FAIL("histogram snapshot missing in json: " + json);
+}
+
 int main() {
     std::cout << "Metrics tests:\n";
 
@@ -233,6 +250,7 @@ int main() {
     testRegistryRenderJson();
     testRegistryTypeConflictAndJsonVariants();
     testRegistryReset();
+    testRegistryJsonHistogramSnapshot();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

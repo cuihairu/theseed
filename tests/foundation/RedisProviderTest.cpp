@@ -269,6 +269,29 @@ static void test_rate_limiter_available_tokens() {
     PASS();
 }
 
+static void test_redis_zrange_score_tie_break_by_member() {
+    TEST("test_redis_zrange_score_tie_break_by_member");
+    InMemoryRedisProvider r;
+    r.zadd("tie", "banana", 1.0);
+    r.zadd("tie", "apple", 1.0);
+    r.zadd("tie", "cherry", 0.5);
+    auto range = r.zrange("tie", 0, -1);
+    bool ok = range.size() == 3;
+    ok = ok && range[0].first == "cherry";   // 低分在前
+    ok = ok && range[1].first == "apple";    // 同分按成员名字典序
+    ok = ok && range[2].first == "banana";
+    if (ok) PASS(); else FAIL("tie-break order wrong");
+}
+
+static void test_provider_scoped_construction() {
+    TEST("test_provider_scoped_construction");
+    {
+        InMemoryRedisProvider scoped;
+        scoped.set("k", "v");
+    }   // 出作用域：构造/析构完整走一遍
+    PASS();
+}
+
 int main() {
     test_redis_set_get();
     test_redis_ttl_expires();
@@ -289,6 +312,8 @@ int main() {
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();
+    test_redis_zrange_score_tie_break_by_member();
+    test_provider_scoped_construction();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

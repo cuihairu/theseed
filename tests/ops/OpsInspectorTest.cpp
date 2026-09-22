@@ -139,7 +139,7 @@ static void test_metrics_render_includes_registered() {
 static void test_json_escapes_special_chars() {
     TEST("test_json_escapes_special_chars");
     ProcessInfo info;
-    info.role = "Test\"App\n";
+    info.role = "Test\"App\nCarriage\rReturn";
     info.version = "0.1\\0";
     OpsInspector insp(info, [] {
         RuntimeInfo rt;
@@ -152,6 +152,7 @@ static void test_json_escapes_special_chars() {
     if (!contains(out, "\"Ty\\\"pe\"")) { FAIL("escaped quote missing"); return; }
     // expect: Test\"App\n  (C++ literal: "Test\\\"App\\n")
     if (!contains(out, "Test\\\"App\\n")) { FAIL("role escape missing"); return; }
+    if (!contains(out, "\\r")) { FAIL("carriage return escape missing"); return; }
     // expect: 0.1\\0  (C++ literal: "0.1\\\\0")
     if (!contains(out, "0.1\\\\0")) { FAIL("version escape missing"); return; }
     PASS();

@@ -189,6 +189,23 @@ static void testAdvanceLargeStep() {
     else FAIL("order wrong");
 }
 
+static void testCascadeRelinksLongTimers() {
+    TEST("long timers cascade down levels and fire");
+
+    // tickDuration=1ms；delay>255 ticks 的 timer 落 level1，
+    // currentTick 跨 65536 边界时 cascade 重新分级到 level0 后触发。
+    TimerWheel wheel(std::chrono::milliseconds{1});
+    int fired = 0;
+    wheel.addTimer(std::chrono::milliseconds{300}, [&] { ++fired; });   // 升级进 level1
+    wheel.addTimer(std::chrono::milliseconds{1000}, [&] { ++fired; });  // cascade 后在 slot 232 触发
+
+    wheel.advance(std::chrono::milliseconds{65768});
+
+    if (fired != 2) FAIL("expected 2 fires, got " + std::to_string(fired));
+    if (wheel.activeCount() != 0) FAIL("timers still active after firing");
+    PASS();
+}
+
 int main() {
     std::cout << "TimerWheel tests:\n";
 
@@ -202,6 +219,7 @@ int main() {
     testClear();
     testTimerHandleValidity();
     testAdvanceLargeStep();
+    testCascadeRelinksLongTimers();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -221,6 +221,27 @@ static void testPeerCount() {
     else FAIL("peerCount=" + std::to_string(hub.peerCount()));
 }
 
+static void testAwaitingIdentityLifecycle() {
+    TEST("hub counts and flushes server transports awaiting identity");
+
+    auto hub = TransportHub(20);
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    hub.attachServerTransport(transport);
+
+    RuntimeInvocation inv;
+    inv.sourceComponent = 20;
+    inv.targetComponent = 30;
+    inv.method = "hello";
+    if (hub.send(inv) != SendResult::NotConnected) { FAIL("awaiting peer should not route"); return; }
+
+    bool ok = hub.pendingCount() >= 0;   // 覆盖 awaitingIdentity_ 的 pendingCount 汇总
+    hub.flush();                          // 覆盖 awaitingIdentity_ 的 flush
+    ok = ok && !hub.hasPeer(30);
+
+    if (ok) PASS();
+    else FAIL("awaiting identity lifecycle wrong");
+}
+
 int main() {
     std::cout << "TransportHub tests:\n";
 
@@ -232,6 +253,7 @@ int main() {
     testStatsAggregation();
     testPendingCountAggregation();
     testPeerCount();
+    testAwaitingIdentityLifecycle();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

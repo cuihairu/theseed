@@ -272,6 +272,21 @@ static void test_applied_versions_history() {
     PASS();
 }
 
+// 18. apply with timer-logic change reports warning count in message
+static void test_apply_reports_warning_count() {
+    TEST("test_apply_reports_warning_count");
+    DiffResult diff;
+    diff.changes.push_back(makeChange(ChangeType::ModifyTimerLogic, "Avatar", "respawnTimer", ""));
+    HotUpdateManager mgr;
+    auto r = mgr.apply(diff);
+    if (!r.success) { FAIL(r.message); return; }
+    if (r.message.find("1 warning") == std::string::npos) {
+        FAIL("expected warning count in message: " + r.message);
+        return;
+    }
+    PASS();
+}
+
 int main() {
     test_change_type_classification();
     test_helper_predicates();

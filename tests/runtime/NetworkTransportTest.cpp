@@ -343,6 +343,27 @@ static void testGarbageHeaderDoesNotKillTransport() {
     else FAIL("transport state corrupted by garbage header");
 }
 
+static void testPipeWriteEdgeCases() {
+    TEST("pipe write: empty payload, expired peer, closed pipe");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+
+    // 空 payload：连通时返回 true（短路分支）
+    bool ok = pipeA->write({});
+
+    // 对端销毁：weak_ptr lock 失败 → false
+    pipeB.reset();
+    std::vector<std::byte> data{std::byte{1}};
+    ok = ok && !pipeA->write(data);
+
+    // 自身关闭：connected_ 为假 → 返回 false
+    pipeA->close();
+    ok = ok && !pipeA->write(data);
+
+    if (ok) PASS();
+    else FAIL("pipe write edge cases wrong");
+}
+
 int main() {
     std::cout << "NetworkTransport tests:\n";
 
@@ -358,6 +379,7 @@ int main() {
     testUnorderedLossyDelivery();
     testSendErrorPaths();
     testGarbageHeaderDoesNotKillTransport();
+    testPipeWriteEdgeCases();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

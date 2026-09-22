@@ -120,6 +120,14 @@ int main() {
     }
     PASS();
 
+    TEST("DBProtocol empty-body request encoders");
+    {
+        // allocId 与 listTypes 请求没有请求体，编码结果必须为空。
+        if (!DBProtocol::encodeAllocIdRequest().empty()) FAIL("allocId request should be empty");
+        if (!DBProtocol::encodeListTypesRequest().empty()) FAIL("listTypes request should be empty");
+    }
+    PASS();
+
     TEST("DBProtocol encode/decode listTypes response");
     {
         std::vector<std::string> types = {"Avatar", "Monster"};
@@ -131,6 +139,67 @@ int main() {
             FAIL("decode failed");
         if (outTypes.size() != 2) FAIL("count mismatch");
         if (outTypes[0] != "Avatar") FAIL("type mismatch");
+    }
+    PASS();
+
+    // RemoteEntityStore：响应 method 匹配但 payload 为空 → decode 失败路径；
+    // receive 首轮空转命中 request() 泵循环回边。
+    TEST("RemoteEntityStore fails gracefully on malformed responses");
+    {
+        class CannedTransport final : public IRuntimeTransport {
+        public:
+            explicit CannedTransport(RuntimeInvocation resp)
+                : resp_(std::move(resp)) {}
+
+            SendResult send(RuntimeInvocation) override { return SendResult::Accepted; }
+            std::size_t receive(ComponentId, RuntimeInvocation* out,
+                                std::size_t) override {
+                if (calls_++ == 0) return 0;  // 首轮空转：响应"还没到"
+                *out = resp_;
+                return 1;
+            }
+            std::size_t pendingCount() const override { return 1; }
+            void flush() override {}
+            TransportStats stats() const override { return {}; }
+
+        private:
+            RuntimeInvocation resp_;
+            int calls_ = 0;
+        };
+
+        // 空 payload 让四个 decode*Response 都返回 false，同时 method
+        // 与各自的 Ok 常量匹配，绕过 early-return 直达 decode 分支。
+        auto canned = [](const char* method) {
+            RuntimeInvocation resp;
+            resp.sourceComponent = 10;
+            resp.targetComponent = 20;
+            resp.method = method;
+            return resp;
+        };
+
+        EntityData data;
+        data.entityType = "Avatar";
+
+        {
+            auto transport = std::make_shared<CannedTransport>(canned(DBMethod::kLoadOk));
+            RemoteEntityStore store(transport, 10, 20);
+            if (store.load(1, "Avatar", data)) FAIL("load should fail on empty payload");
+        }
+        {
+            auto transport = std::make_shared<CannedTransport>(canned(DBMethod::kSaveOk));
+            RemoteEntityStore store(transport, 10, 20);
+            if (store.save(1, data)) FAIL("save should fail on empty payload");
+        }
+        {
+            auto transport = std::make_shared<CannedTransport>(canned(DBMethod::kRemoveOk));
+            RemoteEntityStore store(transport, 10, 20);
+            if (store.remove(1)) FAIL("remove should fail on empty payload");
+        }
+        {
+            auto transport = std::make_shared<CannedTransport>(canned(DBMethod::kAllocIdOk));
+            RemoteEntityStore store(transport, 10, 20);
+            if (store.allocId() != 0) FAIL("allocId should yield 0 on decode failure");
+        }
     }
     PASS();
 

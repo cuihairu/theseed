@@ -313,6 +313,20 @@ static void test_logger_auto_attaches_trace() {
     PASS();
 }
 
+static void test_span_accessor_returns_scope_span() {
+    TEST("test_span_accessor_returns_scope_span");
+    resetTracing();
+    {
+        auto scope = startSpan("accessor");
+        const auto& span = scope.span();
+        if (span.context.spanId != scope.context().spanId) {
+            FAIL("span() should expose the scope's own span");
+            return;
+        }
+    }
+    PASS();
+}
+
 int main() {
     test_generate_trace_id_length();
     test_generate_span_id_length();
@@ -330,6 +344,7 @@ int main() {
     test_inject_invalid_context_skips();
     test_thread_isolation();
     test_logger_auto_attaches_trace();
+    test_span_accessor_returns_scope_span();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

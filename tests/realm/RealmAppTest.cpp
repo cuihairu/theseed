@@ -1,6 +1,7 @@
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/LoginTypes.h"
+#include "theseed/foundation/Metrics.h"
 #include "theseed/realm/RealmApp.h"
 #include "theseed/runtime/InMemoryBytePipe.h"
 
@@ -135,6 +136,22 @@ int main() {
         RealmAppConfig config;
         RealmApp app(std::move(config));
         if (app.realms().size() != 0) FAIL("should be empty");
+    }
+    PASS();
+
+    TEST("tick records session gauge and duration histogram");
+    {
+        RealmAppConfig config;
+        RealmApp app(std::move(config));
+        app.init();     // 无 ops 段：只建监听基础设施
+        app.tick();
+        app.tick();
+
+        const auto& text = theseed::foundation::MetricsRegistry::instance().renderText();
+        if (text.find("realm_session_count") == std::string::npos)
+            FAIL("session gauge missing");
+        if (text.find("tick_duration_ms") == std::string::npos)
+            FAIL("tick histogram missing");
     }
     PASS();
 
