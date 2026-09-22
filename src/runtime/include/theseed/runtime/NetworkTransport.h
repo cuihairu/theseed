@@ -25,6 +25,9 @@ public:
     struct Config {
         ComponentId localComponent{0};
         std::size_t maxMessageSize{64 * 1024};
+        // false 时 send 只入队不冲刷，由 flush()/tick() 统一冲刷（攒批发送）。
+        // 队列积压达到 watermark.high 后 send 返回 BackPressure。
+        bool autoFlush{true};
     };
 
     explicit NetworkTransport(std::shared_ptr<IBytePipe> pipe)
@@ -54,7 +57,6 @@ private:
     void onRawReceived(std::span<const std::byte> data);
     void parseInbound();
     bool parseOneMessage();
-    void onPipeClosed();
 
     std::shared_ptr<IBytePipe> pipe_;
     Config config_;

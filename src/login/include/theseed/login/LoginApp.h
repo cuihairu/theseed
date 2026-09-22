@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -40,6 +41,13 @@ struct LoginAppConfig {
     std::uint16_t dbPort = 20003;
     runtime::ComponentId dbComponentId = 10;
     runtime::ComponentId localComponentId = 20;
+    // dbRequest 等待 DBApp 应答的上限。超时/发送失败按 "database unavailable" 处理，
+    // 避免 DBApp 失联时忙等挂死。
+    std::chrono::milliseconds dbRequestTimeout{5000};
+    // 测试/嵌入注入点：非空时跳过真实 TcpConnection，直接使用返回的 transport
+    //（返回 nullptr 时该 peer 缺席，dbRequest 立即按 NotConnected 失败）。
+    std::function<std::shared_ptr<runtime::IRuntimeTransport>(const std::string& host,
+                                                              std::uint16_t port)> dbTransportFactory;
     LoginAppOpsConfig ops;
 
     // Redis 会话/限流集成（Phase B）。三者共享同一个 IRedisProvider。
@@ -84,6 +92,9 @@ private:
     void handleSelectRealm(ClientSession* session, const std::string& realmId);
     void cleanupDisconnected();
 
+    // 向 DBApp 发起一次请求-应答。等待上限为 config_.dbRequestTimeout；
+    // 发送失败（NotConnected 等）、超时或杂散应答耗尽等待窗口时返回
+    // method 为空的 RuntimeInvocation（调用方按 method 校验判失败）。
     runtime::RuntimeInvocation dbRequest(const std::string& method,
                                           std::span<const std::byte> payload);
 

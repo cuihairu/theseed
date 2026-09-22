@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <utility>
 
 namespace theseed::login {
@@ -35,11 +36,16 @@ void LoginApp::init() {
     if (config_.authType == "db" && !config_.dbHost.empty()) {
         hub_ = std::make_shared<runtime::TransportHub>(config_.localComponentId);
 
-        auto conn = runtime::TcpConnection::create();
-        if (!conn->connect(config_.dbHost, config_.dbPort)) {
-            return;
+        std::shared_ptr<runtime::IRuntimeTransport> transport;
+        if (config_.dbTransportFactory) {
+            transport = config_.dbTransportFactory(config_.dbHost, config_.dbPort);
+        } else {
+            auto conn = runtime::TcpConnection::create();
+            if (!conn->connect(config_.dbHost, config_.dbPort)) {
+                return;
+            }
+            transport = std::make_shared<runtime::NetworkTransport>(conn);
         }
-        auto transport = std::make_shared<runtime::NetworkTransport>(conn);
         hub_->connectPeer(config_.dbComponentId, transport);
     }
 
@@ -125,15 +131,25 @@ runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
     inv.method = method;
     inv.payload = std::vector<std::byte>(payload.begin(), payload.end());
 
-    hub_->send(std::move(inv));
+    if (hub_->send(std::move(inv)) != runtime::SendResult::Accepted) {
+        return {};
+    }
     hub_->flush();
 
+    // 等待应答，上限 dbRequestTimeout：DBApp 失联时退化为失败返回而不是忙等挂死。
+    // 单 DBApp 拓扑下杂散消息只会是过期应答，丢弃后继续等本次的。
+    const auto deadline = runtime::Clock::now() + config_.dbRequestTimeout;
+    const auto expect = std::string(method) + ".ok";
     runtime::RuntimeInvocation resp;
-    while (true) {
+    while (runtime::Clock::now() < deadline) {
         hub_->tick();
-        auto count = hub_->receive(config_.localComponentId, &resp, 1);
-        if (count > 0) return resp;
+        if (hub_->receive(config_.localComponentId, &resp, 1) > 0) {
+            if (resp.method == expect) return resp;
+            continue;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    return {};
 }
 
 void LoginApp::acceptConnections() {
@@ -219,48 +235,60 @@ void LoginApp::handleLogin(ClientSession* session,
         auto respPayload = dbRequest(db::DBMethod::kQueryAccount,
                                       std::span<const std::byte>(req.data(), req.size()));
 
-        bool found = false;
-        core::EntityId accountId = 0;
-        std::string storedPassword;
-        db::DBProtocol::decodeQueryAccountResponse(
-            std::span<const std::byte>(respPayload.payload.data(), respPayload.payload.size()),
-            found, accountId, storedPassword);
+        if (respPayload.method != db::DBMethod::kQueryAccountOk) {
+            // DBApp 失联/超时：不能确定账号是否存在，直接失败（不进 auto-register）
+            resp.success = false;
+            resp.error = "database unavailable";
+            theseed::foundation::MetricsRegistry::instance()
+                .counter("login_db_unavailable_count",
+                         "login attempts aborted because DBApp did not answer in time")
+                .increment();
+        } else {
+            bool found = false;
+            core::EntityId accountId = 0;
+            std::string storedPassword;
+            db::DBProtocol::decodeQueryAccountResponse(
+                std::span<const std::byte>(respPayload.payload.data(), respPayload.payload.size()),
+                found, accountId, storedPassword);
 
-        if (found && storedPassword == password) {
-            resp.success = true;
-            resp.token = SessionToken::issue(account, "");
-            resp.realms = config_.realms;
-            persistSession(resp.token, static_cast<std::int64_t>(accountId));
-        } else if (!found) {
-            // Auto-register: create new account
-            auto createReq = db::DBProtocol::encodeCreateAccountRequest(account, password);
-            auto createRespPayload = dbRequest(db::DBMethod::kCreateAccount,
-                                                std::span<const std::byte>(createReq.data(), createReq.size()));
-            bool created = false;
-            db::DBProtocol::decodeCreateAccountResponse(
-                std::span<const std::byte>(createRespPayload.payload.data(), createRespPayload.payload.size()),
-                created, accountId);
-
-            if (created) {
+            if (found && storedPassword == password) {
                 resp.success = true;
                 resp.token = SessionToken::issue(account, "");
                 resp.realms = config_.realms;
                 persistSession(resp.token, static_cast<std::int64_t>(accountId));
+            } else if (!found) {
+                // Auto-register: create new account
+                auto createReq = db::DBProtocol::encodeCreateAccountRequest(account, password);
+                auto createRespPayload = dbRequest(db::DBMethod::kCreateAccount,
+                                                    std::span<const std::byte>(createReq.data(), createReq.size()));
+                bool created = false;
+                if (createRespPayload.method == db::DBMethod::kCreateAccountOk) {
+                    db::DBProtocol::decodeCreateAccountResponse(
+                        std::span<const std::byte>(createRespPayload.payload.data(), createRespPayload.payload.size()),
+                        created, accountId);
+                }
+
+                if (created) {
+                    resp.success = true;
+                    resp.token = SessionToken::issue(account, "");
+                    resp.realms = config_.realms;
+                    persistSession(resp.token, static_cast<std::int64_t>(accountId));
+                } else {
+                    resp.success = false;
+                    resp.error = "account creation failed";
+                    theseed::foundation::MetricsRegistry::instance()
+                        .counter("challenge_failure_count",
+                                 "any login authentication failure (auth failures, account creation failures, fallback rejection)")
+                        .increment();
+                }
             } else {
                 resp.success = false;
-                resp.error = "account creation failed";
+                resp.error = "invalid credentials";
                 theseed::foundation::MetricsRegistry::instance()
                     .counter("challenge_failure_count",
                              "any login authentication failure (auth failures, account creation failures, fallback rejection)")
                     .increment();
             }
-        } else {
-            resp.success = false;
-            resp.error = "invalid credentials";
-            theseed::foundation::MetricsRegistry::instance()
-                .counter("challenge_failure_count",
-                         "any login authentication failure (auth failures, account creation failures, fallback rejection)")
-                .increment();
         }
     } else {
         // Fallback "password" mode: check non-empty

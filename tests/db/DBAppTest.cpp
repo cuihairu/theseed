@@ -6,6 +6,7 @@
 #include "theseed/runtime/PipedTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -200,6 +201,55 @@ int main() {
             RemoteEntityStore store(transport, 10, 20);
             if (store.allocId() != 0) FAIL("allocId should yield 0 on decode failure");
         }
+    }
+    PASS();
+
+    // 超时语义：DBApp 永不应答时 request() 在 requestTimeout 内返回
+    // method 为空的 RuntimeInvocation，各调用方按失败处理而不是挂死。
+    TEST("RemoteEntityStore times out when DBApp never responds");
+    {
+        class NeverRespondTransport final : public IRuntimeTransport {
+        public:
+            SendResult send(RuntimeInvocation) override { return SendResult::Accepted; }
+            std::size_t receive(ComponentId, RuntimeInvocation*, std::size_t) override { return 0; }
+            std::size_t pendingCount() const override { return 0; }
+            void flush() override {}
+            TransportStats stats() const override { return {}; }
+        };
+
+        RemoteEntityStore store(std::make_shared<NeverRespondTransport>(), 10, 20,
+                                std::chrono::milliseconds{10});
+
+        EntityData data;
+        data.entityType = "Avatar";
+        if (store.load(1, "Avatar", data)) FAIL("load must time out");
+        if (store.save(1, data)) FAIL("save must time out");
+        if (store.remove(1)) FAIL("remove must time out");
+        if (store.allocId() != 0) FAIL("allocId must yield 0 on timeout");
+        if (!store.listIdsByType("Avatar").empty()) FAIL("listIdsByType must be empty on timeout");
+        if (!store.listEntityTypes().empty()) FAIL("listEntityTypes must be empty on timeout");
+    }
+    PASS();
+
+    // 发送失败路径：send 返回 NotConnected 时立即失败，不进入等待循环。
+    TEST("RemoteEntityStore fails fast when send is rejected");
+    {
+        class SendFailTransport final : public IRuntimeTransport {
+        public:
+            SendResult send(RuntimeInvocation) override { return SendResult::NotConnected; }
+            std::size_t receive(ComponentId, RuntimeInvocation*, std::size_t) override { return 0; }
+            std::size_t pendingCount() const override { return 0; }
+            void flush() override {}
+            TransportStats stats() const override { return {}; }
+        };
+
+        RemoteEntityStore store(std::make_shared<SendFailTransport>(), 10, 20,
+                                std::chrono::milliseconds{10});
+
+        EntityData data;
+        data.entityType = "Avatar";
+        if (store.load(1, "Avatar", data)) FAIL("load must fail on NotConnected");
+        if (store.save(1, data)) FAIL("save must fail on NotConnected");
     }
     PASS();
 

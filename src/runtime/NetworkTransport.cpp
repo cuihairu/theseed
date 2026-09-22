@@ -67,7 +67,9 @@ SendResult NetworkTransport::send(RuntimeInvocation invocation) {
     ++stats_.messagesSent;
     stats_.bytesSent += encoded.size();
 
-    flushOutbound();
+    if (config_.autoFlush) {
+        flushOutbound();
+    }
     lastSendTime_ = Clock::now();
     return SendResult::Accepted;
 }
@@ -220,10 +222,6 @@ bool NetworkTransport::parseOneMessage() {
     // kHeartbeatMessageId: no-op, already consumed
 
     return true;
-}
-
-void NetworkTransport::onPipeClosed() {
-    // Future: notify upper layers
 }
 
 }  // namespace theseed::runtime

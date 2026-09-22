@@ -364,6 +364,41 @@ static void testPipeWriteEdgeCases() {
     else FAIL("pipe write edge cases wrong");
 }
 
+static void testAutoFlushBackPressure() {
+    TEST("autoFlush=false accumulates backlog and reports BackPressure");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport::Config cfg;
+    cfg.localComponent = 1;
+    cfg.autoFlush = false;  // 攒批：send 只入队，由 flush()/tick() 统一冲刷
+    NetworkTransport client(pipeA, cfg);
+    NetworkTransport server(pipeB);
+
+    // watermark.high = 256：前 256 条 Accepted（积压在 channel），第 257 条 BackPressure。
+    bool ok = true;
+    for (int i = 0; i < 257; ++i) {
+        auto result = client.send(makeInvocation(static_cast<std::uint64_t>(i), 5, "bulk"));
+        if (i < 256) {
+            ok = ok && result == SendResult::Accepted;
+        } else {
+            ok = ok && result == SendResult::BackPressure;
+        }
+    }
+    ok = ok && client.stats().backPressureEvents == 1;
+
+    // flush 后积压全部发出，对端可完整收取 256 条。
+    client.flush();
+    pipeA->pump();
+
+    RuntimeInvocation received;
+    std::size_t total = 0;
+    while (server.receive(5, &received, 1) > 0) ++total;
+    ok = ok && total == 256;
+
+    if (ok) PASS();
+    else FAIL("autoFlush backlog/BackPressure mismatch");
+}
+
 int main() {
     std::cout << "NetworkTransport tests:\n";
 
@@ -380,6 +415,7 @@ int main() {
     testSendErrorPaths();
     testGarbageHeaderDoesNotKillTransport();
     testPipeWriteEdgeCases();
+    testAutoFlushBackPressure();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;
