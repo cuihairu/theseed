@@ -165,6 +165,14 @@ EntityDefRegistry& BaseApp::registry() {
     return registry_;
 }
 
+std::uint16_t BaseApp::clientListenPort() const {
+    return clientListener_.localPort();
+}
+
+std::uint16_t BaseApp::opsListenPort() const {
+    return opsServer_ ? opsServer_->localPort() : 0;
+}
+
 const EntityDefRegistry& BaseApp::registry() const {
     return registry_;
 }

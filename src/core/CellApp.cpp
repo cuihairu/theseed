@@ -157,4 +157,8 @@ bool CellApp::destroyEntity(runtime::EntityId id) {
     return true;
 }
 
+std::uint16_t CellApp::opsListenPort() const {
+    return opsServer_ ? opsServer_->localPort() : 0;
+}
+
 }  // namespace theseed::core

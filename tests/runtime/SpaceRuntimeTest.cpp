@@ -87,5 +87,78 @@ int main() {
     }
 
     runtime.detach(scheduler);
+
+    // SingleCellTopology 边缘分支：邻接格、拓扑回调、负载上报、cellId
+    {
+        auto topo = std::make_unique<SingleCellTopology>(7);
+        auto* topoPtr = topo.get();
+        auto edgeSpace = std::make_unique<Space>(200, "edge", std::move(topo));
+
+        // const 访问器：topology() / coordinateSystem()
+        const auto& constSpace = *edgeSpace;
+        static_cast<void>(constSpace.topology().locateCell(Vector3{}));
+        static_cast<void>(constSpace.coordinateSystem());
+
+        if (topoPtr->locateCell(Vector3{1, 2, 3}) != 7) {
+            return fail("topology_locate");
+        }
+        const auto adjacent = topoPtr->getAdjacentCells(Vector3{}, 10.0F);
+        if (adjacent.size() != 1 || adjacent[0] != 7) {
+            return fail("topology_adjacent");
+        }
+        if (topoPtr->cellId() != 7) {
+            return fail("topology_cell_id");
+        }
+
+        bool rebalanced = false;
+        topoPtr->onTopologyChanged([&] {
+            rebalanced = true;
+        });
+        topoPtr->rebalance();
+        if (!rebalanced) {
+            return fail("topology_rebalance_callback");
+        }
+
+        topoPtr->reportLoad(7, 0.75F);
+        if (topoPtr->lastReportedLoad() != 0.75F) {
+            return fail("topology_report_load");
+        }
+
+        bool threw = false;
+        try {
+            topoPtr->reportLoad(8, 0.5F);  // 非本格 id → 拒绝
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("topology_report_wrong_cell");
+        }
+
+        // Space 构造：null topology 拒绝
+        threw = false;
+        try {
+            Space bad(201, "bad", nullptr);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("space_null_topology");
+        }
+
+        // addEntity 重复 id 拒绝
+        threw = false;
+        try {
+            Entity dup(1, EntitySide::Cell, def);
+            edgeSpace->initialize(SpaceConfig{});
+            edgeSpace->addEntity(dup, Vector3{});
+            edgeSpace->addEntity(dup, Vector3{1, 1, 1});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("space_duplicate_entity");
+        }
+    }
+
     return EXIT_SUCCESS;
 }

@@ -1,5 +1,6 @@
 #include "theseed/db/MySQLConnection.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -71,11 +72,6 @@ struct MySQLResult::Impl {
     }
 
     bool advance() {
-        if (materialized) {
-            if (cursor >= rows.size()) return false;
-            ++cursor;
-            return cursor <= rows.size();  // cursor 现在指向"当前行"（1-based 后调整）
-        }
         if (res == nullptr) return false;
         currentRow = mysql_fetch_row(res);
         lengths = mysql_fetch_lengths(res);
@@ -474,8 +470,15 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
                                                  offset + got) != 0) {
                         break;
                     }
-                    if (partLen == 0) break;
-                    got += partLen;
+                    // libmysql 语义：*length 回填的是列值全长而非本次拷贝字节数，
+                    // 实际拷贝 min(全长 - offset, 缓冲容量) 字节。按全长累加会
+                    // 越过 tail 缓冲导致 insert 越界读堆内存。
+                    if (partLen <= offset + got) break;
+                    const unsigned long copied =
+                        std::min(partLen - offset - got,
+                                 static_cast<unsigned long>(remaining - got));
+                    if (copied == 0) break;
+                    got += copied;
                 }
                 row[i].insert(row[i].end(),
                               reinterpret_cast<const std::byte*>(tail.data()),

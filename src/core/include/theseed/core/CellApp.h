@@ -54,6 +54,9 @@ public:
     runtime::Entity* findEntity(runtime::EntityId id) const;
     bool destroyEntity(runtime::EntityId id);
 
+    // init() 后可用：实际绑定的 ops 监听端口（仅 ops.enabled 时有意义）
+    std::uint16_t opsListenPort() const;
+
 private:
     Config config_;
     EntityDefRegistry registry_;

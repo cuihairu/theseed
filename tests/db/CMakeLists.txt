@@ -37,6 +37,16 @@ if(THESEED_MYSQL_ENABLED)
 
     add_test(NAME MySQLEntityStoreTest COMMAND theseed_mysql_store_test)
     set_tests_properties(MySQLEntityStoreTest PROPERTIES RUN_SERIAL ON)
+
+    add_executable(theseed_mysql_connection_test MySQLConnectionTest.cpp)
+
+    target_link_libraries(
+        theseed_mysql_connection_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
+
+    add_test(NAME MySQLConnectionTest COMMAND theseed_mysql_connection_test)
+    set_tests_properties(MySQLConnectionTest PROPERTIES RUN_SERIAL ON)
 endif()
 
 # PostgreSQL 集成测试：需要运行中的 PostgreSQL 实例，未配置 THESEED_PG_HOST 时跳过。
@@ -51,4 +61,14 @@ if(THESEED_POSTGRESQL_ENABLED)
 
     add_test(NAME PostgreSQLEntityStoreTest COMMAND theseed_pg_store_test)
     set_tests_properties(PostgreSQLEntityStoreTest PROPERTIES RUN_SERIAL ON)
+
+    add_executable(theseed_pg_connection_test PostgreSQLConnectionTest.cpp)
+
+    target_link_libraries(
+        theseed_pg_connection_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
+
+    add_test(NAME PostgreSQLConnectionTest COMMAND theseed_pg_connection_test)
+    set_tests_properties(PostgreSQLConnectionTest PROPERTIES RUN_SERIAL ON)
 endif()

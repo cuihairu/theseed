@@ -232,6 +232,34 @@ static void test_rate_limiter_independent_keys() {
     PASS();
 }
 
+static void test_rate_limiter_available_tokens() {
+    TEST("test_rate_limiter_available_tokens");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 5;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    // 空键：直接拒绝
+    if (limiter.availableTokens("", cfg) != 0.0) { FAIL("empty key should be 0"); return; }
+
+    // bucket 不存在：返回满容量
+    if (limiter.availableTokens("fresh", cfg) != 5.0) { FAIL("fresh key should be full"); return; }
+
+    // 消费 2 个后可查剩余（decode 命中）
+    if (!limiter.tryConsume("u", cfg, 2)) { FAIL("consume 2 should succeed"); return; }
+    if (limiter.availableTokens("u", cfg) != 3.0) {
+        FAIL("remaining=" + std::to_string(limiter.availableTokens("u", cfg)));
+        return;
+    }
+
+    // redis 里的状态损坏：回退满容量
+    redis->set("rate:bad", "garbage blob");
+    if (limiter.availableTokens("bad", cfg) != 5.0) { FAIL("corrupt blob should be full"); return; }
+
+    PASS();
+}
+
 int main() {
     test_redis_set_get();
     test_redis_ttl_expires();
@@ -250,6 +278,7 @@ int main() {
     test_rate_limiter_refills_over_time();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
+    test_rate_limiter_available_tokens();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

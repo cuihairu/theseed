@@ -3,13 +3,17 @@
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/RuntimeTypes.h"
+#include "theseed/runtime/TcpConnection.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 using theseed::core::CellApp;
 using theseed::runtime::Entity;
@@ -268,6 +272,76 @@ static void testOnEnterLeaveSpace() {
                                + " left=" + std::string(left ? "T" : "F"));
 }
 
+static void testEdgeBranches() {
+    TEST("constructor throw / ops server / const accessors / destroy fallbacks");
+
+    auto dir = createDefDir();
+
+    // null transport → invalid_argument
+    bool threw = false;
+    try {
+        CellApp bad(CellApp::Config{}, nullptr);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("null transport accepted"); std::filesystem::remove_all(dir); return; }
+
+    // ops.enabled：init 建 OpsServer，tick 驱动，HTTP /inspect 走 inspector 回调
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    CellApp::Config config;
+    config.entityDefPath = dir;
+    config.componentId = 2;
+    config.ops.enabled = true;
+    config.ops.host = "127.0.0.1";
+    config.ops.port = 0;  // ephemeral
+
+    CellApp app(config, transport);
+    bool ok = app.init();
+    ok = ok && app.opsListenPort() != 0;
+    app.tick();
+
+    auto opsConn = theseed::runtime::TcpConnection::create();
+    std::vector<std::byte> rx;
+    opsConn->setOnReceived([&rx](std::span<const std::byte> data) {
+        rx.insert(rx.end(), data.begin(), data.end());
+    });
+    ok = ok && opsConn->connect("127.0.0.1", app.opsListenPort());
+    if (ok) {
+        static const std::string req = "GET /inspect HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        opsConn->write(std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(req.data()), req.size()));
+        for (int i = 0; i < 2000 && rx.empty(); ++i) {
+            app.tick();
+            opsConn->pump();
+        }
+        std::string body(reinterpret_cast<const char*>(rx.data()), rx.size());
+        ok = ok && body.find("\"role\":\"CellApp\"") != std::string::npos;
+    }
+    opsConn->close();
+
+    // const 访问器
+    const auto& constApp = app;
+    ok = ok && &constApp.runtime() != nullptr;
+    ok = ok && &constApp.registry() != nullptr;
+
+    // 未知类型 createEntity → nullptr
+    ok = ok && app.createEntity("NoSuchType", Vector3{0, 0, 0}) == nullptr;
+
+    // destroyEntity：未知 id → false
+    ok = ok && !app.destroyEntity(99999);
+
+    if (ok) PASS(); else FAIL("edge branches failed");
+    std::filesystem::remove_all(dir);
+}
+
+static void testDestroyBeforeInit() {
+    TEST("destroyEntity before init returns false");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    CellApp app(CellApp::Config{}, transport);  // 未 init → runtime_ 为空
+    if (!app.destroyEntity(1)) PASS(); else FAIL("destroy should fail before init");
+}
+
 int main() {
     std::cout << "CellApp tests:\n";
 
@@ -278,6 +352,8 @@ int main() {
     testMultipleEntities();
     testOnDestroyFires();
     testOnEnterLeaveSpace();
+    testEdgeBranches();
+    testDestroyBeforeInit();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

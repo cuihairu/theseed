@@ -264,6 +264,41 @@ static void testPipedTransportBidirectional() {
     else FAIL("bidirectional mismatch");
 }
 
+static void testPipedTransportEdgeBranches() {
+    TEST("PipedTransport unconnected send / flush / stats");
+
+    // 未连接时 send 返回 NotConnected
+    PipedTransport lonely(1);
+    RuntimeInvocation inv;
+    inv.entityId = 1;
+    inv.targetComponent = 2;
+    inv.entityType = "X";
+    inv.method = "m";
+    bool ok = lonely.send(std::move(inv)) == theseed::runtime::SendResult::NotConnected;
+
+    // stats：初始队列为空，入站后反映深度
+    ok = ok && lonely.stats().inboundQueueDepth == 0;
+
+    PipedTransport a(1);
+    PipedTransport b(2);
+    a.connect(b);
+    RuntimeInvocation inv2;
+    inv2.entityId = 5;
+    inv2.targetComponent = 2;
+    inv2.entityType = "Y";
+    inv2.method = "n";
+    static_cast<void>(a.send(std::move(inv2)));
+    ok = ok && b.stats().inboundQueueDepth == 1;
+
+    // flush 无出站缓冲，调用安全且不改变入站深度
+    a.flush();
+    b.flush();
+    ok = ok && b.stats().inboundQueueDepth == 1;
+
+    if (ok) PASS();
+    else FAIL("edge branch mismatch");
+}
+
 int main() {
     std::cout << "InvocationCodec tests:\n";
 
@@ -275,6 +310,7 @@ int main() {
     testPipedTransportFilterByComponent();
     testPipedTransportMultipleMessages();
     testPipedTransportBidirectional();
+    testPipedTransportEdgeBranches();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

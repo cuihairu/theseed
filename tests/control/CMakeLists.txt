@@ -15,3 +15,12 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_process_supervisor_test COMMAND theseed_process_supervisor_test)
+
+add_executable(theseed_machine_agent_test MachineAgentTest.cpp)
+
+target_link_libraries(
+    theseed_machine_agent_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_control)
+
+add_test(NAME theseed_machine_agent_test COMMAND theseed_machine_agent_test)

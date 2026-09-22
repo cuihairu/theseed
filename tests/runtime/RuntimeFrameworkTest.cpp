@@ -75,6 +75,34 @@ struct StubServiceApp final : IServiceApp {
     bool stopped = false;
 };
 
+struct FailingServiceApp final : IServiceApp {
+    bool onStart() override {
+        return false;
+    }
+
+    void onStop() override {
+    }
+};
+
+// 首个 tick 就请求停止调度器——让 ServiceApp::run() 的主循环能退出。
+struct StopRequestingTickable final : ITickable {
+    explicit StopRequestingTickable(TickScheduler& scheduler) : scheduler(scheduler) {}
+
+    void tick(TickContext& context) override {
+        static_cast<void>(context);
+        scheduler.requestStop();
+    }
+
+    TickScheduler& scheduler;
+};
+
+// 置位 context.shouldStop——验证 executePhase 的中断分支。
+struct ShouldStopTickable final : ITickable {
+    void tick(TickContext& context) override {
+        context.shouldStop = true;
+    }
+};
+
 }  // namespace
 
 int main() {
@@ -230,6 +258,136 @@ int main() {
     const auto loopCompletionCount = loop.drain(completions.data(), completions.size());
     if (loopCompletionCount != 1) {
         return fail("runtime_loop_drain");
+    }
+
+    // maxIoWait getter 返回 setMaxIoWait 设置的值；detach 从调度器摘除
+    if (loop.maxIoWait() != std::chrono::milliseconds{1}) {
+        return fail("max_io_wait_getter");
+    }
+    loop.detach(scheduler);
+
+    // start 二次调用走 started_ 早退分支
+    {
+        auto stub2 = std::make_unique<StubServiceApp>();
+        InMemoryIORuntime io2;
+        ServiceApp service2(std::move(stub2), std::make_unique<InMemoryIORuntime>(),
+                            std::chrono::milliseconds{0});
+        if (!service2.start()) {
+            return fail("second_start_first");
+        }
+        if (!service2.start()) {
+            return fail("second_start_early_return");
+        }
+        // 未 start 的 stop() 早退分支
+        auto stub3 = std::make_unique<StubServiceApp>();
+        ServiceApp service3(std::move(stub3), std::make_unique<InMemoryIORuntime>(),
+                            std::chrono::milliseconds{0});
+        service3.stop();
+    }
+
+    // onStart 失败：start/runOnce/run 都走失败分支
+    {
+        ServiceApp failing(std::make_unique<FailingServiceApp>(),
+                           std::make_unique<InMemoryIORuntime>(),
+                           std::chrono::milliseconds{0});
+        if (failing.start()) {
+            return fail("failing_start_should_fail");
+        }
+        failing.runOnce();  // start 失败 → 早退
+        failing.run();      // start 失败 → 早退
+    }
+
+    // run()：主循环跑至 requestStop 后自动 stop
+    {
+        auto stub4 = std::make_unique<StubServiceApp>();
+        auto* stubPtr4 = stub4.get();
+        ServiceApp service4(std::move(stub4), std::make_unique<InMemoryIORuntime>(),
+                            std::chrono::milliseconds{0});
+        StopRequestingTickable stopper(service4.scheduler());
+        service4.scheduler().registerTickable(TickPhase::Script, stopper);
+        service4.run();
+        if (!stubPtr4->stopped) {
+            return fail("run_should_stop_app");
+        }
+    }
+
+    // TickScheduler 边缘分支：unregister 未注册项 / post 空任务 / 只读 getter
+    {
+        RecordingTickable unregistered("unregistered", events);
+        if (scheduler.unregisterTickable(TickPhase::Timer, unregistered)) {
+            return fail("unregister_not_registered");
+        }
+
+        TickScheduler misc(std::chrono::milliseconds{1});
+        misc.post(nullptr);  // 空任务：静默丢弃
+        if (misc.tickInterval() != std::chrono::milliseconds{1}) {
+            return fail("tick_interval_getter");
+        }
+        if (misc.running()) {
+            return fail("running_before_run");
+        }
+        misc.runOnce();
+        if (misc.lastTickDuration() < Duration::zero()) {
+            return fail("last_tick_duration_getter");
+        }
+    }
+
+    // shouldStop 置位：同 phase 后续 tickable 不再执行，runOnce 结束后请求停止
+    {
+        TickScheduler stopper_sched(std::chrono::milliseconds{0});
+        ShouldStopTickable shouldStop;
+        RecordingTickable after("after_should_stop", events);
+        stopper_sched.registerTickable(TickPhase::Network, shouldStop);
+        stopper_sched.registerTickable(TickPhase::Network, after);
+
+        events.clear();
+        const auto ticksBefore = stopper_sched.currentTick();
+        stopper_sched.runOnce();
+        if (!events.empty()) {
+            return fail("should_stop_breaks_phase");
+        }
+        if (stopper_sched.currentTick() != ticksBefore + 1) {
+            return fail("should_stop_tick_advances");
+        }
+
+        // 停止请求置位后的 runOnce 早退分支
+        stopper_sched.runOnce();
+        if (stopper_sched.currentTick() != ticksBefore + 1) {
+            return fail("run_once_after_stop_request");
+        }
+    }
+
+    // 正 tick 间隔的 run()：走 sleep_until 分支后退出
+    {
+        TickScheduler paced(std::chrono::milliseconds{1});
+        StopRequestingTickable pacedStopper(paced);
+        paced.registerTickable(TickPhase::Script, pacedStopper);
+        paced.run();
+        if (paced.running()) {
+            return fail("running_after_run");
+        }
+    }
+
+    // InMemoryIORuntime 边缘分支：wakeup / cancel 未知 token / drain 防御 / 空转等待
+    {
+        InMemoryIORuntime ioEdge;
+        ioEdge.wakeup();  // 置位唤醒标记 → 随后的 runOnce 不阻塞
+        ioEdge.runOnce(std::chrono::milliseconds{1});
+
+        if (ioEdge.cancel(theseed::runtime::IoToken{12345})) {
+            return fail("cancel_unknown_token");
+        }
+
+        std::array<IoCompletion, 2> sink{};
+        if (ioEdge.drainCompletions(nullptr, 4) != 0) {
+            return fail("drain_null_out");
+        }
+        if (ioEdge.drainCompletions(sink.data(), 0) != 0) {
+            return fail("drain_zero_capacity");
+        }
+
+        // 无请求无唤醒：等满 maxWait 后空转返回
+        ioEdge.runOnce(std::chrono::milliseconds{5});
     }
 
     return EXIT_SUCCESS;
