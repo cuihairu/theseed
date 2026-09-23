@@ -113,22 +113,31 @@ int main(int argc, char** argv) {
         return fail("start_sleep_child");
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 高负载下子进程 fork+exec 可能超过任何固定睡眠时长，固定等待会把
+    // "还没启动完"误判为失败：轮询等待子进程出现在列表里（20ms × 250 次）。
+    std::uint32_t managedPid = 0;
+    bool managedFound = false;
+    for (int attempt = 0; attempt < 250 && !managedFound; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto processes = supervisor->listProcesses();
+        const auto it = std::find_if(
+            processes.begin(),
+            processes.end(),
+            [&](const auto& candidate) {
+                return candidate.pid != currentProcessId() && candidate.name == selfName &&
+                       candidate.managed;
+            });
+        if (it != processes.end()) {
+            managedPid = it->pid;
+            managedFound = true;
+        }
+    }
 
-    const auto processes = supervisor->listProcesses();
-    const auto it = std::find_if(
-        processes.begin(),
-        processes.end(),
-        [&](const auto& candidate) {
-            return candidate.pid != currentProcessId() && candidate.name == selfName &&
-                   candidate.managed;
-        });
-
-    if (it == processes.end()) {
+    if (!managedFound) {
         return fail("managed_child_not_found");
     }
 
-    if (!supervisor->stop(it->pid)) {
+    if (!supervisor->stop(managedPid)) {
         return fail("stop_sleep_child");
     }
 
@@ -137,18 +146,26 @@ int main(int argc, char** argv) {
         return fail("start_exit_child");
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // 同理：退出时机受负载影响，固定睡眠分不清"还没退出"与"退出后仍被
+    // 列出"。轮询调用 listProcesses()（内部会 waitpid 收割已退出的管理
+    // 进程），直到子进程从列表消失；只有持续超时才算失败。
+    bool exitedGone = true;
+    for (int attempt = 0; attempt < 250; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto exitedProcesses = supervisor->listProcesses();
+        exitedGone = std::none_of(
+            exitedProcesses.begin(),
+            exitedProcesses.end(),
+            [&](const auto& candidate) {
+                return candidate.pid != currentProcessId() && candidate.name == selfName &&
+                       candidate.managed;
+            });
+        if (exitedGone) {
+            break;
+        }
+    }
 
-    const auto exitedProcesses = supervisor->listProcesses();
-    const auto exitedChild = std::find_if(
-        exitedProcesses.begin(),
-        exitedProcesses.end(),
-        [&](const auto& candidate) {
-            return candidate.pid != currentProcessId() && candidate.name == selfName &&
-                   candidate.managed;
-        });
-
-    if (exitedChild != exitedProcesses.end()) {
+    if (!exitedGone) {
         return fail("exited_child_still_listed");
     }
 

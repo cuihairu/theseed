@@ -78,9 +78,23 @@ int main() {
         CHECK(!c.ensureConnected(), "ensureConnected to dead port should fail");
     }
 
-    // 正常连接
+    // 正常连接。高负载下 rootless podman 的用户态端口转发可能让握手超过
+    // connect_timeout（环境抖动，非被测行为）：connect 失败后内部 conn 已
+    // 复位为空，可原地有界重试。本文件多处直连共用同一重试策略。
+    auto connectWithRetry = [](PostgreSQLConnection& conn) {
+        bool ok = false;
+        for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+            if (attempt > 0) {
+                std::cout << "  (connect retry " << attempt << " after: "
+                          << conn.lastError() << ")" << std::endl;
+            }
+            ok = conn.connect();
+        }
+        return ok;
+    };
+
     PostgreSQLConnection c(cfg);
-    CHECK(c.connect(), "connect");
+    CHECK(connectWithRetry(c), "connect");
     CHECK(c.connect(), "second connect is idempotent");
     CHECK(c.isConnected(), "isConnected");
 
@@ -137,7 +151,7 @@ int main() {
     CHECK(c.ping(), "ping");
     {
         PostgreSQLConnection killer(cfg);
-        CHECK(killer.connect(), "killer connect");
+        CHECK(connectWithRetry(killer), "killer connect");
         auto pid = c.query("SELECT pg_backend_pid()");
         CHECK(pid.has_value(), "read own pid");
         if (pid.has_value() && pid->next()) {

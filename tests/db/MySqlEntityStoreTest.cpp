@@ -1,12 +1,14 @@
 #include "theseed/core/EntityData.h"
 #include "theseed/db/MySQLEntityStore.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <utility>
 
 using theseed::core::EntityData;
@@ -340,10 +342,10 @@ int main() {
         admin.execute("DROP USER IF EXISTS 'trap_cov'@'%'");
     }
 
-    // --- allocId readback 失败路径：把账号的每小时查询配额收紧到 2 并清零
-    // 计数（MySQL 资源配额先加后判：第 1 条 COM_QUERY 计 1/2 放行、
-    // 第 2 条计 2/2 被拒），allocId 的 upsert 成功、SELECT LAST_INSERT_ID()
-    // 被拒——命中 execute 成功、readback 失败的窗口。---
+    // --- allocId readback 失败路径：把账号的每小时查询配额收紧到 2，
+    // 先重连预热消除 libmysql 自动重连的配额扰动，再让 upsert 落在第 2 条
+    // 放行、SELECT LAST_INSERT_ID() 落在第 3 条被拒——命中 execute 成功、
+    // readback 失败的窗口。---
     {
         auto cfg = configFromEnv();
         theseed::db::MySQLConnection admin(cfg.mysql);
@@ -363,11 +365,13 @@ int main() {
             CHECK(store.init(), "quota store init (no schema creation)");
             CHECK(store.save(1, makeAvatar(1, 1, 1.0f, 0.0f)), "quota store warmup save");
 
-            // 配额 2 + 先加后判：upsert 消耗 1/2 放行，SELECT LAST_INSERT_ID()
-            // 计 2/2 被拒——正好卡进 execute 成功、readback 失败的窗口。
+            // 配额 2：MySQL 资源配额先加后判是"第 N+1 条拒"（limit 2 放行
+            // 2 条、第 3 条被拒），计时轮靠一条预热 SELECT 把 upsert 顶到
+            // 第 2 条、readback 顶到第 3 条。见下方计时轮注释。
             CHECK(admin.execute("ALTER USER 'quota_cov'@'%' WITH MAX_QUERIES_PER_HOUR 2"),
                   "set hourly query quota");
-            // 杀掉 store 现有连接，确保收紧后的配额对后续语句生效
+            // 杀掉 store 现有连接，确保收紧后的配额对后续语句生效（资源限制
+            // 随内存 ACL 缓存刷新，旧连接要重连后才按新配额计数）
             {
                 auto plist = admin.query(
                     "SELECT id FROM information_schema.processlist "
@@ -377,8 +381,46 @@ int main() {
                 CHECK(admin.execute("KILL " + std::to_string(connId)),
                       "kill quota connection");
             }
-            CHECK(admin.execute("FLUSH USER_RESOURCES"), "reset resource counters");
+            // KILL 异步生效：轮询等旧连接从 processlist 消失，保证下一次
+            // store 操作必然触发重连
+            {
+                bool gone = false;
+                for (int i = 0; i < 100 && !gone; ++i) {
+                    auto p = admin.query(
+                        "SELECT 1 FROM information_schema.processlist "
+                        "WHERE user = 'quota_cov'");
+                    gone = !(p.has_value() && p->next());
+                    if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                CHECK(gone, "quota connection gone");
+            }
+            // 预热轮：触发重连。重连形态不受控——libmysql 的 mysql_ping 自动
+            // 重连会补发一条 SET NAMES（COM_QUERY，实测计入 max_questions），
+            // 手动 connect() 则把 charset 放在握手层不占配额。若不预热，
+            // upsert 前是否多出这条 SET NAMES 取决于竞态，配额 2 下会随机
+            // 命中 upsert 被拒（错误文案变成 "upsert failed"）导致本场景
+            // 偶发失败。此轮结果不断言；探测走 admin 的 processlist 连接，
+            // 不消耗 quota_cov 配额，循环内反复 allocId 直到新连接出现。
+            {
+                bool alive = false;
+                for (int i = 0; i < 100 && !alive; ++i) {
+                    (void)store.allocId();
+                    auto p = admin.query(
+                        "SELECT 1 FROM information_schema.processlist "
+                        "WHERE user = 'quota_cov'");
+                    alive = p.has_value() && p->next();
+                    if (!alive) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                CHECK(alive, "quota store reconnected");
+            }
+            CHECK(admin.execute("FLUSH USER_RESOURCES"),
+                  "reset counters after reconnect warmup");
 
+            // 计时轮。连接已建立，ping 直接通过不消耗配额：先用一条 SELECT
+            // 把计数推到 1/2（同时验证连接活性），upsert 落在 2/2 放行、
+            // SELECT LAST_INSERT_ID() 落在第 3 条被拒——稳定命中 execute
+            // 成功、readback 失败的窗口。
+            CHECK(store.executeRaw("SELECT 1"), "connection alive before timed run");
             CHECK(store.allocId() == 0, "allocId readback failure returns 0");
             CHECK(store.lastError().find("allocId readback failed") != std::string::npos,
                   "readback error surfaced");

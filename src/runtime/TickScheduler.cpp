@@ -158,7 +158,11 @@ void TickScheduler::runOnce() {
 
 void TickScheduler::run() {
     running_.store(true, std::memory_order_release);
-    stopRequested_.store(false, std::memory_order_release);
+    // 不在这里清 stopRequested_：若调用方在 run 线程首次被调度前就
+    // requestStop()（起线程 + 短 sleep + requestStop + join 的常见模式），
+    // 这里的清零会吞掉停止请求，循环永远退不出，join 方永等。
+    // stop 状态只由构造函数置 false、requestStop() 置 true；
+    // 复用同一个 scheduler 再跑一轮需新建对象。
 
     auto nextWake = Clock::now();
     while (!stopRequested_.load(std::memory_order_acquire)) {
