@@ -1,6 +1,8 @@
 #include "theseed/foundation/Logger.h"
 #include "theseed/foundation/Tracing.h"
 
+#include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -65,9 +67,9 @@ const char* levelName(LogLevel level) {
         case LogLevel::Debug: return "DEBUG";
         case LogLevel::Info:  return "INFO";
         case LogLevel::Warn:  return "WARN";
-        case LogLevel::Error: return "ERROR";
+        default:  // Error 与潜在新增等级
+            return level == LogLevel::Error ? "ERROR" : "UNKNOWN";
     }
-    return "UNKNOWN";
 }
 
 ConsoleLogger::ConsoleLogger(LogLevel level, std::ostream* sink)

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "theseed/foundation/MessageHeader.h"
 #include "theseed/foundation/MemoryStream.h"
 

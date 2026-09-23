@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::foundation::ObjectPool;
@@ -178,6 +179,22 @@ static void testTotalCount() {
     if (ok) PASS(); else FAIL("total count mismatch");
 }
 
+static void testSimpleObjGrowthAndReset() {
+    TEST("growth + reset callback on SimpleObj pool");
+
+    // blockSize=1：首次 acquire 时 freeList 为空，走 addBlock 扩容并刷新
+    // 高水位；传 resetFn 后 release 走重置回调。字符串取 7 字节字面量，
+    // 复用已有 acquire<int, double, const char(&)[7]> 实例。
+    ObjectPool<SimpleObj> tiny(1, [](SimpleObj& o) { o.x = 0; });
+    auto* p = tiny.acquire(1, 2.0, "second");
+    bool ok = p != nullptr && p->name == "second";
+    ok = ok && tiny.activeCount() == 1;
+    tiny.release(p);
+    ok = ok && tiny.activeCount() == 0;
+
+    if (ok) PASS(); else FAIL("growth/reset failed");
+}
+
 int main() {
     std::cout << "ObjectPool tests:\n";
 
@@ -189,6 +206,7 @@ int main() {
     testPooledObject();
     testPooledObjectMove();
     testReuseAfterRelease();
+    testSimpleObjGrowthAndReset();
     testTotalCount();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

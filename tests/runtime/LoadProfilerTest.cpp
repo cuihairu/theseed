@@ -73,14 +73,21 @@ static void test_smoothed_load_ema() {
         return;
     }
 
-    // Tick 2: another small scope; smoothed should be between first and current raw.
+    // Tick 2: another small scope; verify the EMA recurrence exactly:
+    // smoothed2 = alpha * raw2 + (1 - alpha) * smoothed1. Checking the
+    // identity (instead of monotonicity) keeps the test deterministic —
+    // Windows timer granularity makes raw2 vs raw1 ordering unreliable.
     {
         auto s2 = p.scope(1, "Avatar");
         sleepMs(4);
     }
     p.tick();
-    const float second = p.snapshot(1).smoothedLoad;
-    if (second < first - tol) { FAIL("second smoothed dipped below first unexpectedly"); return; }
+    const auto snap2 = p.snapshot(1);
+    const float secondExpected = 0.5F * snap2.rawLoad + 0.5F * first;
+    const float tol2 = 0.5F;
+    if (std::abs(snap2.smoothedLoad - secondExpected) > tol2) {
+        FAIL("second smoothed not ema recurrence of raw"); return;
+    }
     PASS();
 }
 
@@ -230,6 +237,43 @@ static void test_multiple_scope_in_one_tick_accumulates() {
     PASS();
 }
 
+static void test_aggregator_all_sorted_and_reset() {
+    TEST("test_aggregator_all_sorted_and_reset");
+    EntityTypeLoadAggregator agg;
+    EntityLoadSnapshot a;
+    a.entityId = 1;
+    a.entityType = "NPC";
+    a.rawLoad = 1.0F;
+    a.adjustedLoad = 1.0F;
+    EntityLoadSnapshot b;
+    b.entityId = 2;
+    b.entityType = "Avatar";
+    b.rawLoad = 2.0F;
+    b.adjustedLoad = 2.0F;
+    agg.record(a);
+    agg.record(b);
+
+    auto all = agg.all();
+    if (all.size() != 2) { FAIL("all should hold two types"); return; }
+    // all() 按 entityTypeId 字母序：Avatar < NPC
+    if (all[0].entityTypeId != "Avatar" || all[1].entityTypeId != "NPC") {
+        FAIL("all not sorted by type id"); return;
+    }
+
+    agg.reset();
+    if (!agg.all().empty()) { FAIL("reset should clear per-type state"); return; }
+    PASS();
+}
+
+static void test_ema_alpha_accessor() {
+    TEST("test_ema_alpha_accessor");
+    EntityLoadProfiler::Config cfg;
+    cfg.emaAlpha = 0.25F;
+    EntityLoadProfiler p(cfg);
+    if (std::abs(p.emaAlpha() - 0.25F) > 1e-6F) { FAIL("emaAlpha mismatch"); return; }
+    PASS();
+}
+
 int main() {
     test_scope_records_raw_load();
     test_smoothed_load_ema();
@@ -241,6 +285,8 @@ int main() {
     test_aggregator_groups_by_type();
     test_aggregator_ignores_empty_type();
     test_multiple_scope_in_one_tick_accumulates();
+    test_aggregator_all_sorted_and_reset();
+    test_ema_alpha_accessor();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

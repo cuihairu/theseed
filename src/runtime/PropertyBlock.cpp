@@ -1,7 +1,11 @@
 #include "theseed/runtime/PropertyBlock.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace theseed::runtime {
 

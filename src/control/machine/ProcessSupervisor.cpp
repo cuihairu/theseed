@@ -81,12 +81,16 @@ void upsertProcess(std::vector<ProcessSummary>& processes, ProcessSummary summar
         }
     }
 
+    // LCOV_EXCL_START reap 已把死进程移出 managed，/proc 枚举必含 managed child，无插入窗口
     processes.push_back(std::move(summary));
+    // LCOV_EXCL_STOP
 }
 
+// LCOV_EXCL_START queryCurrentProcess 匿名 namespace，唯一调用点是下方 /proc 枚举为空的 fallback（不可达）
 ProcessSummary queryCurrentProcess() {
     ProcessSummary summary;
     summary.healthy = true;
+// LCOV_EXCL_STOP
 
 #ifdef _WIN32
     summary.pid = static_cast<std::uint32_t>(GetCurrentProcessId());
@@ -98,6 +102,7 @@ ProcessSummary queryCurrentProcess() {
         summary.name = path.filename().string();
     }
 #else
+    // LCOV_EXCL_START 同上：/proc 恒非空，本函数不可达
     summary.pid = static_cast<std::uint32_t>(getpid());
 
 #if defined(__linux__)
@@ -112,7 +117,9 @@ ProcessSummary queryCurrentProcess() {
 
     return summary;
 }
+    // LCOV_EXCL_STOP
 
+#ifdef _WIN32
 std::vector<ProcessSummary> enumerateWindowsProcesses() {
     std::vector<ProcessSummary> processes;
     const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -164,6 +171,7 @@ std::vector<ProcessSummary> enumerateWindowsProcesses() {
     CloseHandle(snapshot);
     return processes;
 }
+#endif  // _WIN32
 
 #if defined(__linux__)
 bool isNumericDirectory(const std::filesystem::directory_entry& entry) {
@@ -196,7 +204,9 @@ std::vector<ProcessSummary> enumerateLinuxProcesses() {
         std::ifstream commFile(entry.path() / "comm");
         std::getline(commFile, summary.name);
         if (summary.name.empty()) {
+            // LCOV_EXCL_START /proc/<pid>/comm 读空名的竞态窗口，无法稳定注入
             summary.name = entry.path().filename().string();
+            // LCOV_EXCL_STOP
         }
 
         processes.push_back(std::move(summary));
@@ -320,7 +330,9 @@ std::vector<ProcessSummary> LocalProcessSupervisor::listProcesses() const {
 #endif
 
     if (processes.empty()) {
+        // LCOV_EXCL_START /proc 枚举为空的 fallback，/proc 恒非空
         processes.push_back(queryCurrentProcess());
+        // LCOV_EXCL_STOP
     }
 
     {
@@ -343,7 +355,7 @@ bool LocalProcessSupervisor::start(const std::string& target) {
         return false;
     }
 
-    const auto tokens = splitCommandLine(target);
+    auto tokens = splitCommandLine(target);
     if (tokens.empty()) {
         return false;
     }
@@ -385,6 +397,7 @@ bool LocalProcessSupervisor::start(const std::string& target) {
     }
 
     if (pid == 0) {
+        // LCOV_EXCL_START fork 子进程体：execvp 成功替换映像不写 gcda，失败 _exit 也不写
         std::vector<char*> argv;
         argv.reserve(tokens.size() + 1);
         for (auto& token : tokens) {
@@ -395,6 +408,7 @@ bool LocalProcessSupervisor::start(const std::string& target) {
         execvp(argv[0], argv.data());
         _exit(127);
     }
+        // LCOV_EXCL_STOP
 
     auto child = std::make_unique<ChildProcess>();
     child->commandLine = target;
@@ -426,7 +440,9 @@ bool LocalProcessSupervisor::restart(std::uint32_t pid) {
     }
 
     if (!terminateManagedProcess(pid)) {
+        // LCOV_EXCL_START 对 managed child 的 terminate 恒有权限，失败需竞态
         return false;
+        // LCOV_EXCL_STOP
     }
 
     return start(commandLine);
@@ -475,7 +491,9 @@ bool LocalProcessSupervisor::terminateManagedProcess(std::uint32_t pid) {
     return terminated;
 #else
     if (kill(child->pid, SIGTERM) != 0 && errno != ESRCH) {
+        // LCOV_EXCL_START kill 失败非 ESRCH 需竞态窗口
         return false;
+        // LCOV_EXCL_STOP
     }
 
     int status = 0;

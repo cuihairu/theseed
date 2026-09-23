@@ -2,7 +2,11 @@
 
 #include "theseed/foundation/Metrics.h"
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace theseed::ops {

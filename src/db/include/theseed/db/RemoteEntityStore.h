@@ -3,9 +3,12 @@
 #include "theseed/core/IEntityStore.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -15,9 +18,12 @@ class RemoteEntityStore final : public core::IEntityStore {
 public:
     using PumpFn = std::function<void()>;
 
+    // requestTimeout：等待 DBApp 应答的上限，超时/发送失败返回 method 为空的
+    // RuntimeInvocation（各调用方的 method 校验自然判 false），避免 DBApp 失联时忙等挂死。
     RemoteEntityStore(std::shared_ptr<runtime::IRuntimeTransport> transport,
                       runtime::ComponentId dbComponentId,
-                      runtime::ComponentId localComponentId);
+                      runtime::ComponentId localComponentId,
+                      std::chrono::milliseconds requestTimeout = std::chrono::milliseconds{5000});
 
     void setPumpFunction(PumpFn pumpFn);
 
@@ -36,6 +42,7 @@ private:
     std::shared_ptr<runtime::IRuntimeTransport> transport_;
     runtime::ComponentId dbComponentId_;
     runtime::ComponentId localComponentId_;
+    std::chrono::milliseconds requestTimeout_;
     PumpFn pumpFn_;
 };
 

@@ -8,10 +8,13 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::core::BaseRuntime;
@@ -202,7 +205,7 @@ static void testSaveAndLoad() {
     entity->setProperty<float>(1, 99.5f);
     entity->setProperty<bool>(2, true);
 
-    bool saved = rt->saveEntity(id);
+    if (!rt->saveEntity(id)) FAIL("save failed");
     rt->destroyEntity(id);
 
     auto* loaded = rt->loadEntity(id, "Avatar");
@@ -598,6 +601,394 @@ static void testSchedulerPhasesSyncBeforeFlush() {
                               + " flush=" + std::to_string(transport->flushCount));
 }
 
+// 只拒绝 save 的 store：验证 saveEntity 失败分支
+class SaveFailingStore final : public theseed::core::IEntityStore {
+public:
+    explicit SaveFailingStore(std::shared_ptr<InMemoryEntityStore> backing)
+        : backing_(std::move(backing)) {}
+
+    bool load(EntityId id, const std::string& entityType, theseed::core::EntityData& out) override {
+        return backing_->load(id, entityType, out);
+    }
+    bool save(EntityId, const theseed::core::EntityData&) override { return false; }
+    bool remove(EntityId id) override { return backing_->remove(id); }
+    EntityId allocId() override { return backing_->allocId(); }
+    std::vector<EntityId> listIdsByType(const std::string& entityType) override {
+        return backing_->listIdsByType(entityType);
+    }
+    std::vector<std::string> listEntityTypes() override { return backing_->listEntityTypes(); }
+
+private:
+    std::shared_ptr<InMemoryEntityStore> backing_;
+};
+
+static void testConstructorValidation() {
+    TEST("constructor rejects invalid arguments");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    bool threwTransport = false;
+    bool threwStore = false;
+    bool threwComponent = false;
+    try { BaseRuntime(nullptr, store, 1); } catch (const std::invalid_argument&) { threwTransport = true; }
+    try { BaseRuntime(transport, nullptr, 1); } catch (const std::invalid_argument&) { threwStore = true; }
+    try { BaseRuntime(transport, store, 0); } catch (const std::invalid_argument&) { threwComponent = true; }
+
+    bool ok = threwTransport && threwStore && threwComponent;
+    if (ok) PASS(); else FAIL("constructor validation");
+}
+
+static void testRegisterFactoryValidation() {
+    TEST("register factory rejects empty type / null factory");
+
+    auto rt = makeRuntime();
+    bool ok = !rt->registerEntityFactory("", makeFactory(makeAvatarDef()));
+    ok = ok && !rt->registerEntityFactory("Avatar", nullptr);
+
+    if (ok) PASS(); else FAIL("register factory validation");
+}
+
+// allocId 恒返回 0 的 store：模拟 DBApp 失联时 RemoteEntityStore 的超时语义，
+// 验证 createEntity 拒绝注册 id=0 实体。
+class AllocZeroStore final : public theseed::core::IEntityStore {
+public:
+    explicit AllocZeroStore(std::shared_ptr<InMemoryEntityStore> backing)
+        : backing_(std::move(backing)) {}
+
+    bool load(EntityId id, const std::string& entityType, theseed::core::EntityData& out) override {
+        return backing_->load(id, entityType, out);
+    }
+    bool save(EntityId id, const theseed::core::EntityData& data) override {
+        return backing_->save(id, data);
+    }
+    bool remove(EntityId id) override { return backing_->remove(id); }
+    EntityId allocId() override { return 0; }
+    std::vector<EntityId> listIdsByType(const std::string& entityType) override {
+        return backing_->listIdsByType(entityType);
+    }
+    std::vector<std::string> listEntityTypes() override { return backing_->listEntityTypes(); }
+
+private:
+    std::shared_ptr<InMemoryEntityStore> backing_;
+};
+
+static void testCreateEntityFactoryReturnsNull() {
+    TEST("create entity with null-returning factory");
+
+    auto rt = makeRuntime();
+    rt->registerEntityFactory("Broken", [](EntityId, EntitySide) -> std::unique_ptr<Entity> {
+        return nullptr;
+    });
+
+    bool ok = rt->createEntity("Broken") == nullptr;
+    ok = ok && rt->createEntity("NeverRegistered") == nullptr;
+
+    if (ok) PASS(); else FAIL("null factory not handled");
+}
+
+static void testCreateEntityAllocZero() {
+    TEST("create entity rejects zero id from store");
+
+    auto backing = std::make_shared<InMemoryEntityStore>();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto rt = std::make_unique<BaseRuntime>(
+        transport, std::make_shared<AllocZeroStore>(backing), 1);
+    rt->registerEntityFactory("Avatar", makeFactory(makeAvatarDef()));
+
+    bool ok = rt->createEntity("Avatar") == nullptr;
+    ok = ok && rt->entityCount() == 0;
+    ok = ok && rt->findEntity(0) == nullptr;
+    ok = ok && backing->listIdsByType("Avatar").empty();
+
+    if (ok) PASS(); else FAIL("zero allocId not rejected");
+}
+
+static void testLoadEntityBranches() {
+    TEST("load entity branches and restored timers");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+    auto rt = std::make_unique<BaseRuntime>(transport, store, 1);
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+    rt->registerEntityFactory("Broken", [](EntityId, EntitySide) -> std::unique_ptr<Entity> {
+        return nullptr;
+    });
+
+    // factory 未注册的类型
+    bool ok = rt->loadEntity(1, "NeverRegistered") == nullptr;
+
+    // factory 存在但返回 null（store 里需有存档才走到 factory）
+    theseed::core::EntityData brokenData;
+    brokenData.id = 501;
+    brokenData.entityType = "Broken";
+    store->save(501, brokenData);
+    ok = ok && rt->loadEntity(501, "Broken") == nullptr;
+
+    // 正常恢复：实体定时器经注入的 schedule fn 注册，tick 触发
+    auto created = rt->createEntity("Avatar");
+    const auto id = created->id();
+    ok = ok && rt->saveEntity(id);
+    ok = ok && rt->destroyEntity(id);
+    auto* restored = rt->loadEntity(id, "Avatar");
+    ok = ok && restored != nullptr;
+
+    int fired = 0;
+    int periodicFired = 0;
+    restored->addTimer(std::chrono::milliseconds{0}, [&](Entity&) { fired += 1; });
+    restored->addPeriodicTimer(std::chrono::milliseconds{0}, [&](Entity&) { periodicFired += 1; });
+    theseed::runtime::TickContext ctx;
+    ctx.deltaTime = std::chrono::milliseconds{50};
+    rt->tick(ctx);
+    ok = ok && fired == 1 && periodicFired >= 1;
+
+    if (ok) PASS(); else FAIL("load entity branches");
+}
+
+static void testSaveEntityBranches() {
+    TEST("save entity failure branches");
+
+    auto rt = makeRuntime();
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    bool ok = !rt->clearCellEntityCall(999);
+    ok = ok && !rt->saveEntity(999);
+
+    auto failing = std::make_shared<InMemoryEntityStore>();
+    auto rtFail = std::make_unique<BaseRuntime>(
+        std::make_shared<InMemoryRuntimeTransport>(),
+        std::make_shared<SaveFailingStore>(failing), 1);
+    rtFail->registerEntityFactory("Avatar", makeFactory(def));
+    auto* entity = rtFail->createEntity("Avatar");
+    ok = ok && !rtFail->saveEntity(entity->id());
+
+    if (ok) PASS(); else FAIL("save entity branches");
+}
+
+static void testDispatchBranches() {
+    TEST("dispatch invocation target/entity guards");
+
+    auto rt = makeRuntime();
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    RuntimeInvocation wrongTarget;
+    wrongTarget.targetComponent = 999;
+    wrongTarget.method = "entity.cellReady";
+
+    RuntimeInvocation unknownEntity;
+    unknownEntity.targetComponent = 1;
+    unknownEntity.entityId = 12345;
+    unknownEntity.method = "onDamage";
+
+    bool ok = !rt->dispatchInvocation(wrongTarget);
+    ok = ok && !rt->dispatchInvocation(unknownEntity);
+
+    if (ok) PASS(); else FAIL("dispatch guards");
+}
+
+static void testPropertySyncFromCellMalformed() {
+    TEST("property sync from cell rejects malformed payload");
+
+    auto rt = makeRuntime();
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+    auto* entity = rt->createEntity("Avatar");
+
+    RuntimeInvocation inv;
+    inv.targetComponent = 1;
+    inv.entityId = entity->id();
+    inv.method = "property.syncToBase";
+    inv.payload = {std::byte{0x01}, std::byte{0x00}, std::byte{0x00}};  // 截断的 count
+
+    RuntimeInvocation empty;
+    empty.targetComponent = 1;
+    empty.method = "property.syncToBase";
+
+    bool ok = !rt->dispatchInvocation(inv);
+    ok = ok && !rt->dispatchInvocation(empty);
+
+    if (ok) PASS(); else FAIL("malformed property sync");
+}
+
+static void testHandleSpaceChanged() {
+    TEST("space changed dispatch");
+
+    auto rt = makeRuntime();
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    theseed::runtime::EntityId seenEntity = 0;
+    theseed::runtime::SpaceId seenSpace = 0;
+    rt->setOnSpaceChange([&](theseed::runtime::EntityId id, theseed::runtime::SpaceId space,
+                             const theseed::runtime::Vector3&) {
+        seenEntity = id;
+        seenSpace = space;
+    });
+
+    const std::uint64_t entityId = 77;
+    const std::uint64_t spaceId = 300;
+    const float x = 1.5F;
+    std::vector<std::byte> payload;
+    payload.resize(sizeof(entityId) + sizeof(spaceId) + sizeof(float) * 3);
+    auto* p = payload.data();
+    std::memcpy(p, &entityId, sizeof(entityId)); p += sizeof(entityId);
+    std::memcpy(p, &spaceId, sizeof(spaceId)); p += sizeof(spaceId);
+    std::memcpy(p, &x, sizeof(float));
+
+    RuntimeInvocation inv;
+    inv.targetComponent = 1;
+    inv.entityId = entityId;
+    inv.method = "entity.spaceChanged";
+    inv.payload = payload;
+
+    RuntimeInvocation shortInv;
+    shortInv.targetComponent = 1;
+    shortInv.method = "entity.spaceChanged";
+
+    bool ok = rt->dispatchInvocation(inv);
+    ok = ok && seenEntity == entityId && seenSpace == spaceId;
+    ok = ok && !rt->dispatchInvocation(shortInv);
+
+    if (ok) PASS(); else FAIL("space changed");
+}
+
+static void testGroupManagerAccess() {
+    TEST("group manager accessors");
+
+    auto rt = makeRuntime();
+    bool ok = &rt->groupManager() == &static_cast<const BaseRuntime&>(*rt).groupManager();
+
+    if (ok) PASS(); else FAIL("group manager");
+}
+
+static void testHandleSpawnRequestBranches() {
+    TEST("spawn request branches");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto rt = std::make_unique<BaseRuntime>(transport, std::make_shared<InMemoryEntityStore>(), 1);
+    auto def = makeAvatarDef();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    auto spawnWire = [&](const std::string& type) {
+        std::vector<std::byte> out;
+        const std::uint32_t typeLen = static_cast<std::uint32_t>(type.size());
+        out.resize(4 + typeLen + sizeof(float) * 3);
+        auto* p = out.data();
+        std::memcpy(p, &typeLen, 4); p += 4;
+        std::memcpy(p, type.data(), typeLen); p += typeLen;
+        const float x = 3.0F;
+        std::memcpy(p, &x, sizeof(float));
+        return out;
+    };
+
+    auto dispatchSpawn = [&](EntityId requesterId, const std::string& type) {
+        RuntimeInvocation inv;
+        inv.targetComponent = 1;
+        inv.entityId = requesterId;
+        inv.method = "entity.spawnRequest";
+        inv.payload = spawnWire(type);
+        return rt->dispatchInvocation(inv);
+    };
+
+    // 未知类型 → createEntity 失败
+    bool ok = !dispatchSpawn(1, "NeverRegistered");
+
+    // 请求者不存在 → 新实体被回滚销毁
+    ok = ok && !dispatchSpawn(999, "Avatar");
+    ok = ok && rt->findEntitiesByType("Avatar").empty();
+
+    // 请求者无 cell call → 同样回滚
+    auto* requester = rt->createEntity("Avatar");
+    ok = ok && !dispatchSpawn(requester->id(), "Avatar");
+    ok = ok && rt->findEntitiesByType("Avatar").size() == 1;
+
+    // 有 cell call → 向 CellApp 发 createCell
+    requester->bindCellEntityCall(42);
+    ok = ok && dispatchSpawn(requester->id(), "Avatar");
+    ok = ok && rt->findEntitiesByType("Avatar").size() == 2;
+
+    std::array<RuntimeInvocation, 8> drained{};
+    const auto count = transport->drain(drained.data(), drained.size());
+    bool sentCreateCell = false;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (drained[i].method == "entity.createCell" && drained[i].targetComponent == 42) {
+            sentCreateCell = true;
+        }
+    }
+    ok = ok && sentCreateCell;
+
+    if (ok) PASS(); else FAIL("spawn request branches");
+}
+
+static void testVariablePropertyPersistence() {
+    TEST("variable property persistence round trip");
+
+    auto def = std::make_shared<EntityDef>("Avatar");
+    def->addProperty("name", PropertyType::String);
+    def->addProperty("level", PropertyType::Int32);
+
+    auto rt = makeRuntime();
+    rt->registerEntityFactory("Avatar", makeFactory(def));
+
+    auto* entity = rt->createEntity("Avatar");
+    const auto nameId = def->findProperty("name")->id;
+    const auto levelId = def->findProperty("level")->id;
+    entity->setString(nameId, "gamma");
+    entity->setProperty<std::int32_t>(levelId, 9);
+    bool ok = rt->saveEntity(entity->id());
+    const auto id = entity->id();
+    ok = ok && rt->destroyEntity(id);
+
+    // 干净 round trip：blob 属性经 getBlob/setBlob 落盘再恢复
+    auto* roundTripped = rt->loadEntity(id, "Avatar");
+    ok = ok && roundTripped != nullptr;
+    ok = ok && roundTripped->getString(nameId) == "gamma";
+    ok = ok && roundTripped->getProperty<std::int32_t>(levelId) == 9;
+
+    // 篡改存档：未知属性名 + 类型标签与 def 不符（宽度 2≠4，dataToEntity 跳过）
+    // + 正常 blob，第二个 runtime 加载。注意 store 会对数据做 encode/decode
+    // round trip，所以篡改必须保持自洽：rawValue 尺寸跟随声明的 DataType。
+    {
+        const std::string nameValue = "restored";
+        theseed::core::PropertyData unknown;
+        unknown.id = 99;
+        unknown.name = "not_in_def";
+        unknown.type = theseed::core::DataType::Int32;
+        unknown.rawValue = {std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+        theseed::core::PropertyData badLevel;
+        badLevel.id = levelId;
+        badLevel.name = "level";
+        badLevel.type = theseed::core::DataType::Int16;  // def 里是 Int32
+        badLevel.rawValue = {std::byte{0x00}, std::byte{0x00}};
+        theseed::core::PropertyData goodName;
+        goodName.id = nameId;
+        goodName.name = "name";
+        goodName.type = theseed::core::DataType::String;
+        goodName.rawValue.reserve(nameValue.size());
+        for (char c : nameValue)
+            goodName.rawValue.push_back(static_cast<std::byte>(c));
+
+        theseed::core::EntityData tampered;
+        tampered.id = id;
+        tampered.entityType = "Avatar";
+        tampered.properties = {unknown, badLevel, goodName};
+
+        auto backing = std::make_shared<InMemoryEntityStore>();
+        backing->save(id, tampered);
+        auto rt2 = std::make_unique<BaseRuntime>(
+            std::make_shared<InMemoryRuntimeTransport>(), backing, 1);
+        rt2->registerEntityFactory("Avatar", makeFactory(def));
+        auto* restored = rt2->loadEntity(id, "Avatar");
+        ok = ok && restored != nullptr;
+        ok = ok && restored->getString(nameId) == nameValue;           // blob 路径恢复
+        ok = ok && restored->getProperty<std::int32_t>(levelId) == 0;  // 尺寸不符被跳过
+    }
+
+    if (ok) PASS(); else FAIL("variable property persistence");
+}
+
 int main() {
     std::cout << "BaseRuntime tests:\n";
 
@@ -618,6 +1009,18 @@ int main() {
     testNameBasedPropertyAccess();
     testForEachEntity();
     testSchedulerPhasesSyncBeforeFlush();
+    testConstructorValidation();
+    testRegisterFactoryValidation();
+    testCreateEntityFactoryReturnsNull();
+    testCreateEntityAllocZero();
+    testLoadEntityBranches();
+    testSaveEntityBranches();
+    testDispatchBranches();
+    testPropertySyncFromCellMalformed();
+    testHandleSpaceChanged();
+    testGroupManagerAccess();
+    testHandleSpawnRequestBranches();
+    testVariablePropertyPersistence();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

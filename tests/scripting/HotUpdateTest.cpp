@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <utility>
 
 using theseed::scripting::ChangeType;
 using theseed::scripting::DiffChange;
@@ -173,6 +174,21 @@ static void test_apply_l2_script() {
     PASS();
 }
 
+// 10b. apply with warning carries warning count in message
+static void test_apply_with_warnings() {
+    TEST("test_apply_with_warnings");
+    DiffResult diff;
+    diff.changes.push_back(makeChange(ChangeType::ModifyTimerLogic, "Avatar", "respawnTimer", ""));
+    HotUpdateManager mgr;
+    auto r = mgr.apply(diff);
+    if (!r.success) { FAIL(r.message); return; }
+    if (r.message.find("1 warning(s)") == std::string::npos) {
+        FAIL("warning count missing from message: " + r.message);
+        return;
+    }
+    PASS();
+}
+
 // 11. apply forbidden diff fails without modifying state
 static void test_apply_forbidden_does_not_modify() {
     TEST("test_apply_forbidden_does_not_modify");
@@ -271,6 +287,21 @@ static void test_applied_versions_history() {
     PASS();
 }
 
+// 18. apply with timer-logic change reports warning count in message
+static void test_apply_reports_warning_count() {
+    TEST("test_apply_reports_warning_count");
+    DiffResult diff;
+    diff.changes.push_back(makeChange(ChangeType::ModifyTimerLogic, "Avatar", "respawnTimer", ""));
+    HotUpdateManager mgr;
+    auto r = mgr.apply(diff);
+    if (!r.success) { FAIL(r.message); return; }
+    if (r.message.find("1 warning") == std::string::npos) {
+        FAIL("expected warning count in message: " + r.message);
+        return;
+    }
+    PASS();
+}
+
 int main() {
     test_change_type_classification();
     test_helper_predicates();
@@ -282,6 +313,7 @@ int main() {
     test_validate_l3_rejected();
     test_apply_l1_config();
     test_apply_l2_script();
+    test_apply_with_warnings();
     test_apply_forbidden_does_not_modify();
     test_rollback_restores_previous();
     test_rollback_to_specific_version();

@@ -4,11 +4,15 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/SpaceRuntime.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
 using theseed::runtime::CellRuntime;
 using theseed::runtime::Entity;

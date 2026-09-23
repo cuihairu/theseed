@@ -1,6 +1,7 @@
 #include "theseed/runtime/NetworkNode.h"
 #include "theseed/runtime/TcpConnection.h"
 #include "theseed/runtime/TcpListener.h"
+#include "theseed/runtime/TickScheduler.h"
 
 #include <chrono>
 #include <cstdint>
@@ -17,6 +18,7 @@ using theseed::runtime::SendResult;
 using theseed::runtime::TcpConnection;
 using theseed::runtime::TcpListener;
 using theseed::runtime::TickContext;
+using theseed::runtime::TickScheduler;
 using theseed::runtime::TransportHub;
 
 static int testsPassed = 0;
@@ -180,6 +182,56 @@ static void testPeerCount() {
     TcpConnection::globalShutdown();
 }
 
+static void testSchedulerLifecycleAndFailedConnect() {
+    TEST("scheduler attach/detach and destructor paths");
+
+    TcpConnection::globalInit();
+
+    // 析构时 scheduler_ 为空：不触发析构内 detach
+    {
+        NetworkNode node({.localComponent = 5, .listenPort = 0});
+        if (node.peerCount() != 0) { FAIL("fresh node should have no peers"); return; }
+    }
+
+    // 析构时仍 attach：析构函数负责 unregister
+    {
+        TickScheduler scheduler(std::chrono::milliseconds{0});
+        NetworkNode node({.localComponent = 6, .listenPort = 0});
+        node.attach(scheduler);
+    }
+
+    // 手动 detach 后析构
+    {
+        TickScheduler scheduler(std::chrono::milliseconds{0});
+        NetworkNode node({.localComponent = 7, .listenPort = 0});
+        node.attach(scheduler);
+        node.detach(scheduler);
+    }
+
+    PASS();
+    TcpConnection::globalShutdown();
+}
+
+static void testSchedulerRunLoopStops() {
+    TEST("scheduler run loop: sleep-paced and busy-paced variants stop cleanly");
+
+    // tickInterval > 0：sleep_until 节拍分支
+    TickScheduler paced(std::chrono::milliseconds{2});
+    std::thread pacedLoop([&] { paced.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds{12});
+    paced.requestStop();
+    pacedLoop.join();
+
+    // tickInterval == 0：yield 忙等分支
+    TickScheduler busy(std::chrono::milliseconds{0});
+    std::thread busyLoop([&] { busy.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    busy.requestStop();
+    busyLoop.join();
+
+    PASS();
+}
+
 int main() {
     std::cout << "NetworkNode tests:\n";
 
@@ -187,6 +239,8 @@ int main() {
     testFullStackRoundTrip();
     testDisconnectPeer();
     testPeerCount();
+    testSchedulerLifecycleAndFailedConnect();
+    testSchedulerRunLoopStops();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

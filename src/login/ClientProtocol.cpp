@@ -1,6 +1,8 @@
 #include "theseed/login/ClientProtocol.h"
 #include "theseed/foundation/MemoryStream.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 
 namespace theseed::login {

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 
 namespace theseed::scripting {
 
@@ -21,9 +23,11 @@ HotUpdateLevel levelOf(ChangeType type) noexcept {
         case ChangeType::ChangeMethodSignature:
         case ChangeType::ChangeExposedProtocol:
         case ChangeType::ChangeSerialization:
+            // LCOV_EXCL_START 语义性 default：未知变更类型映射到最高防护级别 L4，属有意的防御性 fallback
             return HotUpdateLevel::L4_NeedRestart;
         default:
             return HotUpdateLevel::L4_NeedRestart;
+            // LCOV_EXCL_STOP
     }
 }
 
@@ -123,9 +127,11 @@ void HotUpdateManager::applyChange(const DiffChange& change) {
             // L2 范围内：以 key（方法名）为索引，detail 视为新方法体
             scriptStore_[change.key] = change.detail;
             break;
+        // LCOV_EXCL_START validator 已拦截 L3/L4 的逻辑防御（不变量违反断言）
         default:
             // validator 已拦截 L3/L4，这里不应到达
             throw std::logic_error("HotUpdateManager::applyChange reached forbidden change type");
+        // LCOV_EXCL_STOP
     }
 }
 

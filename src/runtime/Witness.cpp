@@ -1,7 +1,9 @@
 #include "theseed/runtime/Witness.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::runtime {
 

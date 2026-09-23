@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::core {
 
@@ -160,6 +163,14 @@ const BaseRuntime& BaseApp::runtime() const {
 
 EntityDefRegistry& BaseApp::registry() {
     return registry_;
+}
+
+std::uint16_t BaseApp::clientListenPort() const {
+    return clientListener_.localPort();
+}
+
+std::uint16_t BaseApp::opsListenPort() const {
+    return opsServer_ ? opsServer_->localPort() : 0;
 }
 
 const EntityDefRegistry& BaseApp::registry() const {

@@ -1,7 +1,9 @@
 #include "theseed/runtime/EntityCall.h"
+#include "theseed/runtime/PipedTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <span>
@@ -10,6 +12,7 @@
 using theseed::runtime::DeliveryClass;
 using theseed::runtime::EntityCall;
 using theseed::runtime::InMemoryRuntimeTransport;
+using theseed::runtime::PipedTransport;
 using theseed::runtime::RuntimeInvocation;
 using theseed::runtime::SendResult;
 
@@ -55,6 +58,27 @@ int main() {
     }
 
     std::array<RuntimeInvocation, 4> drained{};
+
+    // receive/drain 的非法参数直接返回 0，且不得扰动队列
+    if (transport.receive(0, drained.data(), drained.size()) != 0) {
+        return fail("receive_zero_component");
+    }
+    if (transport.receive(7, nullptr, drained.size()) != 0) {
+        return fail("receive_null_out");
+    }
+    if (transport.receive(7, drained.data(), 0) != 0) {
+        return fail("receive_zero_capacity");
+    }
+    if (transport.drain(nullptr, drained.size()) != 0) {
+        return fail("drain_null_out");
+    }
+    if (transport.drain(drained.data(), 0) != 0) {
+        return fail("drain_zero_capacity");
+    }
+    if (transport.pendingCount() != 1) {
+        return fail("param_checks_disturbed_queue");
+    }
+
     const auto drainedCount = transport.drain(drained.data(), drained.size());
     if (drainedCount != 1) {
         return fail("drain_count");
@@ -93,6 +117,16 @@ int main() {
     if (call.call(transport, "fail", {}) == SendResult::Accepted) {
         return fail("invalid_call");
     }
+
+    // tick 契约：内存实现的 tick 是空操作——不投递、不扰动队列。
+    transport.tick();
+    if (transport.pendingCount() != 0) {
+        return fail("tick_noop_pending");
+    }
+
+    // PipedTransport 不覆盖 tick，走基类默认空实现（同样不得抛出或出错）。
+    PipedTransport piped(1);
+    piped.tick();
 
     return EXIT_SUCCESS;
 }

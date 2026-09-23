@@ -2,7 +2,9 @@
 
 #include "theseed/runtime/Entity.h"
 
+#include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace theseed::runtime {

@@ -1,6 +1,8 @@
 #include "theseed/runtime/GroupManager.h"
 #include "theseed/runtime/Entity.h"
 
+#include <cstddef>
+#include <functional>
 #include <utility>
 
 namespace theseed::runtime {

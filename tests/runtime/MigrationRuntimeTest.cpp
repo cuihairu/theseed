@@ -2,8 +2,12 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <span>
+#include <utility>
 #include <vector>
 
 using theseed::runtime::CellRuntime;

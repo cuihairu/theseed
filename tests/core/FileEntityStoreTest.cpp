@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -319,6 +320,121 @@ static void testBaseRuntimeIntegration() {
     else FAIL("integration simulation failed");
 }
 
+// Test: error paths — 空文件、目录冒充数据文件、权限拒绝、脏文件名、损坏的 id 计数器
+static void testErrorPaths() {
+    TEST("error paths: empty/corrupt/dir-as-file/permission/dirty names");
+
+    auto dir = std::filesystem::temp_directory_path() / "theseed_file_store_test_10";
+    std::filesystem::remove_all(dir);
+    FileEntityStore store(dir);
+    bool ok = true;
+
+    // 空数据文件：tellg=0 → load false
+    {
+        std::filesystem::create_directories(dir / "Avatar");
+        { std::ofstream f(dir / "Avatar" / "1.dat", std::ios::binary); }
+        EntityData out;
+        ok = ok && !store.load(1, "Avatar", out);
+    }
+
+    // 目录冒充数据文件：读取流失败 → load false
+    // （POSIX 打开目录成功但 read 报错；Windows 直接 is_open 失败）
+    {
+        std::filesystem::create_directories(dir / "Avatar" / "3.dat");
+        EntityData out;
+        ok = ok && !store.load(3, "Avatar", out);
+    }
+
+    // 超过 64MiB 上限的伪尺寸文件：resize 出 65MiB 稀疏文件（不占真实磁盘）
+    // → 防御性 size 检查拒绝 load
+    {
+        std::filesystem::create_directories(dir / "Avatar");
+        { std::ofstream f(dir / "Avatar" / "21.dat", std::ios::binary); f << 'x'; }
+        std::filesystem::resize_file(dir / "Avatar" / "21.dat",
+                                     64 * 1024 * 1024 + 1);
+        EntityData out;
+        ok = ok && !store.load(21, "Avatar", out);
+        std::filesystem::remove(dir / "Avatar" / "21.dat");
+    }
+
+#ifndef _WIN32
+    // 文件存在但不可读：exists 通过、open 失败 → load false
+    {
+        EntityData data;
+        data.id = 4;
+        data.entityType = "Avatar";
+        ok = ok && store.save(4, data);
+        std::filesystem::permissions(dir / "Avatar" / "4.dat",
+                                     std::filesystem::perms::none);
+        EntityData out;
+        ok = ok && !store.load(4, "Avatar", out);
+        std::filesystem::permissions(dir / "Avatar" / "4.dat",
+                                     std::filesystem::perms::owner_all);
+    }
+#else
+    // Windows 下同样要有 4.dat，保持 listIdsByType 断言各平台一致
+    {
+        EntityData data;
+        data.id = 4;
+        data.entityType = "Avatar";
+        ok = ok && store.save(4, data);
+    }
+#endif
+
+    // 目标位置被普通文件占用：ensureDir 失败 → save false
+    {
+        { std::ofstream f(dir / "Blocked"); f << 'x'; }
+        EntityData blk;
+        blk.id = 1;
+        blk.entityType = "Blocked";
+        ok = ok && !store.save(1, blk);
+    }
+
+    // 数据文件路径是目录：ofstream 打不开 → save false
+    {
+        std::filesystem::create_directories(dir / "Avatar" / "9.dat");
+        EntityData d9;
+        d9.id = 9;
+        d9.entityType = "Avatar";
+        ok = ok && !store.save(9, d9);
+    }
+
+    // id 计数器文件被截短：读取不足 sizeof(EntityId) → 回退从 1 分配
+    {
+        static_cast<void>(store.allocId());  // 写出正常的计数器
+        { std::ofstream f(dir / "_next_id.dat", std::ios::binary | std::ios::trunc); }
+        ok = ok && store.allocId() == 1;
+    }
+
+    // 非数字文件名：listIdsByType 跳过而不是崩溃
+    // （此时 Avatar 下有效数字名：1.dat 空文件与 4.dat；abc.dat 与目录 9.dat 被跳过）
+    {
+        { std::ofstream f(dir / "Avatar" / "abc.dat"); }
+        auto ids = store.listIdsByType("Avatar");
+        ok = ok && ids.size() == 2 && ids[0] == 1 && ids[1] == 4;
+    }
+
+#ifndef _WIN32
+    // 伪文件系统目标：seq_file seek 到尾给出假尺寸（或目标缺失 open 失败）
+    // → 两条路径都必须 load false；产品侧对超大假尺寸有上限防御
+    {
+        std::error_code ec;
+        std::filesystem::create_symlink(
+            "/sys/kernel/mm/transparent_hugepage/enabled",
+            dir / "Avatar" / "6.dat", ec);
+        if (!ec) {
+            EntityData out;
+            ok = ok && !store.load(6, "Avatar", out);
+            std::filesystem::remove(dir / "Avatar" / "6.dat", ec);
+        }
+    }
+#endif
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS();
+    else FAIL("error path behavior wrong");
+}
+
 int main() {
     std::cout << "File entity store tests:\n";
 
@@ -331,6 +447,7 @@ int main() {
     testOverwriteEntity();
     testSaveEmptyProperties();
     testBaseRuntimeIntegration();
+    testErrorPaths();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

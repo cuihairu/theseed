@@ -1,7 +1,9 @@
 #include "theseed/foundation/ChannelRouter.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 
 using theseed::foundation::Channel;
 using theseed::foundation::ChannelRouter;
@@ -202,6 +204,39 @@ static void testDefaultWatermark() {
     else FAIL("low=" + std::to_string(ch.watermark().low) + " high=" + std::to_string(ch.watermark().high));
 }
 
+static void testPerKeySettings() {
+    TEST("setWatermark / setOverflowPolicy apply to routed channel");
+
+    ChannelRouter router;
+    ChannelRouter::RoutingKey key{7, 1};
+    auto& ch = router.getOrCreate(key);
+
+    // 命中已有 channel 的设置分支：high=0 时 0 条 pending 即达背压阈值
+    Channel::Watermark wm{0, 0};
+    router.setWatermark(key, wm);
+    if (!ch.isBackPressured()) { FAIL("watermark not applied"); return; }
+
+    // 触发后按 DiscardOldest 策略走
+    Channel::Watermark wm2{0, 1};
+    router.setWatermark(key, wm2);
+    router.setOverflowPolicy(key, Channel::OverflowPolicy::DiscardOldest);
+
+    theseed::foundation::Bundle b;
+    b.beginMessage(1, 0);
+    b.endMessage();
+    ch.send(std::move(b));
+    ch.send(theseed::foundation::Bundle{});
+
+    if (!ch.isBackPressured()) { FAIL("should be pressured at high=1"); return; }
+
+    // 未命中（channel 不存在）时静默忽略
+    ChannelRouter::RoutingKey missing{99, 3};
+    router.setWatermark(missing, wm);
+    router.setOverflowPolicy(missing, Channel::OverflowPolicy::BackPressure);
+
+    PASS();
+}
+
 int main() {
     std::cout << "ChannelRouter tests:\n";
 
@@ -213,6 +248,7 @@ int main() {
     testTotalPendingCount();
     testBackPressure();
     testDefaultWatermark();
+    testPerKeySettings();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

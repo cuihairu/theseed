@@ -1,7 +1,10 @@
 #include "theseed/runtime/LoadProfiler.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <string_view>
 #include <utility>
 
 namespace theseed::runtime {

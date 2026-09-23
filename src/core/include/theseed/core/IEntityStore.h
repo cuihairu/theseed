@@ -2,17 +2,20 @@
 
 #include "theseed/core/EntityData.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace theseed::core {
 
 class IEntityStore {
 public:
-    virtual ~IEntityStore() = default;
+    virtual ~IEntityStore() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual bool load(EntityId id, const std::string& entityType, EntityData& out) = 0;
     virtual bool save(EntityId id, const EntityData& data) = 0;
@@ -80,12 +83,15 @@ inline bool InMemoryEntityStore::exists(EntityId id) const {
 }
 
 inline std::vector<EntityId> InMemoryEntityStore::listIdsByType(const std::string& entityType) {
+    // entries_ 是 unordered_map，遍历顺序不定；下游（DBApp 列表、ops 面板、
+    // 分页对账）依赖稳定输出，统一按 id 升序。
     std::vector<EntityId> ids;
     for (const auto& [id, entry] : entries_) {
         if (entry.entityType == entityType) {
             ids.push_back(id);
         }
     }
+    std::sort(ids.begin(), ids.end());
     return ids;
 }
 
@@ -94,7 +100,9 @@ inline std::vector<std::string> InMemoryEntityStore::listEntityTypes() {
     for (const auto& [id, entry] : entries_) {
         types.insert(entry.entityType);
     }
-    return std::vector<std::string>(types.begin(), types.end());
+    std::vector<std::string> result(types.begin(), types.end());
+    std::sort(result.begin(), result.end());
+    return result;
 }
 
 }  // namespace theseed::core

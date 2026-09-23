@@ -3,8 +3,10 @@
 #include "theseed/core/EntityData.h"
 #include "theseed/core/IEntityStore.h"
 
-#include <memory>
+#include <compare>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -59,7 +61,7 @@ struct StorageQuery {
 
 class IEntityQueryStore {
 public:
-    virtual ~IEntityQueryStore() = default;
+    virtual ~IEntityQueryStore() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
     virtual std::vector<EntityId> query(const StorageQuery& q) = 0;
 };
 

@@ -1,5 +1,7 @@
 #include "theseed/foundation/Bundle.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 
 namespace theseed::foundation {

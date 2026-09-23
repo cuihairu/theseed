@@ -1,8 +1,12 @@
 #include "theseed/core/FileEntityStore.h"
 #include "theseed/core/EntityData.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace theseed::core {
 
@@ -40,6 +44,13 @@ bool FileEntityStore::load(EntityId id, const std::string& entityType, EntityDat
 
     auto size = file.tellg();
     if (size <= 0) {
+        return false;
+    }
+
+    // 防御：伪文件系统（/proc、/sys 的 seq_file）seek 到尾会给出巨大假尺寸，
+    // 直接按它分配缓冲会 bad_alloc。实体数据文件有天然上限，超限即视为损坏。
+    constexpr std::streamoff kMaxEntityFileSize = 64 * 1024 * 1024;
+    if (size > kMaxEntityFileSize) {
         return false;
     }
     file.seekg(0);
@@ -135,6 +146,9 @@ std::vector<EntityId> FileEntityStore::listIdsByType(const std::string& entityTy
             continue;
         }
     }
+    // directory_iterator 的顺序由 OS 决定；与 SQL 后端的 ORDER BY 保持一致，
+    // 按 id 升序输出。
+    std::sort(ids.begin(), ids.end());
     return ids;
 }
 
@@ -147,6 +161,7 @@ std::vector<std::string> FileEntityStore::listEntityTypes() {
         if (name.starts_with('_')) continue;
         types.push_back(std::move(name));
     }
+    std::sort(types.begin(), types.end());
     return types;
 }
 

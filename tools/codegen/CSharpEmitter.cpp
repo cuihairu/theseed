@@ -85,32 +85,24 @@ std::string serializeCallForType(runtime::PropertyType type, const std::string& 
     }
 }
 
-std::string deserializeCallForType(runtime::PropertyType type, const std::string& target) {
+std::string deserializeReadExpr(runtime::PropertyType type) {
     switch (type) {
-        case runtime::PropertyType::Int8:    return target + " = reader.ReadSByte()";
-        case runtime::PropertyType::Int16:   return target + " = reader.ReadInt16()";
-        case runtime::PropertyType::Int32:   return target + " = reader.ReadInt32()";
-        case runtime::PropertyType::Int64:   return target + " = reader.ReadInt64()";
-        case runtime::PropertyType::UInt8:   return target + " = reader.ReadByte()";
-        case runtime::PropertyType::UInt16:  return target + " = reader.ReadUInt16()";
-        case runtime::PropertyType::UInt32:  return target + " = reader.ReadUInt32()";
-        case runtime::PropertyType::UInt64:  return target + " = reader.ReadUInt64()";
-        case runtime::PropertyType::Float32: return target + " = reader.ReadSingle()";
-        case runtime::PropertyType::Float64: return target + " = reader.ReadDouble()";
-        case runtime::PropertyType::Bool:    return target + " = reader.ReadBoolean()";
-        case runtime::PropertyType::String:  return target + " = reader.ReadString()";
-        case runtime::PropertyType::Vector3: {
-            std::ostringstream out;
-            out << "        {\n"
-                << "            float _x = reader.ReadSingle();\n"
-                << "            float _y = reader.ReadSingle();\n"
-                << "            float _z = reader.ReadSingle();\n"
-                << "            " << target << " = new UnityEngine.Vector3(_x, _y, _z);\n"
-                << "        }";
-            return out.str();
-        }
+        case runtime::PropertyType::Int8:    return "reader.ReadSByte()";
+        case runtime::PropertyType::Int16:   return "reader.ReadInt16()";
+        case runtime::PropertyType::Int32:   return "reader.ReadInt32()";
+        case runtime::PropertyType::Int64:   return "reader.ReadInt64()";
+        case runtime::PropertyType::UInt8:   return "reader.ReadByte()";
+        case runtime::PropertyType::UInt16:  return "reader.ReadUInt16()";
+        case runtime::PropertyType::UInt32:  return "reader.ReadUInt32()";
+        case runtime::PropertyType::UInt64:  return "reader.ReadUInt64()";
+        case runtime::PropertyType::Float32: return "reader.ReadSingle()";
+        case runtime::PropertyType::Float64: return "reader.ReadDouble()";
+        case runtime::PropertyType::Bool:    return "reader.ReadBoolean()";
+        case runtime::PropertyType::String:  return "reader.ReadString()";
+        // Vector3 / Blob 在 emitEntity 中单独处理（多语句 / 已知长度读取），
+        // 不走单值表达式路径。
+        case runtime::PropertyType::Vector3:
         case runtime::PropertyType::Blob:
-            return target + " = reader.ReadBytes(reader.ReadInt32())";
         default:
             throw std::invalid_argument("Unsupported property type in deserializer");
     }
@@ -217,27 +209,49 @@ std::pair<std::string, std::string> CSharpEmitter::emitEntity(const runtime::Ent
     }
     out << "        }\n\n";
 
-    // Deserializer
+    // Deserializer —— 解析服务端 keyed-delta 流。
+    // 服务端格式（PropertyReplication::encodeDelta）：
+    //   [u32 count][repeat: u32 propertyId, u32 valueSize, value bytes]
+    // 客户端按 propertyId 路由到对应字段，未知属性跳过（向前兼容）。
     out << "        public override void Deserialize(BinaryReader reader)\n";
     out << "        {\n";
     out << "            base.Deserialize(reader);\n";
+    out << "            int count = reader.ReadInt32();\n";
+    out << "            for (int i = 0; i < count; i++)\n";
+    out << "            {\n";
+    out << "                uint propId = reader.ReadUInt32();\n";
+    out << "                int len = reader.ReadInt32();\n";
+    out << "                switch (propId)\n";
+    out << "                {\n";
     for (const auto& prop : def.properties()) {
         std::string fieldName = pascalCase(prop.name);
         std::string target = isClientVisible(prop) ? (fieldName + ".current") : fieldName;
-        std::string stmt = deserializeCallForType(prop.type, target);
-        if (stmt.find('\n') != std::string::npos) {
-            // 多行语句（如 Vector3），返回值本身已带正确缩进
-            out << "            " << stmt << "\n";
-            if (isClientVisible(prop)) {
-                out << "            " << fieldName << ".NotifyChanged();\n";
-            }
+        out << "                    case " << prop.id << ": // " << prop.name << "\n";
+        // Blob 读取需要长度前缀，这里 len 已由 delta 头给出，直接 ReadBytes(len)。
+        if (prop.type == runtime::PropertyType::Blob) {
+            out << "                        " << fieldName << " = reader.ReadBytes(len);\n";
+        } else if (prop.type == runtime::PropertyType::Vector3) {
+            out << "                        {\n";
+            out << "                            float _x = reader.ReadSingle();\n";
+            out << "                            float _y = reader.ReadSingle();\n";
+            out << "                            float _z = reader.ReadSingle();\n";
+            out << "                            " << target << " = new UnityEngine.Vector3(_x, _y, _z);\n";
+            out << "                        }\n";
         } else {
-            out << "            " << stmt << ";\n";
-            if (isClientVisible(prop)) {
-                out << "            " << fieldName << ".NotifyChanged();\n";
-            }
+            // 单值读取：deserializeValueExpr(type) 返回 reader.ReadXxx()
+            out << "                        " << target << " = "
+                << deserializeReadExpr(prop.type) << ";\n";
         }
+        if (isClientVisible(prop)) {
+            out << "                        " << fieldName << ".NotifyChanged();\n";
+        }
+        out << "                        break;\n";
     }
+    out << "                    default:\n";
+    out << "                        reader.ReadBytes(len); // 跳过未知属性\n";
+    out << "                        break;\n";
+    out << "                }\n";
+    out << "            }\n";
     out << "        }\n";
 
     out << "    }\n";

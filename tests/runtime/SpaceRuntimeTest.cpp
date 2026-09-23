@@ -3,10 +3,12 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
 using theseed::runtime::Entity;
 using theseed::runtime::EntityDef;
 using theseed::runtime::EntitySide;
+using theseed::runtime::PropertyFlag;
 using theseed::runtime::PropertyType;
 using theseed::runtime::SingleCellTopology;
 using theseed::runtime::Space;
@@ -86,5 +88,133 @@ int main() {
     }
 
     runtime.detach(scheduler);
+
+    // SingleCellTopology 边缘分支：邻接格、拓扑回调、负载上报、cellId
+    {
+        auto topo = std::make_unique<SingleCellTopology>(7);
+        auto* topoPtr = topo.get();
+        auto edgeSpace = std::make_unique<Space>(200, "edge", std::move(topo));
+
+        // const 访问器：topology() / coordinateSystem()
+        const auto& constSpace = *edgeSpace;
+        static_cast<void>(constSpace.topology().locateCell(Vector3{}));
+        static_cast<void>(constSpace.coordinateSystem());
+
+        if (topoPtr->locateCell(Vector3{1, 2, 3}) != 7) {
+            return fail("topology_locate");
+        }
+        const auto adjacent = topoPtr->getAdjacentCells(Vector3{}, 10.0F);
+        if (adjacent.size() != 1 || adjacent[0] != 7) {
+            return fail("topology_adjacent");
+        }
+        if (topoPtr->cellId() != 7) {
+            return fail("topology_cell_id");
+        }
+
+        bool rebalanced = false;
+        topoPtr->onTopologyChanged([&] {
+            rebalanced = true;
+        });
+        topoPtr->rebalance();
+        if (!rebalanced) {
+            return fail("topology_rebalance_callback");
+        }
+
+        topoPtr->reportLoad(7, 0.75F);
+        if (topoPtr->lastReportedLoad() != 0.75F) {
+            return fail("topology_report_load");
+        }
+
+        bool threw = false;
+        try {
+            topoPtr->reportLoad(8, 0.5F);  // 非本格 id → 拒绝
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("topology_report_wrong_cell");
+        }
+
+        // Space 构造：null topology 拒绝
+        threw = false;
+        try {
+            Space bad(201, "bad", nullptr);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("space_null_topology");
+        }
+
+        // addEntity 重复 id 拒绝
+        threw = false;
+        try {
+            Entity dup(1, EntitySide::Cell, def);
+            edgeSpace->initialize(SpaceConfig{});
+            edgeSpace->addEntity(dup, Vector3{});
+            edgeSpace->addEntity(dup, Vector3{1, 1, 1});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("space_duplicate_entity");
+        }
+    }
+
+    // SpaceRuntime 错误路径与 witness 生命周期边缘
+    {
+        // null space 构造拒绝
+        bool threw = false;
+        try {
+            SpaceRuntime bad(nullptr);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("runtime_null_space");
+        }
+
+        auto rtTopo = std::make_unique<SingleCellTopology>(1);
+        auto rtSpace = std::make_unique<Space>(300, "edge_rt", std::move(rtTopo));
+        rtSpace->initialize(SpaceConfig{});
+        SpaceRuntime rt(std::move(rtSpace));
+
+        Entity watcher(10, EntitySide::Cell, def);
+        Entity stray(11, EntitySide::Cell, def);
+        rt.addEntity(watcher, Vector3{});
+        rt.addEntity(stray, Vector3{50.0F, 0.0F, 0.0F});
+
+        // findWitness：未知 id → nullptr
+        if (rt.findWitness(999) != nullptr) {
+            return fail("find_witness_unknown");
+        }
+
+        // 二次 ensureWitness 同 owner：复用既有 binding 并 updateRange
+        auto& first = rt.ensureWitness(watcher, 10.0F);
+        auto& second = rt.ensureWitness(watcher, 12.0F);
+        if (&first != &second) {
+            return fail("ensure_witness_reuse");
+        }
+
+        // removeEntity：卸载并清除绑定该 owner 的 witness
+        rt.removeEntity(watcher.id());
+        if (rt.findWitness(watcher.id()) != nullptr) {
+            return fail("remove_clears_witness");
+        }
+
+        // staged delta：实体标脏 → tick 收集 → 绕过 SpaceRuntime 直接从
+        // space 移除 → 条目仍在但实体查不到（findEntity 为空的防御分支）
+        TickScheduler rtScheduler(std::chrono::milliseconds{0});
+        rt.attach(rtScheduler);
+        stray.setProperty<std::int32_t>(hpId, 5);
+        rtScheduler.runOnce();
+        rt.space().removeEntity(stray.id());
+        const auto staged = rt.findStagedDelta(stray.id(), PropertyFlag::None);
+        if (!staged.empty()) {
+            return fail("staged_survives_entity_removal");
+        }
+        rt.detach(rtScheduler);
+    }
+
     return EXIT_SUCCESS;
 }

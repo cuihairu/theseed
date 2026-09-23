@@ -1,7 +1,9 @@
 #include "theseed/login/SessionToken.h"
 
+#include <cstddef>
 #include <random>
 #include <sstream>
+#include <string_view>
 
 namespace theseed::login {
 

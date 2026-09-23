@@ -3,6 +3,7 @@
 #include "theseed/runtime/EntityRef.h"
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>

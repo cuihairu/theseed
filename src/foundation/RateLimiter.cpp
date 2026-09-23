@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::foundation {
 

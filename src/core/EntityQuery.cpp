@@ -2,8 +2,11 @@
 #include "theseed/core/IEntityStore.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace theseed::core {
 
@@ -25,6 +28,12 @@ bool decodeNative(const std::vector<std::byte>& buf, T& out) {
 
 // 同类型数值 / Bool / String 比较；其他返回 unordered。
 // String 走字典序（raw bytes 直接是字符内容，不需要 length prefix）。
+// std::byte 不能隐式转 char（char_traits<char>::assign 不接受），
+// string 构造必须经 reinterpret_cast 显式转换字节序列。
+const auto bytesToString = [](const std::vector<std::byte>& raw) {
+    return std::string(reinterpret_cast<const char*>(raw.data()), raw.size());
+};
+
 std::partial_ordering compareSameType(const PropertyData& lhs, const PropertyData& rhs) {
     if (lhs.type != rhs.type) return std::partial_ordering::unordered;
 
@@ -84,17 +93,12 @@ std::partial_ordering compareSameType(const PropertyData& lhs, const PropertyDat
             if (!decodeNative(lhs.rawValue, a) || !decodeNative(rhs.rawValue, b)) return std::partial_ordering::unordered;
             return (a != 0) <=> (b != 0);
         }
-        case DataType::String: {
-            std::string a(lhs.rawValue.begin(), lhs.rawValue.end());
-            std::string b(rhs.rawValue.begin(), rhs.rawValue.end());
-            return a <=> b;
-        }
-        case DataType::Vector3:
-        case DataType::Blob:
-            // 大小比较无意义，本接口不支持。
+        case DataType::String:
+            return bytesToString(lhs.rawValue) <=> bytesToString(rhs.rawValue);
+        default:
+            // Vector3/Blob 大小比较无意义，本接口不支持；非法值同此。
             return std::partial_ordering::unordered;
     }
-    return std::partial_ordering::unordered;
 }
 
 }  // namespace
@@ -121,9 +125,9 @@ bool matchesFilter(const EntityData& entity, const QueryFilter& filter) {
         case QueryOp::Lt: return cmp < 0;
         case QueryOp::Le: return cmp <= 0;
         case QueryOp::Gt: return cmp > 0;
-        case QueryOp::Ge: return cmp >= 0;
+        default:  // QueryOp::Ge
+            return cmp >= 0;
     }
-    return false;
 }
 
 // --- QueryFilter typed constructors ---

@@ -64,14 +64,14 @@ std::string escapeJson(const std::string& input) {
 }
 
 void appendProcessJson(std::ostringstream& out, const ProcessSummary& process) {
-    out << "{"
-        << "\"name\":\"" << escapeJson(process.name) << "\","
-        << "\"pid\":" << process.pid << ","
-        << "\"port\":" << process.port << ","
-        << "\"version\":\"" << escapeJson(process.version) << "\","
-        << "\"healthy\":" << (process.healthy ? "true" : "false") << ","
-        << "\"managed\":" << (process.managed ? "true" : "false")
-        << "}";
+    out << "{";
+    out << "\"name\":\"" << escapeJson(process.name) << "\",";
+    out << "\"pid\":" << process.pid << ",";
+    out << "\"port\":" << process.port << ",";
+    out << "\"version\":\"" << escapeJson(process.version) << "\",";
+    out << "\"healthy\":" << (process.healthy ? "true" : "false") << ",";
+    out << "\"managed\":" << (process.managed ? "true" : "false");
+    out << "}";
 }
 
 }  // namespace
@@ -99,18 +99,18 @@ std::string formatSnapshotText(const NodeSummary& summary) {
 std::string formatSnapshotJson(const NodeSummary& summary) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(2);
-    out << "{"
-        << "\"host\":{"
-        << "\"hostname\":\"" << escapeJson(summary.host.hostname) << "\","
-        << "\"platform\":\"" << escapeJson(summary.host.platform) << "\","
-        << "\"cpuUsage\":" << summary.host.cpuUsage << ","
-        << "\"memoryUsage\":" << summary.host.memoryUsage << ","
-        << "\"diskUsage\":" << summary.host.diskUsage << ","
-        << "\"loadAverage\":" << summary.host.loadAverage << ","
-        << "\"networkRxBytes\":" << summary.host.networkRxBytes << ","
-        << "\"networkTxBytes\":" << summary.host.networkTxBytes
-        << "},"
-        << "\"processes\":[";
+    out << "{";
+    out << "\"host\":{";
+    out << "\"hostname\":\"" << escapeJson(summary.host.hostname) << "\",";
+    out << "\"platform\":\"" << escapeJson(summary.host.platform) << "\",";
+    out << "\"cpuUsage\":" << summary.host.cpuUsage << ",";
+    out << "\"memoryUsage\":" << summary.host.memoryUsage << ",";
+    out << "\"diskUsage\":" << summary.host.diskUsage << ",";
+    out << "\"loadAverage\":" << summary.host.loadAverage << ",";
+    out << "\"networkRxBytes\":" << summary.host.networkRxBytes << ",";
+    out << "\"networkTxBytes\":" << summary.host.networkTxBytes;
+    out << "},";
+    out << "\"processes\":[";
 
     for (std::size_t index = 0; index < summary.processes.size(); ++index) {
         if (index != 0) {
@@ -119,10 +119,10 @@ std::string formatSnapshotJson(const NodeSummary& summary) {
         appendProcessJson(out, summary.processes[index]);
     }
 
-    out << "],"
-        << "\"draining\":" << (summary.draining ? "true" : "false") << ","
-        << "\"overloaded\":" << (summary.overloaded ? "true" : "false")
-        << "}";
+    out << "],";
+    out << "\"draining\":" << (summary.draining ? "true" : "false") << ",";
+    out << "\"overloaded\":" << (summary.overloaded ? "true" : "false");
+    out << "}";
 
     return out.str();
 }

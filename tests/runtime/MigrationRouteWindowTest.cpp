@@ -3,10 +3,13 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
+#include <utility>
 #include <vector>
 
 using theseed::foundation::Counter;

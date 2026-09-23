@@ -3,7 +3,12 @@
 #include "theseed/runtime/EntityRef.h"
 #include "theseed/runtime/StateMachine.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace theseed::runtime {
@@ -16,11 +21,9 @@ bool Entity::supportsMethodSide(EntitySide entitySide, MethodSide methodSide) {
     switch (entitySide) {
     case EntitySide::Base:
         return methodSide == MethodSide::Base;
-    case EntitySide::Cell:
+    default:  // EntitySide::Cell
         return methodSide == MethodSide::Cell;
     }
-
-    return false;
 }
 
 Entity::Entity(EntityId id, EntitySide side, const EntityDef& def)

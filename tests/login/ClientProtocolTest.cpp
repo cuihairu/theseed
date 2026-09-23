@@ -2,6 +2,7 @@
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/SessionToken.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <span>
@@ -110,6 +111,147 @@ int main() {
                 outType, outPayload))
             FAIL("parse failed");
         if (outType != ClientMessageType::EntityEnter) FAIL("wrong type");
+    }
+    PASS();
+
+    TEST("encode and decode property sync with position");
+    {
+        PropertySyncMsg msg;
+        msg.entityId = 77;
+        msg.hasPosition = true;
+        msg.posX = 1.5F;
+        msg.posY = 2.5F;
+        msg.posZ = 3.5F;
+        msg.propertyData = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
+
+        auto data = ClientProtocol::encodePropertySync(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+        if (outType != ClientMessageType::PropertySync) FAIL("wrong type");
+
+        PropertySyncMsg out;
+        if (!ClientProtocol::decodePropertySync(outPayload, out)) FAIL("decode failed");
+        if (out.entityId != 77 || !out.hasPosition) FAIL("header mismatch");
+        if (out.posX != 1.5F || out.posY != 2.5F || out.posZ != 3.5F) FAIL("position mismatch");
+        if (out.propertyData.size() != 3 || out.propertyData[2] != std::byte{0x03})
+            FAIL("property data mismatch");
+    }
+    PASS();
+
+    TEST("encode and decode property sync without position");
+    {
+        PropertySyncMsg msg;
+        msg.entityId = 9;
+        msg.propertyData = {std::byte{0xAB}};
+
+        auto data = ClientProtocol::encodePropertySync(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+
+        PropertySyncMsg out;
+        if (!ClientProtocol::decodePropertySync(outPayload, out)) FAIL("decode failed");
+        if (out.hasPosition) FAIL("should have no position");
+    }
+    PASS();
+
+    TEST("decode property sync truncation branches");
+    {
+        PropertySyncMsg msg;
+        msg.entityId = 5;
+        msg.hasPosition = true;  // 带 position 但把 payload 截掉浮点数
+        auto data = ClientProtocol::encodePropertySync(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+        // 只保留 id+hasPos（9 字节）后再加 3 字节：浮点区越界
+        PropertySyncMsg out;
+        if (ClientProtocol::decodePropertySync(
+                outPayload.first(12), out))
+            FAIL("truncated floats should fail");
+
+        // 再截掉长度字段之后的部分：dataLen 越界
+        if (ClientProtocol::decodePropertySync(
+                outPayload.first(outPayload.size() - 1), out))
+            FAIL("truncated property data should fail");
+
+        if (ClientProtocol::decodePropertySync(outPayload.first(4), out))
+            FAIL("too short should fail");
+    }
+    PASS();
+
+    TEST("encode and decode entity leave");
+    {
+        EntityLeaveMsg msg;
+        msg.entityId = 0xDEADBEEF;
+        auto data = ClientProtocol::encodeEntityLeave(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+        if (outType != ClientMessageType::EntityLeave) FAIL("wrong type");
+
+        EntityLeaveMsg out;
+        if (!ClientProtocol::decodeEntityLeave(outPayload, out)) FAIL("decode failed");
+        if (out.entityId != 0xDEADBEEF) FAIL("id mismatch");
+        if (ClientProtocol::decodeEntityLeave(outPayload.first(4), out))
+            FAIL("short payload should fail");
+    }
+    PASS();
+
+    TEST("encode and decode action forward");
+    {
+        ActionMsg msg;
+        msg.entityId = 31;
+        msg.actionName = "MoveTo";
+        msg.actionData = {std::byte{0x10}, std::byte{0x20}};
+
+        auto data = ClientProtocol::encodeActionForward(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+        if (outType != ClientMessageType::ActionForward) FAIL("wrong type");
+
+        ActionMsg out;
+        if (!ClientProtocol::decodeActionForward(outPayload, out)) FAIL("decode failed");
+        if (out.entityId != 31 || out.actionName != "MoveTo") FAIL("header mismatch");
+        if (out.actionData.size() != 2 || out.actionData[1] != std::byte{0x20})
+            FAIL("action data mismatch");
+
+        // 空 actionData 的编解码
+        ActionMsg empty;
+        empty.entityId = 1;
+        empty.actionName = "";
+        auto data2 = ClientProtocol::encodeActionForward(empty);
+        std::span<const std::byte> payload2;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data2.data(), data2.size()),
+                outType, payload2))
+            FAIL("parse failed");
+        ActionMsg out2;
+        if (!ClientProtocol::decodeActionForward(payload2, out2)) FAIL("decode failed");
+        if (!out2.actionData.empty() || !out2.actionName.empty()) FAIL("should be empty");
+
+        // 截断分支
+        if (ClientProtocol::decodeActionForward(payload2.first(3), out2))
+            FAIL("truncated should fail");
+        if (ClientProtocol::decodeActionForward(payload2.first(payload2.size() - 1), out2))
+            FAIL("truncated data should fail");
     }
     PASS();
 

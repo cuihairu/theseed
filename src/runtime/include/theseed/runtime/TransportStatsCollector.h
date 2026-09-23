@@ -1,3 +1,4 @@
+#include <cstddef>
 #pragma once
 
 #include "theseed/foundation/Metrics.h"

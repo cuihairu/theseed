@@ -3,6 +3,7 @@
 #include "theseed/ops/OpsInspector.h"
 #include "theseed/runtime/TcpListener.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -49,7 +50,8 @@ private:
 
     void acceptNew();
     void servicePending();
-    void respond(PendingConnection& pc, std::string body, const char* contentType);
+    void respond(PendingConnection& pc, std::string body, const char* contentType,
+                 const char* statusLine = "HTTP/1.0 200 OK");
     void respondBadRequest(PendingConnection& pc);
 
     Config config_;

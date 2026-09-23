@@ -186,6 +186,24 @@ static void test_unregister_reindexes() {
     PASS();
 }
 
+static void test_processes_listing_and_reset() {
+    TEST("test_processes_listing_and_reset");
+    BackupTopologyCoordinator c;
+    c.registerProcess(3);
+    c.registerProcess(1);
+    c.registerProcess(2);
+    auto ids = c.processes();
+    if (ids.size() != 3 || ids[0] != 1 || ids[1] != 2 || ids[2] != 3) {
+        FAIL("processes() should return sorted ids"); return;
+    }
+    c.reset();
+    if (c.processCount() != 0) { FAIL("reset should clear processes"); return; }
+    if (c.state() != TopologyState::Stable) { FAIL("reset should return to Stable"); return; }
+    if (c.activeVersion().version != 0) { FAIL("reset should clear active version"); return; }
+    if (!c.processes().empty()) { FAIL("reset should clear listing"); return; }
+    PASS();
+}
+
 int main() {
     test_initial_state_stable();
     test_register_unregister_process();
@@ -197,6 +215,7 @@ int main() {
     test_abort_returns_to_stable();
     test_route_uses_active_epoch();
     test_unregister_reindexes();
+    test_processes_listing_and_reset();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

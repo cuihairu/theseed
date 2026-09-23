@@ -8,6 +8,15 @@ target_link_libraries(
 
 add_test(NAME theseed_runtime_framework_test COMMAND theseed_runtime_framework_test)
 
+add_executable(theseed_tcp_connection_test TcpConnectionTest.cpp)
+
+target_link_libraries(
+    theseed_tcp_connection_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_tcp_connection_test COMMAND theseed_tcp_connection_test)
+
 add_executable(theseed_entity_core_test EntityCoreTest.cpp)
 
 target_link_libraries(
@@ -97,6 +106,16 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_cell_runtime_test COMMAND theseed_cell_runtime_test)
+
+add_executable(theseed_cell_runtime_branch_test CellRuntimeBranchTest.cpp)
+
+target_link_libraries(
+    theseed_cell_runtime_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_cell_runtime_branch_test COMMAND theseed_cell_runtime_branch_test)
 
 add_executable(theseed_migration_runtime_test MigrationRuntimeTest.cpp)
 

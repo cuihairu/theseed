@@ -1,13 +1,23 @@
 #include "theseed/db/DBApp.h"
+#include "theseed/core/FileEntityStore.h"
 #include "theseed/db/DBProtocol.h"
+#if THESEED_HAS_MYSQL
+#include "theseed/db/MySQLEntityStore.h"
+#endif
+#if THESEED_HAS_POSTGRESQL
+#include "theseed/db/PostgreSQLEntityStore.h"
+#endif
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <utility>
 
 namespace theseed::db {
 
@@ -54,7 +64,68 @@ DBApp::~DBApp() {
 }
 
 bool DBApp::init() {
-    store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
+#if THESEED_HAS_MYSQL
+    if (config_.storeBackend == "mysql") {
+        MySQLEntityStore::Config mysqlCfg;
+        mysqlCfg.mysql.host = config_.dbHost;
+        mysqlCfg.mysql.port = config_.dbPort;
+        mysqlCfg.mysql.user = config_.dbUser;
+        mysqlCfg.mysql.password = config_.dbPassword;
+        mysqlCfg.mysql.database = config_.dbDatabase;
+        mysqlCfg.autoCreateSchema = config_.dbAutoCreateSchema;
+
+        auto mysqlStore = std::make_shared<MySQLEntityStore>(std::move(mysqlCfg));
+        if (!mysqlStore->init()) {
+            std::cerr << "DBApp: MySQL store init failed: " << mysqlStore->lastError()
+                      << std::endl;
+            return false;
+        }
+        store_ = mysqlStore;
+        accountStore_ = mysqlStore;  // MySQLEntityStore 同时实现 IAccountStore
+    }
+#else
+    if (config_.storeBackend == "mysql") {
+        std::cerr << "DBApp: storeBackend=mysql requested but theseed_db was built "
+                  << "without MySQL support (libmysql not available). Falling back to file."
+                  << std::endl;
+        config_.storeBackend = "file";
+    }
+#endif
+
+#if THESEED_HAS_POSTGRESQL
+    if (config_.storeBackend == "postgresql") {
+        PostgreSQLEntityStore::Config pgCfg;
+        pgCfg.pg.host = config_.dbHost;
+        pgCfg.pg.port = config_.dbPort;
+        pgCfg.pg.user = config_.dbUser;
+        pgCfg.pg.password = config_.dbPassword;
+        pgCfg.pg.database = config_.dbDatabase;
+        pgCfg.autoCreateSchema = config_.dbAutoCreateSchema;
+
+        auto pgStore = std::make_shared<PostgreSQLEntityStore>(std::move(pgCfg));
+        if (!pgStore->init()) {
+            std::cerr << "DBApp: PostgreSQL store init failed: " << pgStore->lastError()
+                      << std::endl;
+            return false;
+        }
+        store_ = pgStore;
+        accountStore_ = pgStore;  // PostgreSQLEntityStore 同时实现 IAccountStore
+    }
+#else
+    if (config_.storeBackend == "postgresql") {
+        std::cerr << "DBApp: storeBackend=postgresql requested but theseed_db was built "
+                  << "without PostgreSQL support (libpq not available). Falling back to file."
+                  << std::endl;
+        config_.storeBackend = "file";
+    }
+#endif
+
+    // file 后端兜底：显式选择 file，或请求的 SQL 后端在本构建中不可用。
+    if (config_.storeBackend == "file") {
+        store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
+        accountStore_ = nullptr;
+    }
+
     hub_ = std::make_shared<runtime::TransportHub>(config_.componentId);
 
     if (!listener_.listen(config_.listenHost, config_.listenPort)) {
@@ -93,6 +164,17 @@ bool DBApp::init() {
 }
 
 void DBApp::tick() {
+    // tick_duration_ms：与 TickScheduler::runOnce 使用相同的桶边界，保证
+    // 跨进程指标口径一致（DBApp 不走 TickScheduler，故在此自行观测）。
+    ScopedTimer timer([](double ms) {
+        theseed::foundation::MetricsRegistry::instance()
+            .histogram("tick_duration_ms",
+                       theseed::foundation::Histogram::Boundaries{
+                           1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
+                       "tick wall-clock duration in milliseconds")
+            .observe(ms);
+    });
+
     acceptConnections();
     hub_->tick();
     processMessages();
@@ -114,10 +196,11 @@ void DBApp::stop() {
 void DBApp::acceptConnections() {
     while (auto conn = listener_.accept()) {
         auto transport = std::make_shared<runtime::NetworkTransport>(conn);
-        // Assign sequential component IDs to connected BaseApps
-        static runtime::ComponentId nextPeer{1};
-        auto peerId = nextPeer++;
-        hub_->connectPeer(peerId, transport);
+        // 服务端模式注册：对端身份由其首条请求的 sourceComponent 自报，
+        // hub 收到首条消息时自动完成注册——回复才能路由回对端。
+        // （此前按本地分配的顺序号注册，与客户端自报的 sourceComponent
+        // 不一致时回复会被 hub 静默丢弃。）
+        hub_->attachServerTransport(transport);
     }
 }
 
@@ -243,6 +326,10 @@ void DBApp::handleListTypes(const runtime::RuntimeInvocation& inv) {
 }
 
 void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_query_account_ms", "account query latency in milliseconds").observe(ms);
+    });
+
     std::string username;
     if (!DBProtocol::decodeQueryAccountRequest(inv.payload, username)) {
         auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
@@ -251,7 +338,18 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
         return;
     }
 
-    // Iterate through Account entities to find matching username
+    // 优先走 MySQL/索引表的后端快速路径
+    if (accountStore_) {
+        core::EntityId id = 0;
+        std::string password;
+        bool found = accountStore_->queryAccount(username, id, password);
+        auto resp = DBProtocol::encodeQueryAccountResponse(found, id, password);
+        sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // 回退：FileEntityStore 没有索引表，线性扫描 Account 实体
     auto ids = store_->listIdsByType("Account");
     for (auto id : ids) {
         core::EntityData data;
@@ -260,13 +358,18 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
         // Find "username" property
         for (const auto& prop : data.properties) {
             if (prop.name == "username") {
-                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                // std::byte 不能隐式 assign 给 char（char_traits<char> 不接受），
+                // 必须经 reinterpret_cast 显式转换字节序列。
+                const auto bytesOf = [](const std::vector<std::byte>& raw) {
+                    return std::string(reinterpret_cast<const char*>(raw.data()), raw.size());
+                };
+                const std::string storedName = bytesOf(prop.rawValue);
                 if (storedName == username) {
                     // Found — extract password
                     std::string password;
                     for (const auto& p : data.properties) {
                         if (p.name == "password") {
-                            password = std::string(p.rawValue.begin(), p.rawValue.end());
+                            password = bytesOf(p.rawValue);
                             break;
                         }
                     }
@@ -286,6 +389,10 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
 }
 
 void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
+    ScopedTimer timer([](double ms) {
+        dbHistogram("db_create_account_ms", "account create latency in milliseconds").observe(ms);
+    });
+
     std::string username;
     std::string password;
     if (!DBProtocol::decodeCreateAccountRequest(inv.payload, username, password)) {
@@ -295,6 +402,17 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // 优先走索引表后端
+    if (accountStore_) {
+        core::EntityId id = 0;
+        bool ok = accountStore_->createAccount(username, password, id);
+        auto resp = DBProtocol::encodeCreateAccountResponse(ok, id);
+        sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+                     std::span<const std::byte>(resp.data(), resp.size()));
+        return;
+    }
+
+    // 回退：FileEntityStore 线性扫描查重后插入
     // Check if account already exists
     auto ids = store_->listIdsByType("Account");
     for (auto id : ids) {
@@ -302,7 +420,9 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
         if (!store_->load(id, "Account", data)) continue;
         for (const auto& prop : data.properties) {
             if (prop.name == "username") {
-                std::string storedName(prop.rawValue.begin(), prop.rawValue.end());
+                const std::string storedName(
+                    reinterpret_cast<const char*>(prop.rawValue.data()),
+                    prop.rawValue.size());
                 if (storedName == username) {
                     auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
                     sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,

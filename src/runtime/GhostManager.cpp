@@ -1,6 +1,8 @@
 #include "theseed/runtime/GhostManager.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 

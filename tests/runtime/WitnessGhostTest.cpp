@@ -3,6 +3,7 @@
 #include "theseed/runtime/Witness.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 
@@ -129,6 +130,89 @@ int main() {
     }
     if (invocation->method != "castSpell" || invocation->payload.size() != payload.size()) {
         return fail("ghost_forward_payload");
+    }
+
+    // GhostManager 剩余分支：非法参数抛异常、ghost 生命周期、路由清理、未附加 forward
+    {
+        GhostManager g;
+        g.attach(visibleB);
+
+        bool threw = false;
+        try {
+            g.setGhost(0);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("ghost_set_ghost_zero");
+        }
+
+        threw = false;
+        try {
+            g.createGhost(0);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("ghost_create_ghost_zero");
+        }
+
+        threw = false;
+        try {
+            g.setRoute(0, std::chrono::seconds{1}, Clock::time_point{});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("ghost_set_route_zero");
+        }
+
+        threw = false;
+        try {
+            static_cast<void>(g.ghostTarget());
+        } catch (const std::logic_error&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("ghost_target_unset");
+        }
+
+        g.createGhost(5);
+        if (g.ghostTarget() != 5) {
+            return fail("ghost_target_value");
+        }
+        g.destroyGhost();
+        if (g.hasGhost()) {
+            return fail("ghost_destroyed");
+        }
+
+        g.setRoute(6, std::chrono::seconds{30}, Clock::time_point{});
+        g.clearRoute();
+        if (g.routeTarget(Clock::time_point{}).has_value()) {
+            return fail("ghost_route_cleared");
+        }
+
+        g.detach();
+        if (g.owner() != nullptr) {
+            return fail("ghost_detached");
+        }
+        threw = false;
+        try {
+            static_cast<void>(g.forwardToReal("m", payload));
+        } catch (const std::logic_error&) {
+            threw = true;
+        }
+        if (!threw) {
+            return fail("ghost_forward_unattached");
+        }
+
+        // 已附加但非 ghost：forwardToReal 返回 nullopt
+        GhostManager real;
+        real.attach(visibleB);
+        real.setReal(3);
+        if (real.forwardToReal("m", payload).has_value()) {
+            return fail("ghost_forward_non_ghost");
+        }
     }
 
     return EXIT_SUCCESS;

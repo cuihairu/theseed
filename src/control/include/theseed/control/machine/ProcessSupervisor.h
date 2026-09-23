@@ -20,7 +20,7 @@ struct ProcessSummary {
 
 class IProcessSupervisor {
 public:
-    virtual ~IProcessSupervisor() = default;
+    virtual ~IProcessSupervisor() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual std::vector<ProcessSummary> listProcesses() const = 0;
     virtual bool start(const std::string& target) = 0;
@@ -41,11 +41,14 @@ public:
     bool stop(std::uint32_t pid) override;
     bool restart(std::uint32_t pid) override;
 
+    // 命令行解析工具（无状态，start 内部也走这两个）：对外暴露以便
+    // CLI/测试直接复用，不必 fork 一个进程才能验证解析行为。
+    static std::vector<std::string> splitCommandLine(const std::string& commandLine);
+    static std::string basenameOf(const std::string& commandLine);
+
 private:
     struct ChildProcess;
 
-    static std::vector<std::string> splitCommandLine(const std::string& commandLine);
-    static std::string basenameOf(const std::string& commandLine);
     void reapManagedProcesses() const;
     bool terminateManagedProcess(std::uint32_t pid);
 

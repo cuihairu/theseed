@@ -188,6 +188,55 @@ static void testRegistryReset() {
     if (ok) PASS(); else FAIL("reset did not clear state");
 }
 
+static void testRegistryTypeConflictAndJsonVariants() {
+    TEST("registry type conflict replace + json gauge/histogram");
+    MetricsRegistry::instance().reset();
+    auto& c = MetricsRegistry::instance().counter("dup_metric", "d");
+    c.increment(1);
+    // 同名换类型：替换既有条目而不是复用（counter→gauge、counter→histogram）
+    auto& c1 = MetricsRegistry::instance().counter("dup_a", "d1");
+    c1.increment(1);
+    auto& g = MetricsRegistry::instance().gauge("dup_a", "d1g");
+    g.set(-5);
+    auto& c2 = MetricsRegistry::instance().counter("dup_b", "d2");
+    c2.increment(1);
+    auto& h0 = MetricsRegistry::instance().histogram("dup_b", {1.0}, "d2h");
+    h0.observe(0.5);
+
+    // gauge + histogram 共存，走 renderText/renderJson 的各类型分支
+    auto& h = MetricsRegistry::instance().histogram("dup_metric2", {1.0, 2.0, 4.0}, "h");
+    h.observe(0.5);
+    h.observe(3.0);
+    h.observe(9.0);
+
+    const auto text = MetricsRegistry::instance().renderText();
+    const auto json = MetricsRegistry::instance().renderJson();
+    bool ok = json.find("\"type\":\"gauge\"") != std::string::npos;
+    ok = ok && json.find("\"value\":-5") != std::string::npos;
+    ok = ok && json.find("\"type\":\"histogram\"") != std::string::npos;
+    ok = ok && json.find("\"count\":3") != std::string::npos;
+    ok = ok && json.find("\"le\":\"+Inf\"") != std::string::npos;
+    ok = ok && text.find("dup_metric2_count 3") != std::string::npos;
+    if (ok) PASS(); else FAIL("type conflict/json variants wrong");
+}
+
+static void testRegistryJsonHistogramSnapshot() {
+    TEST("registry renderJson serializes histogram snapshot");
+    MetricsRegistry::instance().reset();
+    auto& h = MetricsRegistry::instance().histogram(
+        "j_hist", Histogram::Boundaries{1.0, 2.0, 5.0}, "histogram json");
+    h.observe(0.5);
+    h.observe(1.5);
+    h.observe(9.0);
+
+    auto json = MetricsRegistry::instance().renderJson();
+    bool ok = json.find("\"type\":\"histogram\"") != std::string::npos;
+    ok = ok && json.find("\"count\":3") != std::string::npos;
+    ok = ok && json.find("\"buckets\":[") != std::string::npos;
+
+    if (ok) PASS(); else FAIL("histogram snapshot missing in json: " + json);
+}
+
 int main() {
     std::cout << "Metrics tests:\n";
 
@@ -199,7 +248,9 @@ int main() {
     testRegistrySingleton();
     testRegistryRenderText();
     testRegistryRenderJson();
+    testRegistryTypeConflictAndJsonVariants();
     testRegistryReset();
+    testRegistryJsonHistogramSnapshot();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

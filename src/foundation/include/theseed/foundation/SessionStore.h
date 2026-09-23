@@ -3,6 +3,7 @@
 #include "theseed/foundation/RedisProvider.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>

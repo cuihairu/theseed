@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using theseed::core::BaseApp;
@@ -266,12 +267,14 @@ static void testDisconnectNoBinding() {
     auto [pipe, serverPipe] = InMemoryBytePipe::createPair();
     auto serverPipeRef = serverPipe;
     auto session = std::make_unique<theseed::login::ClientSession>(std::move(serverPipe));
-    auto* rawSession = session.get();
 
     c.baseApp->takeClientSession(std::move(session));
 
     serverPipeRef->close();
-    c.tickUntil([&] { return !rawSession->isConnected(); }, 50);
+    // 注意：不要在谓词里解引用 rawSession —— session 一旦被 cleanupClients
+    // 回收，裸指针立即悬垂（MSVC 上恰好读到旧值，libstdc++ 上直接段错误）。
+    // session 被析构时会经由共享的 pipe_ 调 close()，因此观察 serverPipeRef。
+    c.tickUntil([&] { return !serverPipeRef->isConnected(); }, 50);
     c.scheduler.runOnce();
 
     // Entity still exists (not bound to session)

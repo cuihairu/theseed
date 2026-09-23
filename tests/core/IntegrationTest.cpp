@@ -6,11 +6,13 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 
 using theseed::core::BaseApp;

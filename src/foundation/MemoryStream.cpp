@@ -1,7 +1,10 @@
 #include "theseed/foundation/MemoryStream.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <string_view>
 #include <utility>
 
 namespace theseed::foundation {

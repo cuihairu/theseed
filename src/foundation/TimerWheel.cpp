@@ -1,6 +1,8 @@
 #include "theseed/foundation/TimerWheel.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace theseed::foundation {

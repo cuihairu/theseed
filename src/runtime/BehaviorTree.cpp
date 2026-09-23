@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <memory>
+#include <utility>
 #include "theseed/runtime/BehaviorTree.h"
 #include "theseed/runtime/Entity.h"
 

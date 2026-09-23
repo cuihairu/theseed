@@ -1,3 +1,6 @@
+#include "theseed/foundation/RateLimiter.h"
+#include "theseed/foundation/RedisProvider.h"
+#include "theseed/foundation/SessionStore.h"
 #include "theseed/login/LoginApp.h"
 #include "theseed/runtime/TickScheduler.h"
 
@@ -29,13 +32,28 @@ int main(int argc, char** argv) {
     realm.port = 20000;
     config.realms.push_back(realm);
 
+    // Redis 会话/限流默认开启（内存实现）。生产环境替换为 hiredis 后端即可。
+    bool enableRedis = true;
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
             config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--auth" && i + 1 < argc) {
             config.authType = argv[++i];
+        } else if (arg == "--no-redis") {
+            enableRedis = false;
         }
+    }
+
+    if (enableRedis) {
+        auto redis = std::make_shared<theseed::foundation::InMemoryRedisProvider>();
+        config.redis = redis;
+        config.sessionStore = std::make_shared<theseed::foundation::SessionStore>(redis);
+        config.rateLimiter = std::make_shared<theseed::foundation::RateLimiter>(redis);
+        // 默认：每账号每秒 5 次登录尝试上限 10。
+        config.rateLimitConfig.capacity = 10;
+        config.rateLimitConfig.refillInterval = std::chrono::milliseconds(200);
     }
 
     theseed::runtime::TickScheduler scheduler;
@@ -44,7 +62,8 @@ int main(int argc, char** argv) {
     app.init();
 
     std::cout << "LoginApp listening on " << config.listenHost << ":"
-              << config.listenPort << std::endl;
+              << config.listenPort << " redis=" << (enableRedis ? "on" : "off")
+              << std::endl;
 
     while (g_running) {
         app.tick();

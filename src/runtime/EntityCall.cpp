@@ -1,6 +1,7 @@
 #include "theseed/runtime/EntityCall.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstring>
 #include <span>
 #include <stdexcept>

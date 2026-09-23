@@ -12,7 +12,11 @@
 #include "theseed/runtime/TcpListener.h"
 #include "theseed/runtime/TransportStatsCollector.h"
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -50,6 +54,12 @@ public:
     const BaseRuntime& runtime() const;
     EntityDefRegistry& registry();
     const EntityDefRegistry& registry() const;
+
+    // init() 后可用：实际绑定的客户端监听端口（Config.clientListenPort 为 0 时由系统分配）
+    std::uint16_t clientListenPort() const;
+
+    // init() 后可用：实际绑定的 ops 监听端口（仅 ops.enabled 时有意义）
+    std::uint16_t opsListenPort() const;
 
     login::ClientSession* findSessionByEntity(runtime::EntityId entityId) const;
     void bindSessionToEntity(login::ClientSession* session, runtime::EntityId entityId);

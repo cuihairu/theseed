@@ -2,6 +2,10 @@
 
 #include "theseed/runtime/AOI.h"
 
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 

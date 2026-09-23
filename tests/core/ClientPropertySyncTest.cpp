@@ -12,14 +12,17 @@
 #include "theseed/runtime/RuntimeTypes.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using theseed::core::BaseApp;
@@ -125,8 +128,9 @@ struct CollectorPipe {
         auto [a, b] = InMemoryBytePipe::createPair();
         cp->serverEnd = a;
         cp->clientEnd = b;
-        cp->clientEnd->setOnReceived([&](std::span<const std::byte> data) {
-            cp->received.insert(cp->received.end(), data.begin(), data.end());
+        auto* raw = cp.get();
+        cp->clientEnd->setOnReceived([raw](std::span<const std::byte> data) {
+            raw->received.insert(raw->received.end(), data.begin(), data.end());
         });
         return cp;
     }
@@ -436,7 +440,8 @@ static void testStringPropertySync() {
         bool found = false;
         for (auto& d : decodedDeltas) {
             if (d.propertyId == 2) {
-                std::string val(d.value.begin(), d.value.end());
+                const std::string val(reinterpret_cast<const char*>(d.value.data()),
+                                      d.value.size());
                 ok = ok && val == "Hero";
                 found = true;
             }

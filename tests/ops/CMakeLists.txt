@@ -6,3 +6,13 @@ target_link_libraries(
     PRIVATE theseed_ops)
 
 add_test(NAME theseed_ops_inspector_test COMMAND theseed_ops_inspector_test)
+
+add_executable(theseed_ops_server_test OpsServerTest.cpp)
+
+target_link_libraries(
+    theseed_ops_server_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_ops
+    PRIVATE theseed_runtime)
+
+add_test(NAME theseed_ops_server_test COMMAND theseed_ops_server_test)

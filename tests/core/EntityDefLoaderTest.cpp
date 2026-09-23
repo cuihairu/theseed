@@ -4,6 +4,7 @@
 #include "theseed/runtime/EntityDef.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -508,6 +509,197 @@ static void testVector3DefaultAppliedToEntity() {
               + " z=" + std::to_string(pos.z));
 }
 
+// XML 声明与注释跳过；数值属性 min/max 约束编码（覆盖 encodeNumericValue 全部分支）
+static void testXmlDeclCommentsAndMinMax() {
+    TEST("xml declaration, comments, and min/max constraints");
+
+    const char* xml = R"(<?xml version="1.0" encoding="UTF-8"?>
+<!-- entity definition with constraints -->
+<EntityDef name="Constrained">
+    <!-- property block -->
+    <Properties>
+        <Property name="tiny" type="Int8" minValue="-10" maxValue="10"/>
+        <Property name="small" type="Int16" minValue="-100" maxValue="100"/>
+        <Property name="medium" type="Int32" minValue="0" maxValue="1000"/>
+        <Property name="large" type="Int64" minValue="-5000" maxValue="5000"/>
+        <Property name="ratio" type="Float32" minValue="0.5" maxValue="0.99"/>
+        <Property name="precise" type="Float64" minValue="1.5" maxValue="2.5"/>
+    </Properties>
+</EntityDef>
+)";
+
+    auto def = EntityDefLoader::loadFromString(xml);
+    bool ok = def->findProperty("tiny") != nullptr;
+    ok = ok && def->findProperty("small") != nullptr;
+    ok = ok && def->findProperty("medium") != nullptr;
+    ok = ok && def->findProperty("large") != nullptr;
+    ok = ok && def->findProperty("ratio") != nullptr;
+    ok = ok && def->findProperty("precise") != nullptr;
+
+    // 校验 minValue/maxValue 编码内容与类型宽度一致
+    const auto* tiny = def->findProperty("tiny");
+    ok = ok && tiny->minValue.size() == 1 && tiny->maxValue.size() == 1;
+    std::int8_t tinyMin = 0;
+    std::memcpy(&tinyMin, tiny->minValue.data(), 1);
+    ok = ok && tinyMin == -10;
+
+    const auto* large = def->findProperty("large");
+    ok = ok && large->maxValue.size() == 8;
+    std::int64_t largeMax = 0;
+    std::memcpy(&largeMax, large->maxValue.data(), 8);
+    ok = ok && largeMax == 5000;
+
+    const auto* ratio = def->findProperty("ratio");
+    ok = ok && ratio->maxValue.size() == 4;
+    float ratioMax = 0;
+    std::memcpy(&ratioMax, ratio->maxValue.data(), 4);
+    ok = ok && std::abs(ratioMax - 0.99f) < 0.001f;
+
+    const auto* precise = def->findProperty("precise");
+    ok = ok && precise->minValue.size() == 8;
+    double preciseMin = 0;
+    std::memcpy(&preciseMin, precise->minValue.data(), 8);
+    ok = ok && std::abs(preciseMin - 1.5) < 0.0001;
+
+    if (ok) PASS();
+    else FAIL("constraint encoding mismatch");
+}
+
+// 各数值类型的 defaultValue 解码（Int8/Int16/Int64/Float64/Bool）
+static void testNumericDefaultValues() {
+    TEST("numeric default values across types");
+
+    const char* xml = R"(
+<EntityDef name="Defaults">
+    <Properties>
+        <Property name="b" type="Int8" defaultValue="-3"/>
+        <Property name="s" type="Int16" defaultValue="300"/>
+        <Property name="l" type="Int64" defaultValue="7000000000"/>
+        <Property name="d" type="Float64" defaultValue="2.718281828"/>
+        <Property name="flagOn" type="Bool" defaultValue="true"/>
+        <Property name="flagOff" type="Bool" defaultValue="false"/>
+    </Properties>
+</EntityDef>
+)";
+
+    auto def = EntityDefLoader::loadFromString(xml);
+    bool ok = true;
+
+    const auto* b = def->findProperty("b");
+    ok = ok && b->defaultValue.size() == 1;
+    std::int8_t bv = 0;
+    std::memcpy(&bv, b->defaultValue.data(), 1);
+    ok = ok && bv == -3;
+
+    const auto* s = def->findProperty("s");
+    ok = ok && s->defaultValue.size() == 2;
+    std::int16_t sv = 0;
+    std::memcpy(&sv, s->defaultValue.data(), 2);
+    ok = ok && sv == 300;
+
+    const auto* l = def->findProperty("l");
+    ok = ok && l->defaultValue.size() == 8;
+    std::int64_t lv = 0;
+    std::memcpy(&lv, l->defaultValue.data(), 8);
+    ok = ok && lv == 7000000000LL;
+
+    const auto* d = def->findProperty("d");
+    ok = ok && d->defaultValue.size() == 8;
+    double dv = 0;
+    std::memcpy(&dv, d->defaultValue.data(), 8);
+    ok = ok && std::abs(dv - 2.718281828) < 0.0000001;
+
+    const auto* on = def->findProperty("flagOn");
+    ok = ok && on->defaultValue.size() == 1 && on->defaultValue[0] == std::byte{1};
+    const auto* off = def->findProperty("flagOff");
+    ok = ok && off->defaultValue.size() == 1 && off->defaultValue[0] == std::byte{0};
+
+    if (ok) PASS();
+    else FAIL("default value mismatch");
+}
+
+// 结构错误与缺失属性的抛异常分支；loadFromFile 打开失败
+static void testLoaderErrorBranches() {
+    TEST("parse errors, missing names, wrong root, unreadable file");
+
+    bool threw = false;
+    try {
+        EntityDefLoader::loadFromString("<<<garbage");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("garbage xml accepted"); return; }
+
+    threw = false;
+    try {
+        EntityDefLoader::loadFromString("<NotEntityDef name=\"x\"/>");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("wrong root accepted"); return; }
+
+    threw = false;
+    try {
+        EntityDefLoader::loadFromString(R"(
+<EntityDef name="Bad">
+    <Properties>
+        <Property type="Int32"/>
+    </Properties>
+</EntityDef>
+)");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("missing property name accepted"); return; }
+
+    threw = false;
+    try {
+        EntityDefLoader::loadFromString(R"(
+<EntityDef name="Bad">
+    <Methods>
+        <Method side="Base"/>
+    </Methods>
+</EntityDef>
+)");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("missing method name accepted"); return; }
+
+    threw = false;
+    try {
+        EntityDefLoader::loadFromFile("definitely_missing_dir/no_such_file.xml");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("missing file accepted"); return; }
+
+    PASS();
+}
+
+static void testBoolMinMaxFallsThroughEncoder() {
+    TEST("bool property with minValue hits encoder default branch");
+
+    // encodeNumericValue 只为数值类型写了 case；Bool 带 minValue 时
+    // 走 switch 的 default（空实现），属性照常注册。
+    const char* xml = R"(
+<EntityDef name="Flagged">
+    <Properties>
+        <Property name="pvp" type="Bool" minValue="0" maxValue="1"/>
+    </Properties>
+</EntityDef>
+)";
+
+    auto def = EntityDefLoader::loadFromString(xml);
+    bool ok = def != nullptr;
+    const auto* prop = ok ? def->findProperty("pvp") : nullptr;
+    ok = ok && prop != nullptr && prop->type == PropertyType::Bool;
+    ok = ok && prop->minValue.size() == 1 && prop->maxValue.size() == 1;
+    ok = ok && prop->minValue[0] == std::byte{0} && prop->maxValue[0] == std::byte{0};
+
+    if (ok) PASS(); else FAIL("bool min/max load failed");
+}
+
 int main() {
     std::cout << "EntityDefLoader tests:\n";
 
@@ -527,6 +719,10 @@ int main() {
     testBlobDefaultValue();
     testStringDefaultAppliedToEntity();
     testVector3DefaultAppliedToEntity();
+    testXmlDeclCommentsAndMinMax();
+    testNumericDefaultValues();
+    testLoaderErrorBranches();
+    testBoolMinMaxFallsThroughEncoder();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

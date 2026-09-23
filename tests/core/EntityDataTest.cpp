@@ -2,10 +2,12 @@
 #include "theseed/core/IEntityStore.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::core::DataType;
@@ -74,7 +76,45 @@ static void testEntityDataFindProperty() {
     ok = ok && data.findPropertyByName("name")->id == 1;
     ok = ok && data.findPropertyByName("missing") == nullptr;
 
+    // const 上下文走 const 重载
+    const auto& cdata = data;
+    ok = ok && cdata.findProperty(0) != nullptr;
+    ok = ok && cdata.findProperty(0)->name == "level";
+    ok = ok && cdata.findProperty(99) == nullptr;
+    ok = ok && cdata.findPropertyByName("missing") == nullptr;
+
     if (ok) PASS(); else FAIL("find failed");
+}
+
+// 截断的属性数据流：decodeProperty 内部抛异常 → decodeEntityData 捕获返回 false
+static void testDecodeTruncatedProperty() {
+    TEST("decodeEntityData rejects truncated property stream");
+
+    EntityData original;
+    original.id = 7;
+    original.entityType = "Avatar";
+    PropertyData prop;
+    prop.id = 0;
+    prop.name = "level";
+    prop.type = DataType::Int32;
+    prop.rawValue.resize(4);
+    original.properties.push_back(prop);
+
+    theseed::core::MemoryStream ms;
+    theseed::core::encodeEntityData(ms, original);
+    // 从尾部截掉若干字节 → 最后一个属性解码必然失败
+    bool ok = true;
+    for (std::size_t cut = 1; cut <= 6 && ok; ++cut) {
+        theseed::core::MemoryStream in;
+        in.writeBytes(ms.data(), ms.size() - cut);
+        in.resetRead();
+        EntityData out;
+        if (theseed::core::decodeEntityData(in, out)) {
+            ok = false;  // 不应有任何截断量能解码成功
+        }
+    }
+
+    if (ok) PASS(); else FAIL("truncated stream unexpectedly decoded");
 }
 
 static void testEntityDataEncodeDecode() {
@@ -157,6 +197,33 @@ static void testInMemoryStoreSaveLoad() {
     if (ok) PASS(); else FAIL("save/load failed");
 }
 
+static void testInMemoryStoreListEntityTypes() {
+    TEST("InMemoryEntityStore listEntityTypes");
+
+    InMemoryEntityStore store;
+    EntityData a;
+    a.id = store.allocId();
+    a.entityType = "Player";
+    EntityData b;
+    b.id = store.allocId();
+    b.entityType = "Monster";
+    EntityData c;
+    c.id = store.allocId();
+    c.entityType = "Player";
+
+    bool ok = store.save(a.id, a) && store.save(b.id, b) && store.save(c.id, c);
+
+    // 返回值按字母序去重
+    const auto types = store.listEntityTypes();
+    ok = ok && types.size() == 2;
+    ok = ok && types[0] == "Monster" && types[1] == "Player";
+
+    const auto players = store.listIdsByType("Player");
+    ok = ok && players.size() == 2;
+
+    if (ok) PASS(); else FAIL("listEntityTypes failed");
+}
+
 static void testInMemoryStoreRemove() {
     TEST("InMemoryEntityStore remove");
 
@@ -206,9 +273,11 @@ int main() {
     testPropertyDataFixedSize();
     testPropertyDataVariableSized();
     testEntityDataFindProperty();
+    testDecodeTruncatedProperty();
     testEntityDataEncodeDecode();
     testInMemoryStoreSaveLoad();
     testInMemoryStoreRemove();
+    testInMemoryStoreListEntityTypes();
     testInMemoryStoreLoadMissing();
     testInMemoryStoreAllocId();
 

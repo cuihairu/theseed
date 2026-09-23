@@ -40,6 +40,10 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
             config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+        } else if (arg == "--ops" && i + 1 < argc) {
+            config.ops.enabled = std::stoi(argv[++i]) != 0;
+        } else if (arg == "--ops-port" && i + 1 < argc) {
+            config.ops.port = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         }
     }
 

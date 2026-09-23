@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace theseed::runtime {
 

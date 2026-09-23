@@ -1,6 +1,8 @@
 #include "theseed/runtime/InvocationCodec.h"
 #include "theseed/foundation/MemoryStream.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 

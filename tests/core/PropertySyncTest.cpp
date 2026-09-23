@@ -10,12 +10,14 @@
 #include "theseed/runtime/TickScheduler.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -597,6 +599,15 @@ static void testBaseToCellTypedRemoteCall() {
 
     auto* baseEntity = c.baseApp->createEntity("Avatar");
     auto entityId = baseEntity->id();
+
+    // cellEntityCall 未建立：typed callCellWith 走 NotConnected 分支
+    if (baseEntity->callCellWith<std::int32_t>("takeDamage", 0) ==
+        theseed::runtime::SendResult::Accepted) {
+        TcpConnection::globalShutdown();
+        std::filesystem::remove_all(dir);
+        FAIL("expected NotConnected before cell creation");
+        return;
+    }
 
     c.baseApp->requestCreateCell(entityId, "Avatar", Vector3{0, 0, 0}, 2);
     c.tickUntil([&] {

@@ -72,5 +72,44 @@ int main() {
         return fail("leave_after_move");
     }
 
+    // --- 错误路径：坏距离带、未跟踪实体、detach ---
+    {
+        bool threw = false;
+        try {
+            witness.setDetailDistanceBands(5.0F, 1.0F);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) return fail("invalid_bands");
+    }
+
+    {
+        bool threw = false;
+        try {
+            witness.updateDistance(farEntity.id() + 100, 1.0F);
+        } catch (const std::out_of_range&) {
+            threw = true;
+        }
+        if (!threw) return fail("update_unknown_entity");
+    }
+
+    {
+        bool threw = false;
+        try {
+            witness.recordDirty(farEntity.id() + 100, {});
+        } catch (const std::out_of_range&) {
+            threw = true;
+        }
+        if (!threw) return fail("dirty_unknown_entity");
+    }
+
+    if (!witness.attached() || witness.owner()->id() != owner.id()) {
+        return fail("attach_state");
+    }
+    witness.detach();
+    if (witness.attached() || witness.owner() != nullptr || !witness.snapshotView().empty()) {
+        return fail("detach_state");
+    }
+
     return EXIT_SUCCESS;
 }

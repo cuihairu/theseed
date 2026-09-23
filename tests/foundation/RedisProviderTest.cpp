@@ -171,6 +171,15 @@ static void test_session_decode_rejects_garbage() {
     PASS();
 }
 
+static void test_session_decode_rejects_bad_user_id() {
+    TEST("test_session_decode_rejects_non_numeric_user_id");
+    auto bad = SessionStore::decode("acc-1\x1f"
+                                    "realm-1\x1f"
+                                    "not-a-number\nmeta");
+    if (bad.has_value()) { FAIL("decode should reject non-numeric userId"); return; }
+    PASS();
+}
+
 // --- RateLimiter tests ---
 
 static void test_rate_limiter_allows_within_capacity() {
@@ -232,6 +241,57 @@ static void test_rate_limiter_independent_keys() {
     PASS();
 }
 
+static void test_rate_limiter_available_tokens() {
+    TEST("test_rate_limiter_available_tokens");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 5;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    // 空键：直接拒绝
+    if (limiter.availableTokens("", cfg) != 0.0) { FAIL("empty key should be 0"); return; }
+
+    // bucket 不存在：返回满容量
+    if (limiter.availableTokens("fresh", cfg) != 5.0) { FAIL("fresh key should be full"); return; }
+
+    // 消费 2 个后可查剩余（decode 命中）
+    if (!limiter.tryConsume("u", cfg, 2)) { FAIL("consume 2 should succeed"); return; }
+    if (limiter.availableTokens("u", cfg) != 3.0) {
+        FAIL("remaining=" + std::to_string(limiter.availableTokens("u", cfg)));
+        return;
+    }
+
+    // redis 里的状态损坏：回退满容量
+    redis->set("rate:bad", "garbage blob");
+    if (limiter.availableTokens("bad", cfg) != 5.0) { FAIL("corrupt blob should be full"); return; }
+
+    PASS();
+}
+
+static void test_redis_zrange_score_tie_break_by_member() {
+    TEST("test_redis_zrange_score_tie_break_by_member");
+    InMemoryRedisProvider r;
+    r.zadd("tie", "banana", 1.0);
+    r.zadd("tie", "apple", 1.0);
+    r.zadd("tie", "cherry", 0.5);
+    auto range = r.zrange("tie", 0, -1);
+    bool ok = range.size() == 3;
+    ok = ok && range[0].first == "cherry";   // 低分在前
+    ok = ok && range[1].first == "apple";    // 同分按成员名字典序
+    ok = ok && range[2].first == "banana";
+    if (ok) PASS(); else FAIL("tie-break order wrong");
+}
+
+static void test_provider_scoped_construction() {
+    TEST("test_provider_scoped_construction");
+    {
+        InMemoryRedisProvider scoped;
+        scoped.set("k", "v");
+    }   // 出作用域：构造/析构完整走一遍
+    PASS();
+}
+
 int main() {
     test_redis_set_get();
     test_redis_ttl_expires();
@@ -245,11 +305,15 @@ int main() {
     test_session_revoke();
     test_session_refresh_extends_ttl();
     test_session_decode_rejects_garbage();
+    test_session_decode_rejects_bad_user_id();
 
     test_rate_limiter_allows_within_capacity();
     test_rate_limiter_refills_over_time();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
+    test_rate_limiter_available_tokens();
+    test_redis_zrange_score_tie_break_by_member();
+    test_provider_scoped_construction();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

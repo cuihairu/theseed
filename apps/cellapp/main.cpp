@@ -25,6 +25,8 @@ int main(int argc, char** argv) {
 
     std::string entityDefPath = "res/entities";
     std::uint16_t listenPort = 20002;
+    bool opsEnabled = false;
+    std::uint16_t opsPort = 20040;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -32,6 +34,10 @@ int main(int argc, char** argv) {
             listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--defs" && i + 1 < argc) {
             entityDefPath = argv[++i];
+        } else if (arg == "--ops" && i + 1 < argc) {
+            opsEnabled = std::stoi(argv[++i]) != 0;
+        } else if (arg == "--ops-port" && i + 1 < argc) {
+            opsPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         }
     }
 
@@ -41,6 +47,8 @@ int main(int argc, char** argv) {
     theseed::core::CellApp::Config config;
     config.entityDefPath = entityDefPath;
     config.componentId = theseed::runtime::ComponentId{2};
+    config.ops.enabled = opsEnabled;
+    config.ops.port = opsPort;
 
     theseed::core::CellApp app(std::move(config), hub);
 
@@ -75,6 +83,7 @@ int main(int argc, char** argv) {
 
         hub->tick();
         scheduler.runOnce();
+        app.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 

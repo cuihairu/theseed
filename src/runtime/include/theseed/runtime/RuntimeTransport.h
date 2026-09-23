@@ -22,7 +22,7 @@ struct RuntimeInvocation final {
 
 class IRuntimeTransport {
 public:
-    virtual ~IRuntimeTransport() = default;
+    virtual ~IRuntimeTransport() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual SendResult send(RuntimeInvocation invocation) = 0;
     virtual std::size_t receive(ComponentId targetComponent,
@@ -31,6 +31,11 @@ public:
     virtual std::size_t pendingCount() const = 0;
     virtual void flush() = 0;
     virtual TransportStats stats() const = 0;
+
+    // 周期驱动：读管道入站、冲刷出站。TCP 子类在 tick 里 pump socket，
+    // 内存实现为空操作。TransportHub::tick 借此驱动所有 peer 的入站——
+    // 缺了这一环，服务端永远读不到 socket 上的请求。
+    virtual void tick();
 };
 
 class InMemoryRuntimeTransport final : public IRuntimeTransport {
@@ -47,6 +52,7 @@ public:
     std::size_t pendingCount() const override;
     void flush() override;
     TransportStats stats() const override;
+    void tick() override;
 
     std::size_t drain(RuntimeInvocation* out, std::size_t capacity);
 

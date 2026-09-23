@@ -172,6 +172,16 @@ static void testHeaderDecodeInsufficientData() {
     if (ok) PASS(); else FAIL("should have failed");
 }
 
+static void testConstStreamAccess() {
+    TEST("const stream accessor");
+
+    Bundle bundle;
+    const Bundle& frozen = bundle;
+    static_cast<void>(frozen.stream());
+
+    PASS();
+}
+
 int main() {
     std::cout << "Bundle tests:\n";
 
@@ -181,6 +191,7 @@ int main() {
     testEmptyPayload();
     testClear();
     testHeaderDecodeInsufficientData();
+    testConstStreamAccess();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

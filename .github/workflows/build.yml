@@ -1,0 +1,50 @@
+name: Build and Test
+
+# 不指定 vcpkg toolchain：find_package(unofficial-libmysql CONFIG QUIET)
+# 静默失败，theseed_db 自动回退 FileEntityStore（THESEED_HAS_MYSQL=OFF）。
+# MySQL 后端的真实链接验证依赖 libtirpc-dev 与完整 libmysql 编译，
+# 由本地/专用流程覆盖，不进快速反馈的 CI。
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux-${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [gcc-debug, clang-debug]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  windows:
+    name: windows-msvc-debug
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake --preset msvc-debug
+
+      - name: Build
+        run: cmake --build --preset msvc-debug
+
+      - name: Test
+        run: ctest --preset msvc-debug

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 
 using theseed::foundation::MemoryStream;
 
@@ -237,6 +238,23 @@ static void testReadRemaining() {
     else FAIL("expected 4 remaining, got " + std::to_string(remaining));
 }
 
+static void testResetWriteAndPointers() {
+    TEST("resetWrite / const data / writePtr");
+
+    MemoryStream ms;
+    ms.writeUint32(0xAABBCCDD);
+    ms.resetWrite();                       // 复位写游标，后续写入覆盖旧内容
+    ms.writeUint32(7);
+    ms.resetRead();
+    if (ms.readUint32() != 7) FAIL("resetWrite should overwrite from start");
+
+    const MemoryStream& frozen = ms;
+    static_cast<void>(frozen.data());      // const data()
+    static_cast<void>(ms.writePtr());      // 写位置指针
+
+    PASS();
+}
+
 int main() {
     std::cout << "MemoryStream tests:\n";
 
@@ -252,6 +270,7 @@ int main() {
     testMoveSemantics();
     testAutoGrow();
     testReadRemaining();
+    testResetWriteAndPointers();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

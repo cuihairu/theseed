@@ -10,6 +10,7 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <span>
 
 namespace theseed::runtime {
 

@@ -4,6 +4,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using theseed::foundation::ConsoleLogger;
@@ -200,6 +201,19 @@ static void testTraceSpanOptional() {
     if (ok) PASS(); else FAIL("trace/span handling wrong");
 }
 
+static void testConsoleLoggerLevelAccessors() {
+    TEST("console logger setLevel/level round trip");
+
+    ConsoleLogger logger(LogLevel::Warn);
+    bool ok = logger.level() == LogLevel::Warn;
+    logger.setLevel(LogLevel::Error);
+    ok = ok && logger.level() == LogLevel::Error;
+    logger.setLevel(LogLevel::Debug);
+    ok = ok && logger.level() == LogLevel::Debug;
+
+    if (ok) PASS(); else FAIL("level accessors mismatch");
+}
+
 int main() {
     std::cout << "Logger tests:\n";
 
@@ -209,6 +223,7 @@ int main() {
     testGlobalLoggerReplace();
     testConvenienceFunctions();
     testTraceSpanOptional();
+    testConsoleLoggerLevelAccessors();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

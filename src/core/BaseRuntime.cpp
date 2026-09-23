@@ -3,16 +3,17 @@
 #include "theseed/runtime/PropertyReplication.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 
 namespace theseed::core {
 
 namespace {
-
-runtime::PropertyType dataTypeToPropertyType(DataType dt) {
-    return static_cast<runtime::PropertyType>(static_cast<std::uint8_t>(dt));
-}
 
 DataType propertyTypeToDataType(runtime::PropertyType pt) {
     return static_cast<DataType>(static_cast<std::uint8_t>(pt));
@@ -72,19 +73,6 @@ void dataToEntity(const EntityData& data, runtime::Entity& entity) {
     }
 
     entity.clearDirtyFlags();
-}
-
-std::shared_ptr<runtime::EntityDef> getOrCreateDef(
-    const std::string& entityType,
-    std::unordered_map<std::string, std::shared_ptr<runtime::EntityDef>>& defs) {
-    auto it = defs.find(entityType);
-    if (it != defs.end()) {
-        return it->second;
-    }
-
-    auto def = std::make_shared<runtime::EntityDef>(entityType);
-    defs.emplace(entityType, def);
-    return def;
 }
 
 }  // namespace
@@ -166,6 +154,11 @@ runtime::Entity* BaseRuntime::createEntity(const std::string& entityType) {
     }
 
     auto id = store_->allocId();
+    if (id == 0) {
+        // 分配失败（如 DBApp 失联时 RemoteEntityStore 超时返回 0）：拒绝注册，
+        // 避免 id=0 的实体与"无实体"哨兵语义冲突。
+        return nullptr;
+    }
     auto entity = it->second(id, runtime::EntitySide::Base);
     if (!entity) {
         return nullptr;
@@ -573,7 +566,7 @@ bool BaseRuntime::requestCreateCell(runtime::EntityId entityId,
     auto* entity = findEntity(entityId);
     if (!entity) return false;
 
-    // Payload: spaceId(4) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
+    // Payload: spaceId(8, SpaceId) + entityId(8) + baseComponentId(4) + posX(4) + posY(4) + posZ(4) + propertySnapshot(var)
     constexpr std::size_t headerSize = sizeof(runtime::SpaceId) + sizeof(runtime::EntityId)
                                      + sizeof(runtime::ComponentId) + sizeof(float) * 3;
     auto snapshot = entity->buildFullPropertySnapshot(runtime::PropertyFlag::Base);
@@ -630,7 +623,7 @@ bool BaseRuntime::requestTeleport(runtime::EntityId entityId,
     auto* cellCall = entity->cellEntityCall();
     if (!cellCall || !cellCall->isValid()) return false;
 
-    // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+    // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     constexpr std::size_t payloadSize = sizeof(runtime::EntityId) + sizeof(runtime::SpaceId)
                                        + sizeof(float) * 3;
     std::vector<std::byte> payload(payloadSize);
@@ -897,7 +890,7 @@ bool BaseRuntime::handleWitnessSync(const runtime::RuntimeInvocation& invocation
 }
 
 bool BaseRuntime::handleSpaceChanged(const runtime::RuntimeInvocation& invocation) {
-    // Payload: entityId(8) + spaceId(4) + posX(4) + posY(4) + posZ(4)
+    // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     auto& p = invocation.payload;
     constexpr std::size_t expectedSize = sizeof(runtime::EntityId) + sizeof(runtime::SpaceId)
                                        + sizeof(float) * 3;

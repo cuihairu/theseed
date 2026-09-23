@@ -1,6 +1,9 @@
 #include "theseed/core/EntityData.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 namespace theseed::core {
 
@@ -18,10 +21,10 @@ std::size_t PropertyData::fixedSizeOfType(DataType type) {
         case DataType::Float64: return 8;
         case DataType::Bool:    return 1;
         case DataType::Vector3: return 12;
-        case DataType::String:  return 0;
-        case DataType::Blob:    return 0;
+        default:
+            // String/Blob 是变长类型，定长记 0；非法枚举值同样视为无定长。
+            return 0;
     }
-    return 0;
 }
 
 bool PropertyData::isVariableSized(DataType type) {
@@ -99,17 +102,27 @@ void encodeEntityData(MemoryStream& stream, const EntityData& data) {
 }
 
 bool decodeEntityData(MemoryStream& stream, EntityData& data) {
-    data.id = stream.readUint64();
-    data.entityType = stream.readString();
-    const auto count = stream.readUint32();
+    // 反序列化边界：截断/损坏的输入（网络载荷或磁盘文件）只允许返回 false，
+    // 不允许异常穿越到调用方的 tick 循环——MemoryStream 的读溢出抛
+    // std::runtime_error，曾让带畸形载荷的请求直接 terminate 服务进程。
+    try {
+        data.id = stream.readUint64();
+        data.entityType = stream.readString();
+        const auto count = stream.readUint32();
+        // 合理上限防御：垃圾 count 不允许触发超大分配。
+        constexpr std::uint32_t kMaxPropertyCount = 1u << 20;
+        if (count > kMaxPropertyCount) return false;
 
-    data.properties.resize(count);
-    for (std::uint32_t i = 0; i < count; ++i) {
-        if (!decodeProperty(stream, data.properties[i])) {
-            return false;
+        data.properties.resize(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            // decodeProperty 只在流截断时经 MemoryStream 异常报告失败（外层
+            // catch 统一转 false），返回值恒为 true，无需逐项检查。
+            decodeProperty(stream, data.properties[i]);
         }
+        return true;
+    } catch (const std::exception&) {
+        return false;
     }
-    return true;
 }
 
 }  // namespace theseed::core

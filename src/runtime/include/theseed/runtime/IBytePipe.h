@@ -8,7 +8,7 @@ namespace theseed::runtime {
 
 class IBytePipe {
 public:
-    virtual ~IBytePipe() = default;
+    virtual ~IBytePipe() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual bool write(std::span<const std::byte> data) = 0;
     virtual void pump() = 0;

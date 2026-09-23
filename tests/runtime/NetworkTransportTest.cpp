@@ -2,6 +2,7 @@
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -289,6 +290,115 @@ static void testUnorderedLossyDelivery() {
     else FAIL("deliveryClass=" + std::to_string(static_cast<int>(received.deliveryClass)));
 }
 
+static void testSendErrorPaths() {
+    TEST("oversized payload and null pipe");
+
+    // 超过 maxMessageSize → Oversized
+    {
+        auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+        NetworkTransport::Config cfg;
+        cfg.localComponent = 1;
+        cfg.maxMessageSize = 8;
+        NetworkTransport client(pipeA, cfg);
+
+        RuntimeInvocation big = makeInvocation(9, 2, "big");
+        big.payload.assign(64, std::byte{0});
+        bool ok = client.send(big) == SendResult::Oversized;
+
+        // 构造时无 pipe → NotConnected
+        NetworkTransport orphan(nullptr);
+        ok = ok && orphan.send(makeInvocation(1, 1, "x")) == SendResult::NotConnected;
+        ok = ok && !orphan.isConnected();
+
+        if (ok) PASS();
+        else FAIL("oversized/null-pipe behavior wrong");
+    }
+}
+
+static void testGarbageHeaderDoesNotKillTransport() {
+    TEST("garbage header bytes are skipped, transport keeps working");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport client(pipeA);
+    NetworkTransport server(pipeB);
+
+    // 绕过对端编码器直接注入无法解析的帧头。
+    // InMemoryBytePipe 方向：write 存入本端 pending，本端 pump 才投递给对端。
+    std::vector<std::byte> garbage{std::byte{0xFF}, std::byte{0xFF},
+                                   std::byte{0x00}, std::byte{0x00}};
+    if (!pipeB->write(garbage)) { FAIL("pipe write failed"); return; }
+    pipeB->pump();
+
+    // 之后的正常消息仍然可达
+    bool ok = client.send(makeInvocation(4, 5, "after-garbage")) == SendResult::Accepted;
+    client.flush();
+    pipeA->pump();
+    pipeB->pump();
+
+    RuntimeInvocation received;
+    ok = ok && server.receive(5, &received, 1) == 1;
+    ok = ok && received.method == "after-garbage";
+
+    if (ok) PASS();
+    else FAIL("transport state corrupted by garbage header");
+}
+
+static void testPipeWriteEdgeCases() {
+    TEST("pipe write: empty payload, expired peer, closed pipe");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+
+    // 空 payload：连通时返回 true（短路分支）
+    bool ok = pipeA->write({});
+
+    // 对端销毁：weak_ptr lock 失败 → false
+    pipeB.reset();
+    std::vector<std::byte> data{std::byte{1}};
+    ok = ok && !pipeA->write(data);
+
+    // 自身关闭：connected_ 为假 → 返回 false
+    pipeA->close();
+    ok = ok && !pipeA->write(data);
+
+    if (ok) PASS();
+    else FAIL("pipe write edge cases wrong");
+}
+
+static void testAutoFlushBackPressure() {
+    TEST("autoFlush=false accumulates backlog and reports BackPressure");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport::Config cfg;
+    cfg.localComponent = 1;
+    cfg.autoFlush = false;  // 攒批：send 只入队，由 flush()/tick() 统一冲刷
+    NetworkTransport client(pipeA, cfg);
+    NetworkTransport server(pipeB);
+
+    // watermark.high = 256：前 256 条 Accepted（积压在 channel），第 257 条 BackPressure。
+    bool ok = true;
+    for (int i = 0; i < 257; ++i) {
+        auto result = client.send(makeInvocation(static_cast<std::uint64_t>(i), 5, "bulk"));
+        if (i < 256) {
+            ok = ok && result == SendResult::Accepted;
+        } else {
+            ok = ok && result == SendResult::BackPressure;
+        }
+    }
+    ok = ok && client.stats().backPressureEvents == 1;
+
+    // flush 后积压全部发出，对端可完整收取 256 条。
+    client.flush();
+    pipeA->pump();
+
+    RuntimeInvocation received;
+    std::size_t total = 0;
+    while (server.receive(5, &received, 1) > 0) ++total;
+    ok = ok && total == 256;
+
+    if (ok) PASS();
+    else FAIL("autoFlush backlog/BackPressure mismatch");
+}
+
 int main() {
     std::cout << "NetworkTransport tests:\n";
 
@@ -302,6 +412,10 @@ int main() {
     testPendingCount();
     testBidirectional();
     testUnorderedLossyDelivery();
+    testSendErrorPaths();
+    testGarbageHeaderDoesNotKillTransport();
+    testPipeWriteEdgeCases();
+    testAutoFlushBackPressure();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

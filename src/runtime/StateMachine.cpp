@@ -1,6 +1,7 @@
 #include "theseed/runtime/StateMachine.h"
 #include "theseed/runtime/Entity.h"
 
+#include <string_view>
 #include <utility>
 
 namespace theseed::runtime {

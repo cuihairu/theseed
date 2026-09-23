@@ -5,6 +5,7 @@
 #include "theseed/runtime/TickScheduler.h"
 #include "theseed/runtime/TransportHub.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>

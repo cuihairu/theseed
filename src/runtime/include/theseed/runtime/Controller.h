@@ -2,6 +2,7 @@
 
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -24,7 +25,7 @@ using ControllerId = std::uint32_t;
 
 class Controller {
 public:
-    virtual ~Controller() = default;
+    virtual ~Controller() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     ControllerId id() const;
     ControllerType type() const;

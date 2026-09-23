@@ -1,5 +1,6 @@
 #include "theseed/runtime/EntityDef.h"
 
+#include <cstddef>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -61,10 +62,10 @@ std::size_t EntityDef::fixedSizeOfType(PropertyType type) {
         case PropertyType::Float64: return 8;
         case PropertyType::Bool:    return 1;
         case PropertyType::Vector3: return 12; // 3 * float
-        case PropertyType::String:  return 0;
-        case PropertyType::Blob:    return 0;
+        default:
+            // String/Blob 是变长类型，定长记 0；非法枚举值同样视为无定长。
+            return 0;
     }
-    return 0;
 }
 
 bool EntityDef::isVariableSized(PropertyType type) {

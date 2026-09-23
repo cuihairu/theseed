@@ -1,10 +1,13 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include "theseed/runtime/PropertyBlock.h"
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 using theseed::runtime::Entity;
 using theseed::runtime::EntityDef;
@@ -12,6 +15,7 @@ using theseed::runtime::EntitySide;
 using theseed::runtime::PropertyDelta;
 using theseed::runtime::PropertyId;
 using theseed::runtime::PropertyType;
+using theseed::runtime::PropertyBlock;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -469,6 +473,41 @@ static void testLongString() {
     else FAIL("size=" + std::to_string(val.size()));
 }
 
+// Test: setBlob over an existing value takes the oldVal branch
+static void testSetBlobOverwritesOldValue() {
+    TEST("setBlob twice overwrites and keeps newest");
+
+    auto def = makeMixedDef();
+    Entity entity(1, EntitySide::Base, *def);
+
+    std::vector<std::byte> first = {std::byte{0x01}};
+    entity.setBlob(3, first);
+    std::vector<std::byte> second = {std::byte{0x02}, std::byte{0x03}};
+    entity.setBlob(3, second);   // varStorage_ 已有旧值 → oldVal 被填充
+
+    auto val = entity.getBlob(3);
+    bool ok = val.size() == 2 && val[1] == std::byte{0x03};
+
+    if (ok) PASS();
+    else FAIL("overwrite failed");
+}
+
+// Test: def() before init throws
+static void testUninitializedBlockThrows() {
+    TEST("property block def() before init throws");
+
+    PropertyBlock block;
+    bool threw = false;
+    try {
+        static_cast<void>(block.def());
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+
+    if (threw) PASS();
+    else FAIL("expected logic_error");
+}
+
 int main() {
     std::cout << "Variable-sized property tests:\n";
 
@@ -492,6 +531,8 @@ int main() {
     testVarCallbackOnApplyDelta();
     testStringDefaultValue();
     testLongString();
+    testSetBlobOverwritesOldValue();
+    testUninitializedBlockThrows();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;
