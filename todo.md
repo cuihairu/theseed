@@ -34,6 +34,8 @@
   新鲜库的隐式依赖
 
 当前覆盖（gcovr，含双库门控测试）：行 **89%**（2026-09-22 第二轮）。
+**已收官：2026-09-23 达成行级 100.0%**（10441/10441，行级口径 + 131 行带理由
+LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-report.md）。
 第二轮补齐两个点名缺口：
 
 - `ProcessSupervisor` 75%→92%：`ProcessSupervisorTest` fork 真子进程
@@ -47,8 +49,9 @@
   `return f;` 归因伪影与 switch 后 unreachable 行，测试不可达。
 
 下一批缺口：`CellRuntime`（85%）/`BaseRuntime`（89%）分支覆盖。
+**（已完成**：CellRuntime/BaseRuntime 分支覆盖已补齐，覆盖率专项整体收官。**）**
 顺带发现：`CellRuntime.cpp` 匿名 ns 的 `encodeCellCreation`/`decodeCellReady`
-是死代码（gcc -Wunused-function 警告，Linux 构建从未调用）——下轮处理。
+是死代码（gcc -Wunused-function 警告，Linux 构建从未调用）——**已删除**（b45bc44）。
 
 ## 遗留事项
 
