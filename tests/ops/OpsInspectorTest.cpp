@@ -178,6 +178,8 @@ static void test_snapshot_returns_provider_value() {
     });
     const auto snap = insp.snapshot();
     if (snap.entityCount != 123) { FAIL("snapshot not propagated"); return; }
+    // process() 访问器返回构造时注入的节点信息。
+    if (insp.process().version != "9.9.9") { FAIL("process info not propagated"); return; }
     PASS();
 }
 

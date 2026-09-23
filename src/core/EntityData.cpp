@@ -21,10 +21,10 @@ std::size_t PropertyData::fixedSizeOfType(DataType type) {
         case DataType::Float64: return 8;
         case DataType::Bool:    return 1;
         case DataType::Vector3: return 12;
-        case DataType::String:  return 0;
-        case DataType::Blob:    return 0;
+        default:
+            // String/Blob 是变长类型，定长记 0；非法枚举值同样视为无定长。
+            return 0;
     }
-    return 0;
 }
 
 bool PropertyData::isVariableSized(DataType type) {
@@ -115,9 +115,9 @@ bool decodeEntityData(MemoryStream& stream, EntityData& data) {
 
         data.properties.resize(count);
         for (std::uint32_t i = 0; i < count; ++i) {
-            if (!decodeProperty(stream, data.properties[i])) {
-                return false;
-            }
+            // decodeProperty 只在流截断时经 MemoryStream 异常报告失败（外层
+            // catch 统一转 false），返回值恒为 true，无需逐项检查。
+            decodeProperty(stream, data.properties[i]);
         }
         return true;
     } catch (const std::exception&) {

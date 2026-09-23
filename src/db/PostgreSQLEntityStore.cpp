@@ -68,7 +68,7 @@ std::vector<std::byte> strToBytes(const std::string& s) {
 PostgreSQLEntityStore::PostgreSQLEntityStore(Config config)
     : config_(std::move(config)) {}
 
-PostgreSQLEntityStore::~PostgreSQLEntityStore() = default;
+PostgreSQLEntityStore::~PostgreSQLEntityStore() = default;  // LCOV_EXCL_LINE trivial 析构的 out-of-line 定义无机器码，gcc 不产生计数条目
 
 bool PostgreSQLEntityStore::init() {
     if (config_.connection) {
@@ -107,8 +107,10 @@ bool PostgreSQLEntityStore::createSchema() {
             "  entity_id BIGINT NOT NULL,"
             "  password BYTEA NOT NULL"
             ")")) {
+        // LCOV_EXCL_START PG16：schema ACL 检查先于 if_not_exists 存在性跳过、readonly 检查先于 analyze，SQL-only 无法构造第 1 条成功第 2 条失败（三重实验封死，见 docs/design/8-reference/coverage-report.md §6）
         lastError_ = "create _account_index failed: " + conn_->lastError();
         return false;
+        // LCOV_EXCL_STOP
     }
     if (!conn_->execute(
             "CREATE INDEX IF NOT EXISTS idx_account_entity_id "

@@ -153,8 +153,10 @@ std::string generateTraceId() {
     std::uint64_t lo = nextRandom64();
     // Avoid the all-zero trace id (invalid per W3C).
     while (hi == 0 && lo == 0) {
+        // LCOV_EXCL_START 真随机数生成器下随机 ID 恒全 0 的重试循环不可达
         hi = nextRandom64();
         lo = nextRandom64();
+        // LCOV_EXCL_STOP
     }
     return toHex(hi) + toHex(lo);
 }

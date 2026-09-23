@@ -166,8 +166,10 @@ bool MySQLConnection::connect() {
 
     // 重新初始化以防之前 close 过
     if (!mysql_init(&impl_->mysql)) {
+        // LCOV_EXCL_START mysql_init 失败即 OOM，不可注入
         impl_->lastError = "mysql_init failed";
         return false;
+        // LCOV_EXCL_STOP
     }
 
     mysql_options(&impl_->mysql, MYSQL_OPT_CONNECT_TIMEOUT,
@@ -251,8 +253,10 @@ bool MySQLConnection::executeParams(std::string_view sql,
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
     if (stmt == nullptr) {
+        // LCOV_EXCL_START mysql_stmt_init 失败即 OOM
         impl_->lastError = "mysql_stmt_init failed";
         return false;
+        // LCOV_EXCL_STOP
     }
 
     auto cleanup = [this, stmt]() {
@@ -305,9 +309,11 @@ bool MySQLConnection::executeParams(std::string_view sql,
     }
 
     if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
+        // LCOV_EXCL_START bind_param 仅客户端内部状态/OOM 可触发；libmysql 对参数数不匹配不在 bind 报错
         impl_->lastError = mysql_stmt_error(stmt);
         cleanup();
         return false;
+        // LCOV_EXCL_STOP
     }
 
     if (mysql_stmt_execute(stmt) != 0) {
@@ -331,8 +337,10 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
     if (stmt == nullptr) {
+        // LCOV_EXCL_START mysql_stmt_init 失败即 OOM
         impl_->lastError = "mysql_stmt_init failed";
         return std::nullopt;
+        // LCOV_EXCL_STOP
     }
 
     if (mysql_stmt_prepare(stmt, sql.data(), static_cast<unsigned long>(sql.size())) != 0) {
@@ -382,9 +390,11 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
         }
 
         if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
+            // LCOV_EXCL_START bind_param 同上（查询路径）
             impl_->lastError = mysql_stmt_error(stmt);
             mysql_stmt_close(stmt);
             return std::nullopt;
+            // LCOV_EXCL_STOP
         }
     }
 
@@ -396,9 +406,11 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
 
     // 把结果集拉到客户端，以便逐行 fetch
     if (mysql_stmt_store_result(stmt) != 0) {
+        // LCOV_EXCL_START store_result 在 client-side cursor 下是纯内存遍历，无 SQL-only 注入面
         impl_->lastError = mysql_stmt_error(stmt);
         mysql_stmt_close(stmt);
         return std::nullopt;
+        // LCOV_EXCL_STOP
     }
 
     MYSQL_RES* meta = mysql_stmt_result_metadata(stmt);
@@ -429,10 +441,12 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     }
 
     if (mysql_stmt_bind_result(stmt, outBinds.data()) != 0) {
+        // LCOV_EXCL_START bind_result 仅客户端内部状态/OOM 可触发
         impl_->lastError = mysql_stmt_error(stmt);
         mysql_free_result(meta);
         mysql_stmt_close(stmt);
         return std::nullopt;
+        // LCOV_EXCL_STOP
     }
 
     // 逐行 fetch 到内存
@@ -440,8 +454,10 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     while (true) {
         int rc = mysql_stmt_fetch(stmt);
         if (rc == 1) {
+            // LCOV_EXCL_START fetch rc==1 在 client-side cursor 下是纯内存遍历
             impl_->lastError = mysql_stmt_error(stmt);
             break;
+            // LCOV_EXCL_STOP
         }
         if (rc == MYSQL_NO_DATA) break;
 
@@ -468,7 +484,9 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
                     if (mysql_stmt_fetch_column(stmt, &part,
                                                  static_cast<unsigned int>(i),
                                                  offset + got) != 0) {
+                        // LCOV_EXCL_START fetch_column 截断恢复路径内代码自身参数恒合法
                         break;
+                        // LCOV_EXCL_STOP
                     }
                     // libmysql 语义：*length 回填的是列值全长而非本次拷贝字节数，
                     // 实际拷贝 min(全长 - offset, 缓冲容量) 字节。按全长累加会

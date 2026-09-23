@@ -51,7 +51,7 @@ private:
 
 class IMessageHandler {
 public:
-    virtual ~IMessageHandler() = default;
+    virtual ~IMessageHandler() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
     virtual bool handleMessage(std::uint16_t messageId, MemoryStream& payload) = 0;
 };
 

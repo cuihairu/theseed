@@ -75,3 +75,13 @@ TransportStats InMemoryRuntimeTransport::stats() const {
 }
 
 }  // namespace theseed::runtime
+
+namespace theseed::runtime {
+
+// tick 默认实现放这里而非头文件内联：内存实现的 tick 是空操作（无 socket 可
+// pump），放头文件会让所有包含方都为它生成弱符号。PipedTransport 不覆盖 tick，
+// 走这条路径；TcpConnection 的 pump 由各自 tick 覆盖实现。
+void IRuntimeTransport::tick() {}
+void InMemoryRuntimeTransport::tick() {}
+
+}  // namespace theseed::runtime

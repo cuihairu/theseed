@@ -1,4 +1,5 @@
 #include "theseed/runtime/EntityCall.h"
+#include "theseed/runtime/PipedTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 
 #include <array>
@@ -11,6 +12,7 @@
 using theseed::runtime::DeliveryClass;
 using theseed::runtime::EntityCall;
 using theseed::runtime::InMemoryRuntimeTransport;
+using theseed::runtime::PipedTransport;
 using theseed::runtime::RuntimeInvocation;
 using theseed::runtime::SendResult;
 
@@ -115,6 +117,16 @@ int main() {
     if (call.call(transport, "fail", {}) == SendResult::Accepted) {
         return fail("invalid_call");
     }
+
+    // tick 契约：内存实现的 tick 是空操作——不投递、不扰动队列。
+    transport.tick();
+    if (transport.pendingCount() != 0) {
+        return fail("tick_noop_pending");
+    }
+
+    // PipedTransport 不覆盖 tick，走基类默认空实现（同样不得抛出或出错）。
+    PipedTransport piped(1);
+    piped.tick();
 
     return EXIT_SUCCESS;
 }

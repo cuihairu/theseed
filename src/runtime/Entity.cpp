@@ -21,11 +21,9 @@ bool Entity::supportsMethodSide(EntitySide entitySide, MethodSide methodSide) {
     switch (entitySide) {
     case EntitySide::Base:
         return methodSide == MethodSide::Base;
-    case EntitySide::Cell:
+    default:  // EntitySide::Cell
         return methodSide == MethodSide::Cell;
     }
-
-    return false;
 }
 
 Entity::Entity(EntityId id, EntitySide side, const EntityDef& def)

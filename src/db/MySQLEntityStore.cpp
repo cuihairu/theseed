@@ -71,7 +71,7 @@ std::vector<std::byte> strToBytes(const std::string& s) {
 MySQLEntityStore::MySQLEntityStore(Config config)
     : config_(std::move(config)) {}
 
-MySQLEntityStore::~MySQLEntityStore() = default;
+MySQLEntityStore::~MySQLEntityStore() = default;  // LCOV_EXCL_LINE trivial 析构的 out-of-line 定义无机器码，gcc 不产生计数条目
 
 bool MySQLEntityStore::init() {
     if (config_.connection) {

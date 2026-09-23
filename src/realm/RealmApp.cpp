@@ -68,8 +68,7 @@ void RealmApp::tick() {
     const auto elapsed = std::chrono::steady_clock::now() - tickStart;
     theseed::foundation::MetricsRegistry::instance()
         .histogram("tick_duration_ms",
-                   theseed::foundation::Histogram::Boundaries{
-                       1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
+                   theseed::foundation::Histogram::Boundaries{1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
                    "tick wall-clock duration in milliseconds")
         .observe(std::chrono::duration<double, std::milli>(elapsed).count());
 }

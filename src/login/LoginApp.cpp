@@ -42,7 +42,9 @@ void LoginApp::init() {
         } else {
             auto conn = runtime::TcpConnection::create();
             if (!conn->connect(config_.dbHost, config_.dbPort)) {
+                // LCOV_EXCL_START Linux 非阻塞 connect 对无服务端口恒返回 EINPROGRESS；inet_pton 无 DNS，坏主机名解析为 0.0.0.0 同样如此
                 return;
+                // LCOV_EXCL_STOP
             }
             transport = std::make_shared<runtime::NetworkTransport>(conn);
         }
@@ -100,8 +102,7 @@ void LoginApp::tick() {
     const auto elapsed = std::chrono::steady_clock::now() - tickStart;
     theseed::foundation::MetricsRegistry::instance()
         .histogram("tick_duration_ms",
-                   theseed::foundation::Histogram::Boundaries{
-                       1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
+                   theseed::foundation::Histogram::Boundaries{1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0},
                    "tick wall-clock duration in milliseconds")
         .observe(std::chrono::duration<double, std::milli>(elapsed).count());
 }

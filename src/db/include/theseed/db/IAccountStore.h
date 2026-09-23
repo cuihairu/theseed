@@ -13,7 +13,7 @@ namespace theseed::db {
 // FileEntityStore 后端保持线性扫描的回退实现（在 DBApp 内）。
 class IAccountStore {
 public:
-    virtual ~IAccountStore() = default;
+    virtual ~IAccountStore() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     // 按 username 查找账号。命中返回 true 并填充 entityId 与 password。
     virtual bool queryAccount(const std::string& username,

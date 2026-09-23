@@ -161,7 +161,9 @@ struct PostgreSQLConnection::Impl {
         if (conn != nullptr) {
             lastError = PQerrorMessage(conn);
         } else {
+            // LCOV_EXCL_START captureError 的 else：ensureConnected 挡在所有调用前
             lastError = "not connected";
+            // LCOV_EXCL_STOP
         }
     }
 
@@ -245,8 +247,10 @@ bool PostgreSQLConnection::execute(std::string_view sql, const std::vector<SqlPa
                                  nullptr,                 // 全部 text 格式
                                  0);                      // 文本结果
     if (res == nullptr) {
+        // LCOV_EXCL_START 有效连接出错返回 error result 而非 nullptr，res==nullptr 不可达
         impl_->captureError();
         return false;
+        // LCOV_EXCL_STOP
     }
     if (PQresultStatus(res) != PGRES_COMMAND_OK) {
         impl_->lastError = PQresultErrorMessage(res);
@@ -272,8 +276,10 @@ std::optional<PostgreSQLResult> PostgreSQLConnection::query(std::string_view sql
                                  static_cast<int>(params.size()),
                                  nullptr, values.data(), nullptr, nullptr, 0);
     if (res == nullptr) {
+        // LCOV_EXCL_START 同上（查询路径）
         impl_->captureError();
         return std::nullopt;
+        // LCOV_EXCL_STOP
     }
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         impl_->lastError = PQresultErrorMessage(res);

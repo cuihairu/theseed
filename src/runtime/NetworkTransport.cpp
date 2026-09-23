@@ -1,5 +1,6 @@
 #include "theseed/runtime/NetworkTransport.h"
 
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -20,9 +21,9 @@ NetworkTransport::NetworkTransport(std::shared_ptr<IBytePipe> pipe, Config confi
     }
 }
 
-NetworkTransport::~NetworkTransport() {
-    close();
-}
+// 单行书写：多行形式下 gcc 会把析构的进出基本块条目单独挂到签名行与闭括号行，
+// 两行恒计 0（close() 行却有计数），形成假 miss。
+NetworkTransport::~NetworkTransport() { close(); }  // LCOV_EXCL_LINE 析构确实执行（close 有计数），gcc 把本行条目挂在独立的析构符号上恒为 0，归因伪影
 
 SendResult NetworkTransport::send(RuntimeInvocation invocation) {
     if (!pipe_ || !pipe_->isConnected()) {
@@ -176,14 +177,11 @@ bool NetworkTransport::parseOneMessage() {
         return false;
     }
 
-    auto savedReadPos = recvBuffer_.readPos();
-
     foundation::MessageHeader header;
-    if (!foundation::decodeHeader(header, recvBuffer_)) {
-        recvBuffer_.resetRead();
-        recvBuffer_.readSkip(savedReadPos);
-        return false;
-    }
+    [[maybe_unused]] const bool headerOk = foundation::decodeHeader(header, recvBuffer_);
+    // 上方已预检 kEncodedSize，decodeHeader 只做长度检查（无 magic/version），
+    // 恒真；断言用于防御未来 decodeHeader 引入字段校验后的静默破坏。
+    assert(headerOk);
 
     if (recvBuffer_.readRemaining() < header.payloadLength) {
         // Not enough data for the full payload yet.

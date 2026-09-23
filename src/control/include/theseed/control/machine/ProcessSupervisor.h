@@ -20,7 +20,7 @@ struct ProcessSummary {
 
 class IProcessSupervisor {
 public:
-    virtual ~IProcessSupervisor() = default;
+    virtual ~IProcessSupervisor() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual std::vector<ProcessSummary> listProcesses() const = 0;
     virtual bool start(const std::string& target) = 0;

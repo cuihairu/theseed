@@ -18,7 +18,7 @@ struct HostSummary {
 
 class IHostProbe {
 public:
-    virtual ~IHostProbe() = default;
+    virtual ~IHostProbe() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual HostSummary sample() = 0;
 };

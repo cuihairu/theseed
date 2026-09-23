@@ -6,7 +6,8 @@ add_library(theseed_core
     EntityDefRegistry.cpp
     BaseApp.cpp
     CellApp.cpp
-    EntityQuery.cpp)
+    EntityQuery.cpp
+)
 
 target_link_libraries(theseed_core PUBLIC theseed_project_options)
 target_link_libraries(theseed_core PUBLIC theseed_login)

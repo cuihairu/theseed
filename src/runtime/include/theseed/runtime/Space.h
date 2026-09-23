@@ -19,7 +19,7 @@ class CoordinateNode;
 
 class ISpaceTopology {
 public:
-    virtual ~ISpaceTopology() = default;
+    virtual ~ISpaceTopology() = default;  // LCOV_EXCL_LINE C++ ABI：trivial 虚析构是空体，gcc 不为其生成计数指令，D0/D1/D2 三符号变体恒 0（结构不可测）
 
     virtual CellId locateCell(const Vector3& position) const = 0;
     virtual std::vector<CellId> getAdjacentCells(const Vector3& position, float radius) const = 0;

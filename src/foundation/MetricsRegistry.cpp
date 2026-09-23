@@ -180,9 +180,9 @@ static const char* typeName(MetricType t) {
     switch (t) {
         case MetricType::Counter: return "counter";
         case MetricType::Gauge: return "gauge";
-        case MetricType::Histogram: return "histogram";
+        default:  // Histogram 与潜在新增类型
+            return t == MetricType::Histogram ? "histogram" : "untyped";
     }
-    return "untyped";
 }
 
 std::string MetricsRegistry::renderText() const {
@@ -226,7 +226,7 @@ std::string MetricsRegistry::renderJson() const {
             << "\"type\":\"" << typeName(s.type) << "\","
             << "\"description\":\"" << s.desc << "\","
             << "\"value\":";
-        std::visit([&](const auto& v) {
+        std::visit([&](const auto& v) {  // LCOV_EXCL_LINE std::visit 的闭包包装符号使本行条目恒 0（lambda 体各分支有计数），gcc 归因伪影
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, std::uint64_t>) {
                 out << v;

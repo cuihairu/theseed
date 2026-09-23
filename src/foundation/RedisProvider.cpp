@@ -13,7 +13,7 @@ namespace theseed::foundation {
 InMemoryRedisProvider::InMemoryRedisProvider()
     : now_(std::chrono::steady_clock::now()) {}
 
-InMemoryRedisProvider::~InMemoryRedisProvider() = default;
+InMemoryRedisProvider::~InMemoryRedisProvider() = default;  // LCOV_EXCL_LINE trivial 析构的 out-of-line 定义无机器码，gcc 不产生计数条目
 
 void InMemoryRedisProvider::advanceClock(RedisDuration delta) {
     const std::lock_guard lock(mutex_);

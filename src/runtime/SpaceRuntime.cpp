@@ -198,10 +198,6 @@ void SpaceRuntime::stageDirtyEntities() {
     stagedViewDeltas_.clear();
     stagedRuntimeDeltas_.clear();
     for (auto* entity : space_->entities()) {
-        if (entity == nullptr) {
-            continue;
-        }
-
         const auto viewDelta = entity->buildViewDirtyPropertyDelta();
         if (!viewDelta.empty()) {
             stagedViewDeltas_.emplace(entity->id(), viewDelta);

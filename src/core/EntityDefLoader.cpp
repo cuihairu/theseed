@@ -347,8 +347,10 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                                     std::memcpy(defaultValue.data(), &v, 1);
                                     break;
                                 }
-                                default:
-                                    break;
+                                // Vector3 由上方专用分支解析、String/Blob 被
+                                // isVariableSized 拦截，此 default 不可达，仅为
+                                // -Wswitch 完整性兜底。
+                                default: break;  // LCOV_EXCL_LINE
                             }
                         }
                     }

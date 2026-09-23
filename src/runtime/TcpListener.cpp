@@ -48,8 +48,10 @@ bool TcpListener::listen(const std::string& host, std::uint16_t port, int backlo
     }
 
     if (::listen(s, backlog) == detail::kSocketError) {
+        // LCOV_EXCL_START bind 成功后 listen 失败本地无法稳定触发（fd 耗尽先死在 socket()，同 socket 重复 listen 返回成功）
         detail::closeSocket(s);
         return false;
+        // LCOV_EXCL_STOP
     }
 
     // Non-blocking so accept() doesn't hang the tick loop

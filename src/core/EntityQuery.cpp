@@ -95,12 +95,10 @@ std::partial_ordering compareSameType(const PropertyData& lhs, const PropertyDat
         }
         case DataType::String:
             return bytesToString(lhs.rawValue) <=> bytesToString(rhs.rawValue);
-        case DataType::Vector3:
-        case DataType::Blob:
-            // 大小比较无意义，本接口不支持。
+        default:
+            // Vector3/Blob 大小比较无意义，本接口不支持；非法值同此。
             return std::partial_ordering::unordered;
     }
-    return std::partial_ordering::unordered;
 }
 
 }  // namespace
@@ -127,9 +125,9 @@ bool matchesFilter(const EntityData& entity, const QueryFilter& filter) {
         case QueryOp::Lt: return cmp < 0;
         case QueryOp::Le: return cmp <= 0;
         case QueryOp::Gt: return cmp > 0;
-        case QueryOp::Ge: return cmp >= 0;
+        default:  // QueryOp::Ge
+            return cmp >= 0;
     }
-    return false;
 }
 
 // --- QueryFilter typed constructors ---
