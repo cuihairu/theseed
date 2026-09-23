@@ -137,7 +137,11 @@ static void test_restart_replaces_child() {
         FAIL("start for restart failed");
         return;
     }
-    const auto first = findManaged(supervisor.listProcesses(), "sleep");
+    // findManaged 返回指向 vector 内部元素的裸指针：必须绑定 listProcesses()
+    // 的返回值（临时 vector 在完整表达式末尾析构，直接取指针会悬垂，
+    // 高并发下内存被复用时读到垃圾 pid 甚至 SIGSEGV）。
+    const auto firstList = supervisor.listProcesses();
+    const auto* first = findManaged(firstList, "sleep");
     if (first == nullptr) {
         FAIL("first child not listed");
         return;
@@ -151,7 +155,8 @@ static void test_restart_replaces_child() {
         return;
     }
 
-    const auto after = findManaged(supervisor.listProcesses(), "sleep");
+    const auto afterList = supervisor.listProcesses();
+    const auto* after = findManaged(afterList, "sleep");
     if (after == nullptr) {
         FAIL("restarted child not listed");
         return;
@@ -195,7 +200,8 @@ static void test_destructor_terminates_remaining_children() {
             FAIL("start for destructor test failed");
             return;
         }
-        const auto* managed = findManaged(supervisor.listProcesses(), "sleep");
+        const auto managedList = supervisor.listProcesses();
+        const auto* managed = findManaged(managedList, "sleep");
         if (managed == nullptr) {
             FAIL("destructor-test child not listed");
             return;
