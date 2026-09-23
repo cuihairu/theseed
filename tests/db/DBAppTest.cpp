@@ -253,6 +253,43 @@ int main() {
     }
     PASS();
 
+    // 杂散应答：method 不匹配 "<method>.ok" 的过期消息应被丢弃并继续等待，
+    // 直到超时按失败处理。
+    TEST("RemoteEntityStore discards stray-method responses until timeout");
+    {
+        class StrayTransport final : public IRuntimeTransport {
+        public:
+            SendResult send(RuntimeInvocation inv) override {
+                RuntimeInvocation resp;
+                resp.sourceComponent = inv.targetComponent;
+                resp.targetComponent = inv.sourceComponent;
+                resp.method = "db.bogus.ok";  // 与任何请求的 "<method>.ok" 都不匹配
+                inbox_.push_back(std::move(resp));
+                return SendResult::Accepted;
+            }
+            std::size_t receive(ComponentId, RuntimeInvocation* out, std::size_t) override {
+                if (inbox_.empty()) return 0;
+                *out = inbox_.front();
+                inbox_.pop_back();
+                return 1;
+            }
+            std::size_t pendingCount() const override { return inbox_.size(); }
+            void flush() override {}
+            TransportStats stats() const override { return {}; }
+
+        private:
+            std::vector<RuntimeInvocation> inbox_;
+        };
+
+        RemoteEntityStore store(std::make_shared<StrayTransport>(), 10, 20,
+                                std::chrono::milliseconds{10});
+
+        EntityData data;
+        data.entityType = "Avatar";
+        if (store.load(1, "Avatar", data)) FAIL("stray responses must not satisfy load");
+    }
+    PASS();
+
     std::cout << "\nAll DBApp tests passed!" << std::endl;
     return 0;
 }

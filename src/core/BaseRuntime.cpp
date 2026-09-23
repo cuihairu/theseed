@@ -154,6 +154,11 @@ runtime::Entity* BaseRuntime::createEntity(const std::string& entityType) {
     }
 
     auto id = store_->allocId();
+    if (id == 0) {
+        // 分配失败（如 DBApp 失联时 RemoteEntityStore 超时返回 0）：拒绝注册，
+        // 避免 id=0 的实体与"无实体"哨兵语义冲突。
+        return nullptr;
+    }
     auto entity = it->second(id, runtime::EntitySide::Base);
     if (!entity) {
         return nullptr;

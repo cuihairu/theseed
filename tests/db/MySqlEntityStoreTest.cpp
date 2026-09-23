@@ -340,6 +340,57 @@ int main() {
         admin.execute("DROP USER IF EXISTS 'trap_cov'@'%'");
     }
 
+    // --- allocId readback 失败路径：把账号的每小时查询配额收紧到 2 并清零
+    // 计数（MySQL 资源配额先加后判：第 1 条 COM_QUERY 计 1/2 放行、
+    // 第 2 条计 2/2 被拒），allocId 的 upsert 成功、SELECT LAST_INSERT_ID()
+    // 被拒——命中 execute 成功、readback 失败的窗口。---
+    {
+        auto cfg = configFromEnv();
+        theseed::db::MySQLConnection admin(cfg.mysql);
+        CHECK(admin.connect(), "admin connect (quota trap)");
+        admin.execute("DROP USER IF EXISTS 'quota_cov'@'%'");
+        CHECK(admin.execute("CREATE USER 'quota_cov'@'%' IDENTIFIED BY 'quota_pw'"),
+              "create quota user");
+        CHECK(admin.execute("GRANT ALL ON `" + cfg.mysql.database + "`.* TO 'quota_cov'@'%'"),
+              "grant quota user all");
+
+        auto quotaCfg = cfg;
+        quotaCfg.mysql.user = "quota_cov";
+        quotaCfg.mysql.password = "quota_pw";
+        quotaCfg.autoCreateSchema = false;  // CREATE 是 COM_QUERY，会消耗配额
+        {
+            MySQLEntityStore store(quotaCfg);
+            CHECK(store.init(), "quota store init (no schema creation)");
+            CHECK(store.save(1, makeAvatar(1, 1, 1.0f, 0.0f)), "quota store warmup save");
+
+            // 配额 2 + 先加后判：upsert 消耗 1/2 放行，SELECT LAST_INSERT_ID()
+            // 计 2/2 被拒——正好卡进 execute 成功、readback 失败的窗口。
+            CHECK(admin.execute("ALTER USER 'quota_cov'@'%' WITH MAX_QUERIES_PER_HOUR 2"),
+                  "set hourly query quota");
+            // 杀掉 store 现有连接，确保收紧后的配额对后续语句生效
+            {
+                auto plist = admin.query(
+                    "SELECT id FROM information_schema.processlist "
+                    "WHERE user = 'quota_cov'");
+                CHECK(plist.has_value() && plist->next(), "find quota connection");
+                auto connId = plist->asUint64(0);
+                CHECK(admin.execute("KILL " + std::to_string(connId)),
+                      "kill quota connection");
+            }
+            CHECK(admin.execute("FLUSH USER_RESOURCES"), "reset resource counters");
+
+            CHECK(store.allocId() == 0, "allocId readback failure returns 0");
+            CHECK(store.lastError().find("allocId readback failed") != std::string::npos,
+                  "readback error surfaced");
+        }
+
+        // 解除配额并清零，避免同账号残留状态影响后续运行
+        CHECK(admin.execute("ALTER USER 'quota_cov'@'%' WITH MAX_QUERIES_PER_HOUR 0"),
+              "lift hourly quota");
+        CHECK(admin.execute("FLUSH USER_RESOURCES"), "reset counters after lift");
+        admin.execute("DROP USER IF EXISTS 'quota_cov'@'%'");
+    }
+
     std::cout << "\nMySQLEntityStoreTest: all passed\n";
     return 0;
 }

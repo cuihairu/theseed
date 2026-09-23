@@ -648,6 +648,30 @@ static void testRegisterFactoryValidation() {
     if (ok) PASS(); else FAIL("register factory validation");
 }
 
+// allocId 恒返回 0 的 store：模拟 DBApp 失联时 RemoteEntityStore 的超时语义，
+// 验证 createEntity 拒绝注册 id=0 实体。
+class AllocZeroStore final : public theseed::core::IEntityStore {
+public:
+    explicit AllocZeroStore(std::shared_ptr<InMemoryEntityStore> backing)
+        : backing_(std::move(backing)) {}
+
+    bool load(EntityId id, const std::string& entityType, theseed::core::EntityData& out) override {
+        return backing_->load(id, entityType, out);
+    }
+    bool save(EntityId id, const theseed::core::EntityData& data) override {
+        return backing_->save(id, data);
+    }
+    bool remove(EntityId id) override { return backing_->remove(id); }
+    EntityId allocId() override { return 0; }
+    std::vector<EntityId> listIdsByType(const std::string& entityType) override {
+        return backing_->listIdsByType(entityType);
+    }
+    std::vector<std::string> listEntityTypes() override { return backing_->listEntityTypes(); }
+
+private:
+    std::shared_ptr<InMemoryEntityStore> backing_;
+};
+
 static void testCreateEntityFactoryReturnsNull() {
     TEST("create entity with null-returning factory");
 
@@ -660,6 +684,23 @@ static void testCreateEntityFactoryReturnsNull() {
     ok = ok && rt->createEntity("NeverRegistered") == nullptr;
 
     if (ok) PASS(); else FAIL("null factory not handled");
+}
+
+static void testCreateEntityAllocZero() {
+    TEST("create entity rejects zero id from store");
+
+    auto backing = std::make_shared<InMemoryEntityStore>();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto rt = std::make_unique<BaseRuntime>(
+        transport, std::make_shared<AllocZeroStore>(backing), 1);
+    rt->registerEntityFactory("Avatar", makeFactory(makeAvatarDef()));
+
+    bool ok = rt->createEntity("Avatar") == nullptr;
+    ok = ok && rt->entityCount() == 0;
+    ok = ok && rt->findEntity(0) == nullptr;
+    ok = ok && backing->listIdsByType("Avatar").empty();
+
+    if (ok) PASS(); else FAIL("zero allocId not rejected");
 }
 
 static void testLoadEntityBranches() {
@@ -971,6 +1012,7 @@ int main() {
     testConstructorValidation();
     testRegisterFactoryValidation();
     testCreateEntityFactoryReturnsNull();
+    testCreateEntityAllocZero();
     testLoadEntityBranches();
     testSaveEntityBranches();
     testDispatchBranches();
