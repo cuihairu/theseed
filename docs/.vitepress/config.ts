@@ -106,7 +106,10 @@ export default defineConfig({
         {
           text: '8-reference 参考',
           collapsed: false,
-          items: [{ text: '来源追溯', link: '/design/8-reference/source-attribution' }],
+          items: [
+            { text: '来源追溯', link: '/design/8-reference/source-attribution' },
+            { text: '测试覆盖率报告', link: '/design/8-reference/coverage-report' },
+          ],
         },
       ],
     },
