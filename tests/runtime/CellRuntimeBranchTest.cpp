@@ -835,14 +835,18 @@ int main() {
         auto* timerEntity = cellA.findEntity(243);
         if (timerEntity == nullptr) return fail("create_cell_timer_entity");
         int timerFired = 0;
-        timerEntity->addTimer(std::chrono::milliseconds{0},
-                              [&timerFired](Entity&) { timerFired += 1; });
+        auto oneShotHandle = timerEntity->addTimer(std::chrono::milliseconds{0},
+                                                   [&timerFired](Entity&) { timerFired += 1; });
         int periodicFired = 0;
-        timerEntity->addPeriodicTimer(std::chrono::milliseconds{0},
-                                      [&periodicFired](Entity&) { periodicFired += 1; });
+        auto periodicHandle = timerEntity->addPeriodicTimer(std::chrono::milliseconds{0},
+                                                            [&periodicFired](Entity&) { periodicFired += 1; });
         scheduler.runOnce();
         if (timerFired != 1) return fail("cell_entity_timer_one_shot");
         if (periodicFired < 1) return fail("cell_entity_timer_periodic");
+        // 本块结束后还有多处 runOnce：periodic 每拍都会触发，
+        // 引用捕获的计数器届时已出 scope，必须在此取消。
+        cellA.cancelTimer(oneShotHandle);
+        cellA.cancelTimer(periodicHandle);
         ++g_checked;
     }
 

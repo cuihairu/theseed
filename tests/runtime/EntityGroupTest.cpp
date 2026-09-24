@@ -228,14 +228,17 @@ static void testDestroyGroup() {
     auto* g1 = mgr.createGroup(1);
     auto* g2 = mgr.createGroup(2);
 
+    // destroy 后 g1 悬垂，id 需提前留存。
+    const auto id1 = g1->id();
+
     bool ok = mgr.groupCount() == 2;
-    ok = ok && mgr.destroyGroup(g1->id());
+    ok = ok && mgr.destroyGroup(id1);
     ok = ok && mgr.groupCount() == 1;
-    ok = ok && mgr.findGroup(g1->id()) == nullptr;
+    ok = ok && mgr.findGroup(id1) == nullptr;
     ok = ok && mgr.findGroup(g2->id()) == g2;
 
     // Double destroy
-    ok = ok && !mgr.destroyGroup(g1->id());
+    ok = ok && !mgr.destroyGroup(id1);
 
     if (ok) PASS();
     else FAIL("destroy failed");

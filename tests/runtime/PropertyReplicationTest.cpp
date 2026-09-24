@@ -150,13 +150,8 @@ int main() {
         }
         if (!threw) return fail("decode_truncated_count");
 
-        threw = false;
-        try {
-            PropertyReplication::decodeDelta(std::span<const std::byte>(encoded2.data(), 6));
-        } catch (const std::invalid_argument&) {
-            threw = true;
-        }
-        if (!threw) return fail("decode_truncated_header");
+        // 单条 value 截断由下方 truncated 场景覆盖；header 截断已被
+        // count 一致性闸蕴含（每条最少 8 字节），不再单测。
 
         auto truncated = encoded2;
         truncated.resize(encoded2.size() - 1);
@@ -167,6 +162,34 @@ int main() {
             threw = true;
         }
         if (!threw) return fail("decode_truncated_value");
+
+        // count 超限：声称的条数超出 payload 剩余字节能容纳的最小条目数
+        //（防畸形 count 触发 reserve 内存放大）
+        std::vector<std::byte> evilCount(sizeof(std::uint32_t));
+        const std::uint32_t huge = 0xFFFFFFF0u;
+        std::memcpy(evilCount.data(), &huge, sizeof(huge));
+        threw = false;
+        try {
+            PropertyReplication::decodeDelta(evilCount);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) return fail("decode_count_exceeds_payload");
+
+        // 边界合法：count=1 的最小 payload（propertyId + valueSize=0）
+        std::vector<std::byte> minimal;
+        auto appendU32 = [&minimal](std::uint32_t v) {
+            auto* p = reinterpret_cast<const std::byte*>(&v);
+            minimal.insert(minimal.end(), p, p + 4);
+        };
+        appendU32(1);
+        appendU32(hpId);
+        appendU32(0);
+        const auto decodedMinimal = PropertyReplication::decodeDelta(minimal);
+        if (decodedMinimal.size() != 1 || decodedMinimal[0].propertyId != hpId
+            || !decodedMinimal[0].value.empty()) {
+            return fail("decode_minimal_entry");
+        }
     }
 
     return EXIT_SUCCESS;

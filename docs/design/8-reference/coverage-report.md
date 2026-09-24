@@ -68,12 +68,13 @@ gcovr 对同一行可能记多条计数条目（同一符号的多个 ABI 变体
 | `3fd7f0f` | MySQL allocId 回读失败（查询配额法）+ zero-id 创建防御 | **98.85%**（10464/10586） | **122** |
 | `6cfa8b7` | 覆盖率报告成文（122 miss 完整分类） | — | — |
 | 100% 冲刺 | 三批次：测试补强与死代码清理 → 98 miss（行级 99.1%）→ 显式豁免 131 行 → **行级 100.0%**（10441/10441） | **100.0%** | **0** |
-| 四批后修复 | loadEntity 在册 id 悬垂 UB 防御 + UInt32/64 defaultValue 无符号解析（10450/10450） | **100.0%** | **0** |
+| 四批后修复 | loadEntity 在册 id 悬垂 UB 防御 + UInt32/64 defaultValue 无符号解析 + decodeDelta count 一致性闸（10451/10451） | **100.0%** | **0** |
 
 > **分母变更记录**：`efc7c55`（TickScheduler run() 停止竞态修复）删除了 run() 中的
 > `stopRequested_` 清零行——非豁免分母 10441 → 10440，覆盖率保持 100.0%。第四批后
-> 的两处缺陷修复（loadEntity 在册防御 + UInt32/64 无符号解析）新增可执行行，
-> 分母 10440 → 10450，覆盖率保持 100.0%。本文其余章节的 10441 均为达成当时的
+> 的两处缺陷修复（loadEntity 在册防御 + UInt32/64 无符号解析）及 decodeDelta
+> count 一致性闸（连带删除被蕴含的 header 截断检查）合计新增可执行行，
+> 分母 10440 → 10451，覆盖率保持 100.0%。本文其余章节的 10441 均为达成当时的
 > 历史数字，以本表为当前口径。
 
 `31cc3ed` 一批消掉 31 条的手法：Entity.h 的 callCellWith/callBaseWith/callDefMethod/
@@ -383,7 +384,11 @@ destroy 后的真实加载路径，新增在册拒绝场景）。②EntityDefLoa
 UInt32/UInt64 defaultValue 原共用 `stoi`/`stoll`，域内合法值（>INT32_MAX /
 >INT64_MAX）抛未捕获 `std::out_of_range`；已拆 case 改用 `stoull`（Int32/Int64
 保持有符号解析的 fail-fast 语义），defaultValue 矩阵测试改用 UINT32_MAX /
-UINT64_MAX 锁死全域。分母 10440 → 10450，行覆盖保持 100.0%。
+UINT64_MAX 锁死全域。随后 ASan 树又照出 decodeDelta 的 count 一致性缺失
+（畸形 count 令 `reserve` 请求 GB 级分配，属内存放大）——新增 count 闸后，
+原循环内 header 截断检查被该闸数学蕴含（每条最少 8 字节 ⇒ 进入每条时
+cursor+剩余条数×8 ≤ payload 长度，归纳可证），冗余检查已删除。分母
+10440 → 10451，行覆盖保持 100.0%。
 
 ### 8.2 第三批：EntityQuery / BaseApp（2026-09-24）
 

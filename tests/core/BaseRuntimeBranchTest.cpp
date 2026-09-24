@@ -862,9 +862,10 @@ static void testCellCallEdgeVariants() {
     // EntityCall::isValid 只看 targetComponent 是否有值——bind(0) 也是合法
     // cell：销毁走 cell pending 路径，实体留在册等 cellDestroyed 收尾。
     auto* e = rt->createEntity("Avatar");
-    bool ok = rt->setCellEntityCall(e->id(), 0);
-    ok = ok && rt->destroyEntity(e->id());
-    ok = ok && rt->findEntity(e->id()) != nullptr;
+    const auto eId = e->id();  // cellDestroyed 后 e 析构，id 提前留存。
+    bool ok = rt->setCellEntityCall(eId, 0);
+    ok = ok && rt->destroyEntity(eId);
+    ok = ok && rt->findEntity(eId) != nullptr;
 
     // requestCreateCell：未知实体 → false（findEntity 空早退）。
     ok = ok && !rt->requestCreateCell(999, "Avatar", Vector3{}, 7, 9);
@@ -899,10 +900,10 @@ static void testCellCallEdgeVariants() {
     // cellDestroyed：pending 中的 e 完成 base 清理；非 pending 的 e4 清 cell 调用。
     ok = ok && dispatch(*rt, "entity.cellDestroyed", [&] {
         std::vector<std::byte> v;
-        appendU64(v, e->id());
+        appendU64(v, eId);
         return v;
     }());
-    ok = ok && rt->findEntity(e->id()) == nullptr;
+    ok = ok && rt->findEntity(eId) == nullptr;
     ok = ok && dispatch(*rt, "entity.cellDestroyed", [&] {
         std::vector<std::byte> v;
         appendU64(v, e4->id());

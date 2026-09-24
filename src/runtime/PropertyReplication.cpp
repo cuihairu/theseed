@@ -84,13 +84,19 @@ std::vector<PropertyDelta> PropertyReplication::decodeDelta(std::span<const std:
     std::memcpy(&count, payload.data() + cursor, sizeof(count));
     cursor += sizeof(count);
 
+    // count 与 payload 长度的一致性校验：每条 delta 在 wire 上至少占
+    // propertyId(4) + valueSize(4) = 8 字节，超出的 count 必为畸形消息。
+    // 没有这道闸，损坏的 count 会让下方 reserve 请求 GB 级分配（内存放大）。
+    constexpr std::size_t kMinEntryBytes = sizeof(PropertyId) + sizeof(std::uint32_t);
+    if (count > (payload.size() - cursor) / kMinEntryBytes) {
+        throw std::invalid_argument("property delta count exceeds payload size");
+    }
+
     std::vector<PropertyDelta> deltas;
     deltas.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
-        if (cursor + sizeof(PropertyId) + sizeof(std::uint32_t) > payload.size()) {
-            throw std::invalid_argument("property delta payload header is truncated");
-        }
-
+        // count 一致性闸已保证每条的 header（propertyId+valueSize 共 8 字节）
+        // 完整在界内，无需再单查 header 截断；value 部分仍需单独校验。
         PropertyDelta delta;
         std::uint32_t valueSize = 0;
         std::memcpy(&delta.propertyId, payload.data() + cursor, sizeof(delta.propertyId));
