@@ -323,3 +323,23 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_entity_query_store_test COMMAND theseed_entity_query_store_test)
+
+# EntityDefLoader 手写 XML 解析器的畸形输入矩阵（分支覆盖第二批）。
+add_executable(theseed_entity_def_parser_branch_test EntityDefParserBranchTest.cpp)
+
+target_link_libraries(
+    theseed_entity_def_parser_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_def_parser_branch_test COMMAND theseed_entity_def_parser_branch_test)
+
+# BaseRuntime 分支覆盖（第二批）：payload 边界矩阵 / 回调缺席 / send 失败 / sync 时序。
+add_executable(theseed_base_runtime_branch_test BaseRuntimeBranchTest.cpp)
+
+target_link_libraries(
+    theseed_base_runtime_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_base_runtime_branch_test COMMAND theseed_base_runtime_branch_test)

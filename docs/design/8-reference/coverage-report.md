@@ -325,3 +325,54 @@ createSchema 顺序执行三条 DDL（_entity_ids / _account_index / 索引）�
 分析工具：`gcovr --json` 的 branches 数组带 `throw` 属性，可精确分离异常边与
 业务分支（`--json` 不应用 LCOV_EXCL，与 §1.2 的 txt 口径坑不冲突——本节只做
 miss 分类，不做豁免对账）。
+
+### 8.1 第二批：BaseRuntime / EntityDefLoader（2026-09-24）
+
+新增 `tests/core/BaseRuntimeBranchTest.cpp`（18 场景）与
+`tests/core/EntityDefParserBranchTest.cpp`（20 场景），并对全部剩余 miss 逐行
+核对 gcov 文本定性。
+
+| 文件 | 起始 miss 行数 | 终值 | 新增场景可清 | 定性留置 |
+| --- | --- | --- | --- | --- |
+| BaseRuntime.cpp | 70 | 15 | 55 | 15 |
+| EntityDefLoader.cpp | 58 | 11 | 47 | 11 |
+| CellRuntime.cpp（第一批） | — | 60 | — | 60（多为 isValid 族，见 §8 上文） |
+
+BaseRuntime 剩余 15 行定性：
+
+1. **timer 回调 lambda 的 `findEntity` null 臂**（172-180 / 211-219，8 行）：
+   `completeBaseDestruction` 先 `cancelEntityTimers` 再 erase，且
+   `TimerWheel::advance` 出队时逐项检查 cancelled——"timer 存活但实体已出册"
+   的窗口不存在，属纵深防御。
+2. **`EntityCall::isValid()` 恒真族**（250 / 624 / 653 / 795，4 行）：
+   `isValid = targetComponent_.has_value()`，`bindCellEntityCall` 是唯一
+   emplace 路径且任意 ComponentId（含 0）都置值，"非空但无效"的 EntityCall
+   公共 API 不可构造——与 §8 第 1 类同族。
+3. `completeBaseDestruction` 幂等早退（264）、pumpInbound 循环 CFG 归因
+   （376）、syncToCells 同条件多副本边（666）。
+
+EntityDefLoader 剩余 11 行定性：
+
+1. **出口 phi / 短路链副本归因**（40 / 71 / 114 / 145 / 220 / 412）：三种
+   break 逻辑与全部解析出口均有场景，miss 是 gcc 对 `||` 链与函数出口 phi
+   的多副本边。
+2. **defaultValue switch 防御臂**（306 / 308 / 310 / 367 / 374）：可达类型
+   集合上 `fixedSize` 恒 >0、String/Blob 在 switch 前被拦截、switch 的
+   default 跳转对应不可达值。
+
+手法教训（本批新增）：
+
+- **gcovr 的 F/J 方向不能按直觉读**：防御/失败臂常被放在直落位，此时
+  `fallthrough=true` 的 miss 边恰是"条件为真的早退臂"。结论必须以
+  `gcov -b` 文本的 `branch N taken X%` 对照行执行计数核对后才可下。
+- **ctest 必须串行跑覆盖率**：`-j` 并行时多个测试进程并发写同一份共享库
+  gcda，数据大面积损坏且不可复现地表现为"某些边归零"。
+- 改测试后必须 `find . -name '*.gcda' -delete` 再全量重跑，否则 checksum
+  不匹配的 gcda 被静默拒写。
+- gcovr 对本仓库需同时加
+  `--gcov-ignore-errors=no_working_dir_found --gcov-ignore-parse-errors=negative_hits.warn_once_per_file`
+  （前者是 gcda 记录的工作目录丢失，后者是 gcc bug 68080 的 NegativeHits）。
+
+顺带发现、记录在案未修（既有行为，修复属功能变更）：`loadEntity` 对已在册
+id 无防御（`map::emplace` 冲突致指针悬垂 UB）；EntityDefLoader 的
+UInt32/UInt64 defaultValue 超出 `stoi`/`stoll` 上限时抛 `std::out_of_range`。
