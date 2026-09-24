@@ -343,3 +343,23 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_base_runtime_branch_test COMMAND theseed_base_runtime_branch_test)
+
+# EntityQuery 分支覆盖（第三批）：decode 尺寸错配矩阵 / 浮点全序矩阵 / Bool、String 结果边。
+add_executable(theseed_entity_query_branch_test EntityQueryBranchTest.cpp)
+
+target_link_libraries(
+    theseed_entity_query_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_query_branch_test COMMAND theseed_entity_query_branch_test)
+
+# BaseApp 分支覆盖（第三批）：未 init 防御臂 / 回调早退族 / TCP 生命周期分支。
+add_executable(theseed_base_app_branch_test BaseAppBranchTest.cpp)
+
+target_link_libraries(
+    theseed_base_app_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_base_app_branch_test COMMAND theseed_base_app_branch_test)

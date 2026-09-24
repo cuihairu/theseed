@@ -376,3 +376,56 @@ EntityDefLoader 剩余 11 行定性：
 顺带发现、记录在案未修（既有行为，修复属功能变更）：`loadEntity` 对已在册
 id 无防御（`map::emplace` 冲突致指针悬垂 UB）；EntityDefLoader 的
 UInt32/UInt64 defaultValue 超出 `stoi`/`stoll` 上限时抛 `std::out_of_range`。
+
+### 8.2 第三批：EntityQuery / BaseApp（2026-09-24）
+
+新增 `tests/core/EntityQueryBranchTest.cpp`（6 场景）与
+`tests/core/BaseAppBranchTest.cpp`（5 场景）。
+
+| 文件 | 起始 miss | 终值 | 新增场景可清 | 定性留置 |
+| --- | --- | --- | --- | --- |
+| EntityQuery.cpp | 45 边 / 24 行 | **0 边 / 0 行（全清）** | 45 边 | 0 |
+| BaseApp.cpp | 41 边 / 30 行 | 12 边 / 9 行 | 29 边 | 12 边 |
+
+EntityQuery 全清手法：
+
+1. **decodeNative 尺寸错配矩阵**（24 行 ×9 实例）：模板按 T 逐实例生成
+   CFG，需对 11 个定长类型各发一发 lhs 空 rawValue + rhs 截短 rawValue。
+2. **`!decodeNative(lhs) || !decodeNative(rhs)` 短路链三边**（43-93）：lhs
+   失败打跳转边、rhs 失败打第二条件两边——两发场景即全清每类型的 3 条
+   miss。
+3. **浮点 `<=>` 四结果矩阵**（84/89）：less/greater/equal/unordered 各一发，
+   NaN 触发 unordered（双向）；Bool（94）与 String（97）同样补齐三结果边。
+4. `QueryFilter::of(bool)` 的 false 臂（194）。
+
+BaseApp 剩余 12 边定性：
+
+1. **`EntityCall::isValid()` 恒真族**（310 / 365）：同 §8.1 BaseRuntime
+   定性——bind 恒置值，"非空但无效"公共不可构造。
+2. **init 工厂/恢复循环防御**（50 / 88）：循环遍历 `registry_.entityTypes()`
+   故 `createFactory` 恒非空；全新 runtime 上 `findEntitiesByType` 恒空。
+3. **恒非空防御与 ops 归因**（96 ×4 / 104 / 108 / 114 / 147）：构造函数
+   校验保证 transport_/runtime_ 恒非空；其余为 ProcessInfo / OpsServer::Config
+   聚合初始化的副本边。
+
+本批新手法教训：
+
+- **「坏尺寸」payload 必须逐类型构造**：固定 2 字节对 Int16/UInt16 恰是
+  合法尺寸，decode 成功后走真实比较而非 unordered。正解是每类型截短
+  一字节。
+- **零属性 def 打不开 EnterGame 空快照臂**：`buildFullPropertySnapshot`
+  对 null 存储直接抛 `invalid_argument`（存储按属性布局分配，零属性即
+  null）。正解是唯一属性带 `flags="Base"`——`buildFullPropertySnapshot
+  (PropertyFlag::Base)` 的语义是**排除** Base 标记属性。
+- **`requestCreateCell` 不绑定 cellCall**：EnterGame 后实体并无 cell 绑定，
+  此时 `destroyEntity` 是立即销毁并同步触发 `onEntityDestroyed` 清空会话
+  映射——测试随后 `findSessionByEntity` 拿到 null 再 `bindSessionToEntity`
+  会把 null 绑进会话表，下一拍 flush 段错误。延迟销毁需先显式
+  `setCellEntityCall`。
+- **僵尸会话注入法**：`takeClientSession(未连接的 ClientSession)` +
+  `bindSessionToEntity(raw, id)` 一发覆盖五类下行回调的"会话已断连"早退
+  臂与 cleanupClients 的 `findEntity` null 臂，无需任何真实 TCP。
+
+至此 src/core 目录全部分支 miss 归零或定性（BaseApp 12 边留置）。下一批
+候选：PostgreSQLEntityStore（335 边）/ MySQLEntityStore（313 边）等 SQL
+后端错误臂。
