@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [gcc-debug, clang-debug]
+        preset: [gcc-debug, clang-debug, gcc-sanitize]
     steps:
       - uses: actions/checkout@v7
 
