@@ -363,3 +363,13 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_base_app_branch_test COMMAND theseed_base_app_branch_test)
+
+# FileEntityStore 分支覆盖（第四批）：元文件防御臂 / 目录遍历跳过臂。
+add_executable(theseed_file_entity_store_branch_test FileEntityStoreBranchTest.cpp)
+
+target_link_libraries(
+    theseed_file_entity_store_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_file_entity_store_branch_test COMMAND theseed_file_entity_store_branch_test)

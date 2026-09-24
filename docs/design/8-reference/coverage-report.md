@@ -429,3 +429,96 @@ BaseApp 剩余 12 边定性：
 至此 src/core 目录全部分支 miss 归零或定性（BaseApp 12 边留置）。下一批
 候选：PostgreSQLEntityStore（335 边）/ MySQLEntityStore（313 边）等 SQL
 后端错误臂。
+
+### 8.3 第四批：SQL 后端与 FileEntityStore（2026-09-24）
+
+新增 `tests/db/MySqlBranchTest.cpp`、`tests/db/PgBranchTest.cpp`（需
+`THESEED_MYSQL_HOST` / `THESEED_PG_HOST` 环境，未设置时跳过）与
+`tests/core/FileEntityStoreBranchTest.cpp`（无外部依赖）。FileEntityStore
+与 RemoteEntityStore 用既有回环测试已有较高覆盖，本批只补缺口。
+
+| 文件 | 终值（gcov 文本口径） | 构成 |
+| --- | --- | --- |
+| FileEntityStore.cpp | **0（全清）** | — |
+| MySQLConnection.cpp | 32 行 | 17 行豁免区入口/never-exec + 15 行定性留置（见下） |
+| MySQLEntityStore.cpp | 14 行 | 全部定性留置 |
+| PostgreSQLEntityStore.cpp | 20 行 | 2 行豁免区 + 18 行定性留置 |
+| RemoteEntityStore.cpp | 1 行 | 函数出口聚合块（超时返回路径，L45） |
+
+起点口径说明：批前用 `gcovr --json` 统计业务 miss 边为 MySQLConnection 39 /
+MySQLEntityStore 41 / PGStore 54 / FileEntityStore 5 / RemoteEntityStore 4
+（合计 143）。**json 口径含两类伪影**：`-O2` 函数克隆（constprop/partial）
+未调用实例的全部边计 0；以及 gcov 文本核对时 `"0%" in line` 会把
+`taken 100%` 误判为 miss（"100%" 含 "0%" 子串）。终值一律以
+`gcov -b` 文本、精确正则 `taken N%` / `never executed`、剔除 `(throw)` 后
+的口径为准。
+
+本批清掉的场景：
+
+1. **FileEntityStore 5 边全清**：allocId 元文件读失败（chmod 000）与写失败
+   （`fs::create_directory(meta)` 目录 trick）——注意非 root 下 chmod 000
+   的文件 owner 仍可读，断言须写 `idA == 1 || idA == 6` 双态；listIdsByType
+   / listEntityTypes 的目录项跳过链用"实体 + 子目录 + 垃圾文件"混合目录。
+2. **bytesToUint64 低向 break**（MySQLConnection 26）：`SELECT '-42'`——
+   首字符 `'-' < '0'` 命中低向臂；`'not-a-number'` 首字符 `n > '9'` 只走
+   高向（`||` 短路链的 break 是同一个但 gcc 布局成两条边）。
+3. **sanitizeForTable 全谱系字符**（两 store 的 46-48）：`"AZ[az{09:_-"`
+   一串覆盖每个比较段的高低两向——大写、`'Z'` 之后 `'['`，小写、`'z'`
+   之后 `'{'`，数字、`'9'` 之后 `':'`，合法 `'_'`，非法 `'-'`。串合法不
+   超长，ensureTable 正常建表（sanitize 分支与 DDL 结果无关），收尾 DROP
+   `tbl_AZ_az_09___`。
+4. **MySQL 专属**：未 init 防御族、超长表名 DDL 失败（80 字符 > 64 上限，
+   MySQL **报错**）、空 blob 拒载、DROP 后 knownTables_ 缓存命中失败族、
+   DROP `_entity_ids` / `_account_index` / `tbl_Account` 连锁失败、charset
+   留空、二次 disconnect、asBytes 防御、空参数列表、wait_timeout=1 掉线
+   重连（autoReconnect true → 透明重连成功 / false → execute 失败）。
+5. **PG 镜像**：上列可行子集。PG 的 ensureTable 失败臂**无法 SQL-only
+   注入**——63 字节标识符**截断不报错**（与 MySQL 报错相反），DDL 失败臂
+   与 `!ensureTable()` 短路臂（load 184 / listIdsByType 277）留置。
+
+剩余 miss 定性（全部留置）：
+
+1. **never-exec 库内联边**（两 store 的 save/remove/queryAccount/
+   createAccount 语句行与闭合行，MySQLConnection 313/314/341/394/395/
+   410/411/445-447/458 等）：`std::string`/`ostringstream`/`unique_ptr`
+   与 mysql API 内联展开的私有边，`never executed` 且无业务语义。
+2. **恒真/恒假防御**：`ScopedMsTimer` 的 `if (emitter_)`（两 store 22/21，
+   两处实例化都传字面 lambda）、allocId 的 `!result->next()`（SELECT
+   LAST_INSERT_ID / RETURNING 恒一行）、`starts_with("tbl_")` false 臂
+   （LIKE / information_schema 查询保证前缀）、MySQLResult 以 null res
+   构造的 advance 臂（74）与 `cursor > rows.size()`（106，next() 到顶不
+   推进，cursor 上限即 size，防御冗余）。
+3. **EXCL 豁免区入口**：mysql_init / stmt_init 失败臂的 fallthrough 边
+   （168/255/339 等）指向已豁免的 OOM 区。
+4. **绑定/取回失败臂**（bind_param / bind_result / store_result /
+   fetch_column != 0）：需驱动级故障注入，SQL-only 不可达。
+5. **多语句排空 `more != nullptr` 臂**（MySQLConnection 229）：独立探针
+   与 fprintf 插桩均证明可达（`SELECT 1; SELECT 2; SELECT 3` 的后续结果
+   集非 null），但在全量测试负载下间歇 miss——环境时序敏感边，不追求
+   稳定命中（同第三批 TickScheduler run 竞态的处理）。
+6. **remove 的 DELETE 失败臂**（两 store 238/245）：表被 DROP 后即不在
+   `listEntityTypes` 结果里（SHOW TABLES / information_schema 实时查询），
+   "循环里 DELETE 失败"的两个前提互斥；驱动级故障注入面不在 SQL 层。
+
+本批新手法教训：
+
+- **SQL 表名大小写三连**：`tableName("Avatar")` 返回 `tbl_Avatar`（保留
+  大写）；PG 无引号标识符折叠小写、MySQL Linux 大小写敏感——测试 SQL 必
+ 须写 `"tbl_Avatar"`（PG 带双引号）/ `` `tbl_Avatar` ``（MySQL 反引号），
+  小写变体操作的是不存在的表（首轮 9+7 个失败全是它）。
+- **knownTables_ 缓存语义**：ensureTable 成功即缓存，DROP 后仍命中缓存跳
+  过 DDL → 后续 SQL 直接失败——这正是"DROP 后缓存命中失败族"场景的原理；
+  防御场景收尾必须用**新 store 实例**（缓存空 → ensureTable 重建）做
+  happy path 回归。
+- **libmysql 客户端四路对照法**：断言"某边不可达"前先用独立 C 探针对照
+  （mariadb connector vs Oracle libmysqlclient ×有无 OPT_RECONNECT）——
+  本批凭探针证明 229 可达从而避免了一次错误改码。注意 vcpkg 的
+  `unofficial-libmysql` 实际装的是 **libmariadb**，而 build 树 manifest 装
+  的是 **Oracle libmysqlclient**（C++ 实现，链接需 g++ + zstd）；探针编译
+  必须显式 `/usr/bin/g++`（`~/.local/bin/g++` 残废遮蔽）。
+- **gcda 累积假象**：改测试的迭代轮次若未清 gcda，旧场景边数会叠加进新
+  gcda（L227 循环 3 次 vs 实际 2 次）。终核前 `find . -name '*.gcda'
+  -delete` + 全量串行重跑是唯一可信口径。
+
+三棵树验证：gcc-coverage 114/114（SQL env）、clang18 108/108、gcc13
+108/108（后两树 SQL 后端 disabled，分支测试 target 天然不存在）。

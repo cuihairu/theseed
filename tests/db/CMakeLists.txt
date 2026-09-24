@@ -47,6 +47,17 @@ if(THESEED_MYSQL_ENABLED)
 
     add_test(NAME MySQLConnectionTest COMMAND theseed_mysql_connection_test)
     set_tests_properties(MySQLConnectionTest PROPERTIES RUN_SERIAL ON)
+
+    # MySQL 分支覆盖（第四批）：连接/存储层防御与失败分支，共用 theseed_test 库。
+    add_executable(theseed_mysql_branch_test MySqlBranchTest.cpp)
+
+    target_link_libraries(
+        theseed_mysql_branch_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
+
+    add_test(NAME MySqlBranchTest COMMAND theseed_mysql_branch_test)
+    set_tests_properties(MySqlBranchTest PROPERTIES RUN_SERIAL ON)
 endif()
 
 # PostgreSQL 集成测试：需要运行中的 PostgreSQL 实例，未配置 THESEED_PG_HOST 时跳过。
@@ -71,4 +82,15 @@ if(THESEED_POSTGRESQL_ENABLED)
 
     add_test(NAME PostgreSQLConnectionTest COMMAND theseed_pg_connection_test)
     set_tests_properties(PostgreSQLConnectionTest PROPERTIES RUN_SERIAL ON)
+
+    # PostgreSQL 分支覆盖（第四批）：存储层防御与失败分支，共用 theseed_test 库。
+    add_executable(theseed_pg_branch_test PgBranchTest.cpp)
+
+    target_link_libraries(
+        theseed_pg_branch_test
+        PRIVATE theseed_project_options
+        PRIVATE theseed_db)
+
+    add_test(NAME PgBranchTest COMMAND theseed_pg_branch_test)
+    set_tests_properties(PgBranchTest PROPERTIES RUN_SERIAL ON)
 endif()
