@@ -68,10 +68,13 @@ gcovr 对同一行可能记多条计数条目（同一符号的多个 ABI 变体
 | `3fd7f0f` | MySQL allocId 回读失败（查询配额法）+ zero-id 创建防御 | **98.85%**（10464/10586） | **122** |
 | `6cfa8b7` | 覆盖率报告成文（122 miss 完整分类） | — | — |
 | 100% 冲刺 | 三批次：测试补强与死代码清理 → 98 miss（行级 99.1%）→ 显式豁免 131 行 → **行级 100.0%**（10441/10441） | **100.0%** | **0** |
+| 四批后修复 | loadEntity 在册 id 悬垂 UB 防御 + UInt32/64 defaultValue 无符号解析（10450/10450） | **100.0%** | **0** |
 
 > **分母变更记录**：`efc7c55`（TickScheduler run() 停止竞态修复）删除了 run() 中的
-> `stopRequested_` 清零行——非豁免分母 10441 → 10440，覆盖率保持 100.0%。本文其余
-> 章节的 10441 均为达成当时的历史数字，以本表为当前口径。
+> `stopRequested_` 清零行——非豁免分母 10441 → 10440，覆盖率保持 100.0%。第四批后
+> 的两处缺陷修复（loadEntity 在册防御 + UInt32/64 无符号解析）新增可执行行，
+> 分母 10440 → 10450，覆盖率保持 100.0%。本文其余章节的 10441 均为达成当时的
+> 历史数字，以本表为当前口径。
 
 `31cc3ed` 一批消掉 31 条的手法：Entity.h 的 callCellWith/callBaseWith/callDefMethod/
 onPropertyChanged 模板按 (行, TU 实例) 计数，用 gcov 逐 TU 定位（gcc≥9 的 gcno 带
@@ -373,9 +376,14 @@ EntityDefLoader 剩余 11 行定性：
   `--gcov-ignore-errors=no_working_dir_found --gcov-ignore-parse-errors=negative_hits.warn_once_per_file`
   （前者是 gcda 记录的工作目录丢失，后者是 gcc bug 68080 的 NegativeHits）。
 
-顺带发现、记录在案未修（既有行为，修复属功能变更）：`loadEntity` 对已在册
-id 无防御（`map::emplace` 冲突致指针悬垂 UB）；EntityDefLoader 的
-UInt32/UInt64 defaultValue 超出 `stoi`/`stoll` 上限时抛 `std::out_of_range`。
+顺带发现的两处缺陷已修（2026-09-24，第四批后）：①`loadEntity` 对已在册 id
+曾无防御——`map::emplace` 冲突时新实体已被 move、临时 pair 析构，继续用返回
+指针即悬垂 UB；现已在册 id 直接拒绝返回 nullptr（`testFactoryHook` 改走
+destroy 后的真实加载路径，新增在册拒绝场景）。②EntityDefLoader 的
+UInt32/UInt64 defaultValue 原共用 `stoi`/`stoll`，域内合法值（>INT32_MAX /
+>INT64_MAX）抛未捕获 `std::out_of_range`；已拆 case 改用 `stoull`（Int32/Int64
+保持有符号解析的 fail-fast 语义），defaultValue 矩阵测试改用 UINT32_MAX /
+UINT64_MAX 锁死全域。分母 10440 → 10450，行覆盖保持 100.0%。
 
 ### 8.2 第三批：EntityQuery / BaseApp（2026-09-24）
 

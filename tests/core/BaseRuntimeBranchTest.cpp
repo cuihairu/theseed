@@ -257,10 +257,14 @@ static void testFactoryHook() {
     auto* created = rt->createEntity("Avatar");
     bool ok = hooks == 1;
 
+    auto eid = created->id();  // destroy 后 created 悬垂，id 需提前留存。
     created->setProperty<std::int32_t>(0, 9);
-    rt->saveEntity(created->id());
-    auto* loaded = rt->loadEntity(created->id(), "Avatar");
+    rt->saveEntity(eid);
+    rt->destroyEntity(eid);
+    // destroy 后 id 已不在册，loadEntity 走真实加载路径，第二次触发 hook。
+    auto* loaded = rt->loadEntity(eid, "Avatar");
     ok = ok && loaded != nullptr;
+    ok = ok && loaded->getProperty<std::int32_t>(0) == 9;
     ok = ok && hooks == 2;
 
     if (ok) PASS(); else FAIL("factory hook");
@@ -288,6 +292,11 @@ static void testLoadRestoreDestroyEdges() {
     ok = ok && rt->destroyEntity(rt->findEntitiesByType("Avatar").front()->id());
     ok = ok && rt->restoreEntities("Avatar") == 1;
     ok = ok && rt->findEntitiesByType("Avatar").size() == 1;
+
+    // 在册 id 重复 loadEntity 被拒绝（emplace 冲突曾导致悬垂指针），原实体不受影响。
+    auto* kept = rt->findEntitiesByType("Avatar").front();
+    ok = ok && rt->loadEntity(kept->id(), "Avatar") == nullptr;
+    ok = ok && rt->findEntity(kept->id()) == kept;
 
     // destroyEntity 未知 id。
     ok = ok && !rt->destroyEntity(424242);

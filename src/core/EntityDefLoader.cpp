@@ -320,15 +320,25 @@ std::unique_ptr<EntityDef> EntityDefLoader::loadFromString(const std::string& xm
                                     std::memcpy(defaultValue.data(), &v, 2);
                                     break;
                                 }
-                                case runtime::PropertyType::Int32:
-                                case runtime::PropertyType::UInt32: {
+                                case runtime::PropertyType::Int32: {
                                     auto v = static_cast<std::uint32_t>(std::stoi(defaultStr));
                                     std::memcpy(defaultValue.data(), &v, 4);
                                     break;
                                 }
-                                case runtime::PropertyType::Int64:
-                                case runtime::PropertyType::UInt64: {
+                                // UInt32/UInt64 域可超出 stoi/stoll 上限，
+                                // 用无符号解析避免合法域值抛 std::out_of_range。
+                                case runtime::PropertyType::UInt32: {
+                                    auto v = static_cast<std::uint32_t>(std::stoull(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 4);
+                                    break;
+                                }
+                                case runtime::PropertyType::Int64: {
                                     auto v = static_cast<std::uint64_t>(std::stoll(defaultStr));
+                                    std::memcpy(defaultValue.data(), &v, 8);
+                                    break;
+                                }
+                                case runtime::PropertyType::UInt64: {
+                                    auto v = static_cast<std::uint64_t>(std::stoull(defaultStr));
                                     std::memcpy(defaultValue.data(), &v, 8);
                                     break;
                                 }

@@ -268,8 +268,8 @@ static void testDefaultMatrixRemainingTypes() {
         <Property name="u8"  type="UInt8"  defaultValue="200"/>
         <Property name="u16" type="UInt16" defaultValue="60000"/>
         <Property name="i32" type="Int32"  defaultValue="-70000"/>
-        <Property name="u32" type="UInt32" defaultValue="2000000000"/>
-        <Property name="u64" type="UInt64" defaultValue="9000000000000000000"/>
+        <Property name="u32" type="UInt32" defaultValue="4294967295"/>
+        <Property name="u64" type="UInt64" defaultValue="18446744073709551615"/>
         <Property name="f32" type="Float32" defaultValue="1.5"/>
     </Properties>
 </EntityDef>
@@ -298,17 +298,15 @@ static void testDefaultMatrixRemainingTypes() {
     ok = ok && u32->defaultValue.size() == 4;
     std::uint32_t u32v = 0;
     std::memcpy(&u32v, u32->defaultValue.data(), 4);
-    // stoi 上限内的 UInt32：> INT32_MAX 的 defaultValue 会让解析器抛
-    // std::out_of_range（既有行为，非本测试目标）。
-    ok = ok && u32v == 2000000000u;
+    // UINT32_MAX 超出 stoi 上限：无符号解析（stoull）必须收下全部合法域值。
+    ok = ok && u32v == 4294967295u;
 
     const auto* u64 = def->findProperty("u64");
     ok = ok && u64->defaultValue.size() == 8;
     std::uint64_t u64v = 0;
     std::memcpy(&u64v, u64->defaultValue.data(), 8);
-    // 9e18 是 stoll 能收下的 UInt64 上半域最大值附近——超过 INT64_MAX 的
-    // defaultValue 会让解析器抛 std::out_of_range（既有行为，非本测试目标）。
-    ok = ok && u64v == 9000000000000000000ull;
+    // UINT64_MAX 超出 stoll 上限：无符号解析（stoull）必须收下全部合法域值。
+    ok = ok && u64v == 18446744073709551615ull;
 
     const auto* f32 = def->findProperty("f32");
     ok = ok && f32->defaultValue.size() == 4;

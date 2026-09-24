@@ -191,6 +191,11 @@ runtime::Entity* BaseRuntime::loadEntity(runtime::EntityId id, const std::string
     if (it == factories_.end()) {
         return nullptr;
     }
+    if (entities_.contains(id)) {
+        // 已在册的 id 拒绝重复加载：下方 emplace 冲突时新实体已被 move、
+        // 临时 pair 随即析构，继续执行会让返回的 ptr 悬垂（use-after-free）。
+        return nullptr;
+    }
 
     EntityData data;
     if (!store_->load(id, entityType, data)) {
