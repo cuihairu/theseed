@@ -966,6 +966,147 @@ int main() {
         ++g_checked;
     }
 
+    // ---- P. 泵路径（syncToBases / flushClientEvents / AoI / witness）与残留失败臂 ----
+    {
+        // P1. map 残留指向已销毁空间：findEntity / removeEntity 的 sr null 臂
+        if (!cellA.createSpace(810, "p_space")) return fail("p_make_space");
+        auto& pOrphan = keepAlive.emplace_back(401, EntitySide::Cell, def);
+        cellA.addEntity(pOrphan, Vector3{1.0F, 0.0F, 0.0F}, 810);
+        pOrphan.activate();
+        cellA.findSpaceRuntime(810)->space().removeEntity(401);  // 名册直删，map 残留
+        if (!cellA.destroySpace(810)) return fail("p_destroy_space");  // 名册无 401，map 条目残留
+        if (cellA.findEntity(401) != nullptr) return fail("p_find_entity_stale_map");
+        cellA.removeEntity(401);  // map 残留条目清理：findEntity null + sr null 臂
+        cellA.removeEntity(4242);  // 纯未知实体：map find miss 臂
+        ++g_checked;
+
+        // P2. teleportEntity 直调失败臂
+        auto& tpSrc = keepAlive.emplace_back(402, EntitySide::Cell, def);
+        addLocal(cellA, tpSrc, Vector3{2.0F, 0.0F, 0.0F});
+        if (cellA.teleportEntity(402, 100, Vector3{})) return fail("p_tele_same_space");
+        if (cellA.teleportEntity(4242, 200, Vector3{})) return fail("p_tele_unknown_entity");
+        if (cellA.teleportEntity(402, 424242, Vector3{})) return fail("p_tele_no_target_space");
+        cellA.spaceRuntime().space().removeEntity(402);  // map 在、名册缺 → findEntity null
+        if (cellA.teleportEntity(402, 200, Vector3{})) return fail("p_tele_missing_from_roster");
+        cellA.removeEntity(402);
+        ++g_checked;
+
+        // P3. 未 attach scheduler 的 runtime：createSpace/destroySpace 的 scheduler_ 判空臂
+        {
+            CellRuntime detached(makeSpace(900, "detached_space"), transport, 91);
+            if (!detached.createSpace(901, "d2")) return fail("p_detached_create");
+            if (!detached.destroySpace(901)) return fail("p_detached_destroy");
+        }
+        ++g_checked;
+
+        // P4. createCell 实体的 timer lambda：实体销毁后触发 → findEntity null → cb 不执行
+        {
+            if (!cellA.handleCreateCell(makeInv(403, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 403, 71, Vector3{})))) {
+                return fail("p_timer_cell_create");
+            }
+            auto* pTimerEntity = cellA.findEntity(403);
+            if (pTimerEntity == nullptr) return fail("p_timer_entity");
+            int neverFired = 0;
+            pTimerEntity->addTimer(std::chrono::milliseconds{0},
+                                   [&neverFired](Entity&) { neverFired += 1; });
+            std::vector<std::byte> destroyWire = epochWire(0);
+            const std::uint32_t pBase = 72;
+            appendU32(destroyWire, pBase);
+            if (!cellA.handleDestroyCell(makeInv(403, 11, "Avatar", "entity.destroyCell",
+                                                  destroyWire))) {
+                return fail("p_timer_destroy");
+            }
+            scheduler.runOnce();  // timer 触发：findEntity(403) 已 null → if(e) false 臂
+            if (neverFired != 0) return fail("p_timer_should_not_fire");
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // P5. clientEvent 泵：createCell 实体 + emitToClient
+        {
+            if (!cellA.handleCreateCell(makeInv(411, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 411, 73, Vector3{})))) {
+                return fail("p_ce_create");
+            }
+            auto* ceEntity = cellA.findEntity(411);
+            if (ceEntity == nullptr) return fail("p_ce_entity");
+            // 无 baseCall：泵 continue，事件积压
+            ceEntity->emitToClient("orphan", std::span<const std::byte>{});
+            scheduler.runOnce();
+            clearTransport(*transport);
+            // bind 后连同积压一起合包发出（含空名空 data 变体）
+            ceEntity->bindBaseEntityCall(74);
+            ceEntity->emitToClient("ui.ping", std::vector<std::byte>{std::byte{0x01}});
+            ceEntity->emitToClient("", std::span<const std::byte>{});
+            scheduler.runOnce();
+            if (!drainMatches(*transport, 411, 74, "entity.clientEvent")) return fail("p_ce_sent");
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // P6. syncToBases 泵：createCell 实体 + 非 Cell flag 属性 delta（hp 未声明 flag）
+        {
+            if (!cellA.handleCreateCell(makeInv(412, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 412, 75, Vector3{})))) {
+                return fail("p_sb_create");
+            }
+            auto* sbEntity = cellA.findEntity(412);
+            if (sbEntity == nullptr) return fail("p_sb_entity");
+            // 无 baseCall：dirty 但泵 continue
+            sbEntity->setProperty<std::int32_t>(hpId, 5);
+            scheduler.runOnce();
+            clearTransport(*transport);
+            sbEntity->bindBaseEntityCall(76);
+            sbEntity->setProperty<std::int32_t>(hpId, 6);
+            scheduler.runOnce();
+            if (!drainMatches(*transport, 412, 76, "property.syncToBase")) return fail("p_sb_sent");
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // P7. AoI enter/leave + witness.propertySync 泵
+        {
+            if (!cellA.createSpace(820, "aoi_space")) return fail("p_aoi_space");
+            auto& watcher = keepAlive.emplace_back(421, EntitySide::Cell, def);
+            cellA.addEntity(watcher, Vector3{0.0F, 0.0F, 0.0F}, 820);
+            watcher.activate();
+            watcher.bindBaseEntityCall(78);
+            auto& moving = keepAlive.emplace_back(422, EntitySide::Cell, def);
+            cellA.addEntity(moving, Vector3{50.0F, 0.0F, 0.0F}, 820);  // 初始视图外
+            moving.activate();
+            moving.bindBaseEntityCall(79);
+
+            auto& witness = cellA.findSpaceRuntime(820)->ensureWitness(watcher, 10.0F);
+            scheduler.runOnce();  // 初始视图快照：moving 不在视图，无事件
+            if (witness.entityInView(moving.id())) return fail("p_aoi_initial_out");
+            clearTransport(*transport);
+
+            // 进视图 → aoi.enter（typeName 非空 + pos flag=1 臂）
+            cellA.findSpaceRuntime(820)->space().updateEntityPosition(
+                moving.id(), Vector3{2.0F, 0.0F, 0.0F});
+            scheduler.runOnce();
+            if (!witness.entityInView(moving.id())) return fail("p_aoi_now_in");
+            if (!drainMatches(*transport, 421, 78, "aoi.enter")) return fail("p_aoi_enter");
+
+            // witness delta：属性脏、位置未动（hasPosition=false 臂）
+            moving.setProperty<std::int32_t>(hpId, 33);
+            scheduler.runOnce();
+            if (!drainMatches(*transport, 421, 78, "witness.propertySync")) {
+                return fail("p_witness_sync");
+            }
+            clearTransport(*transport);
+
+            // 出视图 → aoi.leave
+            cellA.findSpaceRuntime(820)->space().updateEntityPosition(
+                moving.id(), Vector3{999.0F, 0.0F, 0.0F});
+            scheduler.runOnce();
+            if (!drainMatches(*transport, 421, 78, "aoi.leave")) return fail("p_aoi_leave");
+            clearTransport(*transport);
+        }
+        ++g_checked;
+    }
+
     cellB.detach(scheduler);
     cellA.detach(scheduler);
     std::cout << "cell_runtime_branch_test checks=" << g_checked << '\n';

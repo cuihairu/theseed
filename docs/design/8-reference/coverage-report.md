@@ -294,3 +294,34 @@ createSchema 顺序执行三条 DDL（_entity_ids / _account_index / 索引）�
 **守则**：新增产品代码不允许留下无理由的 miss——要么写测试，要么按 §5 的格式
 加带理由的豁免标记并在本文档补一行定性。评审覆盖率变化时先看分母、再看豁免
 清单 diff，最后才看百分比本身。
+
+---
+
+## 8. 分支覆盖：基线与定性（2026-09-24）
+
+分支口径**不设 100% 目标**，本节记录基线与 miss 构成定性，供后续增量冲刺参考。
+
+| 口径 | 值 |
+| --- | --- |
+| 原始分支覆盖率 | 62.7%（7530 / 12003） |
+| 异常边（gcov `throw` 分支） | 3567 条，其中 3533 miss——gcc 给每条可抛语句生成 normal/exception 两条边，exception 边无故障注入不可达 |
+| **剔除异常边后的业务分支覆盖率** | **88.2%**（7507 / 8514） |
+
+业务分支 miss（1014 个）构成定性：
+
+1. **短路链防御臂不可达**：`!p || !p->isValid()` 类的"非空但无效"臂——如
+   `Entity::bindBaseEntityCall` 必带 targetComponent（emplace 有值）、clear 即
+   reset，"存在但 optional 无值"状态公共 API 不可构造（CellRuntime 约 15-20 个
+   miss 属此类：220/927/958/1016 等行）。
+2. **STL 内联归因**：`std::vector` 构造、`map::emplace` 等调用行上的异常边变体。
+3. **真业务失败臂**：`||` 短路中间臂（实体非空但 state 不符）、AoI observer/
+   target 在事件产生后被移除等时序状态——可测但需针对性场景，按需补充。
+
+泵路径（`syncToBases` / `flushClientEvents` / `flushAoIEvents` / `flushWitnessSync`）
+的端到端驱动已由 `CellRuntimeBranchTest` P 组建立先例：createCell 造 ownedEntities_
+实体 + `bindBaseEntityCall` + `emitToClient`/`setProperty`/`ensureWitness` +
+`scheduler.runOnce()` + drain 断言。
+
+分析工具：`gcovr --json` 的 branches 数组带 `throw` 属性，可精确分离异常边与
+业务分支（`--json` 不应用 LCOV_EXCL，与 §1.2 的 txt 口径坑不冲突——本节只做
+miss 分类，不做豁免对账）。
