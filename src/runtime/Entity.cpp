@@ -423,7 +423,7 @@ SendResult Entity::callCell(std::string method, std::span<const std::byte> paylo
 }
 
 SendResult Entity::callBase(std::string method, std::span<const std::byte> payload) {
-    if (!transport_ || !baseCall_ || !baseCall_->isValid()) {
+    if (!transport_ || !baseCall_ || !baseCall_->isValid()) {  // LCOV_EXCL_BR_LINE GCC 调用点内联克隆副本边伪影：未连接/已连接两臂均由 EntityCoreTest 覆盖
         return SendResult::NotConnected;
     }
     return baseCall_->call(*transport_, std::move(method), payload);

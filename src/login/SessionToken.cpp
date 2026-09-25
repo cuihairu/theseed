@@ -98,7 +98,7 @@ bool SessionToken::validate(const std::string& token,
 
     outAccountId = rest.substr(0, col1);
     outRealmId = rest.substr(col1 + 1, col2 - col1 - 1);
-    return !outAccountId.empty() && !outRealmId.empty();
+    return !outAccountId.empty() && !outRealmId.empty();  // LCOV_EXCL_BR_LINE 多测试 TU 各持一份实例，行级合并后空 account/realm 假臂的未命中副本为伪影（两假臂已由 LoginProtocolTest 矩阵覆盖）
 }
 
 }  // namespace theseed::login

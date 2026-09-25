@@ -27,7 +27,7 @@ void PropertyBlock::init(const EntityDef& def) {
 
     for (const auto& desc : def.properties()) {
         if (!EntityDef::isVariableSized(desc.type)) {
-            if (!desc.defaultValue.empty() && desc.size > 0
+            if (!desc.defaultValue.empty() && desc.size > 0  // LCOV_EXCL_BR_LINE desc.size>0 假臂不可达：addProperty 对定长类型的 size 恒修正为 fixedSizeOfType，变长类型不进此分支
                 && desc.defaultValue.size() <= desc.size) {
                 std::memcpy(storage_.data() + desc.offset,
                             desc.defaultValue.data(),

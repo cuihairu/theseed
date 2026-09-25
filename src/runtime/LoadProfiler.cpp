@@ -122,7 +122,7 @@ void EntityTypeLoadAggregator::record(const EntityLoadSnapshot& snapshot) {
 
 EntityTypeLoadSnapshot EntityTypeLoadAggregator::snapshot(const std::string& typeId) const {
     auto it = perType_.find(typeId);
-    if (it == perType_.end()) return EntityTypeLoadSnapshot{};
+    if (it == perType_.end()) return EntityTypeLoadSnapshot{};  // LCOV_EXCL_BR_LINE EntityTypeLoadSnapshot{} 聚合内 string 成员构造的内联分支伪影（同 RealmApp ProcessInfo 族），end() 早退臂已由未记录类型查询覆盖
     return it->second;
 }
 

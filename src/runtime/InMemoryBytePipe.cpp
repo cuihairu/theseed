@@ -8,8 +8,8 @@ namespace theseed::runtime {
 
 std::pair<std::shared_ptr<InMemoryBytePipe>,
           std::shared_ptr<InMemoryBytePipe>> InMemoryBytePipe::createPair() {
-    auto a = std::shared_ptr<InMemoryBytePipe>(new InMemoryBytePipe());
-    auto b = std::shared_ptr<InMemoryBytePipe>(new InMemoryBytePipe());
+    auto a = std::shared_ptr<InMemoryBytePipe>(new InMemoryBytePipe());  // LCOV_EXCL_BR_LINE shared_ptr 控制块构造内联分支伪影
+    auto b = std::shared_ptr<InMemoryBytePipe>(new InMemoryBytePipe());  // LCOV_EXCL_BR_LINE 同上
     a->peer_ = b;
     b->peer_ = a;
     return {a, b};
@@ -63,7 +63,7 @@ void InMemoryBytePipe::pump() {
         std::function<void(std::span<const std::byte>)> callback;
         {
             std::lock_guard peerLock(peer->mutex_);
-            callback = peer->onReceived_;
+            callback = peer->onReceived_;  // LCOV_EXCL_BR_LINE std::function 拷贝内联分支伪影
         }
 
         if (callback) {

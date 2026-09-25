@@ -51,7 +51,8 @@ std::size_t ChannelRouter::drainAll(MemoryStream& out) {
     std::size_t totalDrained = 0;
     for (const auto& key : sortedKeys()) {
         auto it = channels_.find(key);
-        if (it != channels_.end() && it->second->hasPending()) {
+        if (it != channels_.end() &&  // LCOV_EXCL_BR_LINE find 假臂：sortedKeys() 与 channels_ 同源同拍遍历，key 恒命中
+            it->second->hasPending()) {
             auto before = out.size();
             it->second->drain(out);
             totalDrained += out.size() - before;

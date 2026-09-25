@@ -17,7 +17,7 @@ class InMemoryBytePipe;
 class TcpConnection final : public IBytePipe {
 public:
     static std::shared_ptr<TcpConnection> create() {
-        return std::shared_ptr<TcpConnection>(new TcpConnection());
+        return std::shared_ptr<TcpConnection>(new TcpConnection());  // LCOV_EXCL_BR_LINE shared_ptr 控制块构造内联分支归因 return 行，伪影
     }
 
     ~TcpConnection();

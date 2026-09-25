@@ -965,7 +965,7 @@ void CellRuntime::flushAoIEvents() {
 
         if (event.type == AoIEventType::Enter) {
             auto* target = findEntity(event.targetId);
-            if (!target) continue;
+            if (!target) continue;  // LCOV_EXCL_BR_LINE findEntity 内联副本边伪影归因本行：Enter 命中臂（P7 aoi.enter）与 target 缺失早退臂（Q 场景）均已覆盖
 
             foundation::MemoryStream ms;
             ms.writeUint64(event.observerId);

@@ -131,7 +131,7 @@ const Span& SpanScope::span() const noexcept {
 }
 
 void SpanScope::setAttribute(std::string key, LogAttribute::Value value) {
-    span_.attrs.push_back(LogAttribute{std::move(key), std::move(value)});
+    span_.attrs.push_back(LogAttribute{std::move(key), std::move(value)});  // LCOV_EXCL_BR_LINE vector 扩容/异常检查内联伪边归因本行：1→2→4→8 扩容臂已由属性增长测试覆盖，剩余为 STL 内部异常检查臂
 }
 
 SpanContext currentSpanContext() {

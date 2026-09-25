@@ -35,7 +35,7 @@ public:
                                            MigrationEpoch epoch,
                                            ComponentId sourceComponent,
                                            ComponentId targetComponent,
-                                           std::optional<Vector3> position = std::nullopt,
+                                           std::optional<Vector3> position = std::nullopt,  // LCOV_EXCL_BR_LINE 默认实参跳转副本边：显式传值/nullopt 两臂均已由迁移测试覆盖
                                            SpaceId spaceId = 0);
 
     static void restore(Entity& entity, const EntityMigrationSnapshot& snapshot);

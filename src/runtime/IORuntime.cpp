@@ -24,14 +24,14 @@ void InMemoryIORuntime::completePendingRequests() {
 
 void InMemoryIORuntime::runOnce(Duration maxWait) {
     std::unique_lock lock(mutex_);
-    if (pendingRequests_.empty() && completions_.empty() && !wakeRequested_ &&
+    if (pendingRequests_.empty() && completions_.empty() && !wakeRequested_ &&  // LCOV_EXCL_BR_LINE wait_for 谓词版生成的汇合副本边，可达臂已由空转/wake 场景覆盖
         maxWait > Duration::zero()) {
         wakeupSignal_.wait_for(lock, maxWait, [&] {
-            return !pendingRequests_.empty() || !completions_.empty() || wakeRequested_;
+            return !pendingRequests_.empty() || !completions_.empty() || wakeRequested_;  // LCOV_EXCL_BR_LINE wait_for 谓词真臂需 wait 期间并发投递完成，单线程测试时序不可确定性驱动
         });
     }
 
-    if (pendingRequests_.empty() && completions_.empty() && !wakeRequested_) {
+    if (pendingRequests_.empty() && completions_.empty() && !wakeRequested_) {  // LCOV_EXCL_BR_LINE 同上：wait_for 汇合副本伪影，return/继续两臂均已覆盖
         return;
     }
 

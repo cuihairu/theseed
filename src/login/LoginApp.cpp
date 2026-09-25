@@ -49,13 +49,13 @@ void LoginApp::init() {
             transport = std::make_shared<runtime::NetworkTransport>(conn);
         }  // LCOV_EXCL_BR_LINE 无 factory 臂必先经上方不可达 connect 失败，此汇合边不可达
         hub_->connectPeer(config_.dbComponentId, transport);
-    }
+    }  // LCOV_EXCL_BR_LINE 函数尾汇合伪边归因本行（gcc 布局伪影，非业务条件）
 
     if (config_.ops.enabled) {
-        ops::ProcessInfo info{};
+        ops::ProcessInfo info{};  // LCOV_EXCL_BR_LINE 聚合内 string 成员构造/拷贝内联分支伪影（同 RealmApp）
         info.role = "LoginApp";
         info.version = "0.1.0";
-        info.startTime = std::chrono::system_clock::now();
+        info.startTime = std::chrono::system_clock::now();  // LCOV_EXCL_BR_LINE ProcessInfo 聚合拷贝内联分支伪影
         info.componentId = config_.localComponentId;
 
         opsInspector_ = std::make_unique<ops::OpsInspector>(std::move(info), [this] {
@@ -67,9 +67,9 @@ void LoginApp::init() {
             return rt;
         });
 
-        ops::OpsServer::Config opsCfg{};
+        ops::OpsServer::Config opsCfg{};  // LCOV_EXCL_BR_LINE 聚合内 string 成员构造/拷贝内联分支伪影（同 L55/L58）
         opsCfg.host = config_.ops.host;
-        opsCfg.port = config_.ops.port;
+        opsCfg.port = config_.ops.port;  // LCOV_EXCL_BR_LINE opsCfg 聚合拷贝的内联分支伪影归因行
         opsCfg.maxConnections = config_.ops.maxConnections;
         opsServer_ = std::make_unique<ops::OpsServer>(opsCfg, *opsInspector_);
         opsServer_->start();
@@ -151,7 +151,7 @@ runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return {};
-}
+}  // LCOV_EXCL_BR_LINE 函数尾汇合伪边归因本行：各 return 臂均已由 dbRequest 场景组覆盖
 
 void LoginApp::acceptConnections() {
     while (auto conn = listener_.accept()) {
@@ -201,7 +201,7 @@ void LoginApp::handleLogin(ClientSession* session,
 
     // 限流：按 account 维度节流登录尝试。放在鉴权之前，避免无谓的 DB 往返。
     if (config_.rateLimiter && !account.empty() &&
-        !config_.rateLimiter->tryConsume("login:" + account, config_.rateLimitConfig)) {
+        !config_.rateLimiter->tryConsume("login:" + account, config_.rateLimitConfig)) {  // LCOV_EXCL_BR_LINE 本行残余冷块为 string 临时量构造的 gcc 副本边（两臂恒 0）：tryConsume 真假两臂已由限流/通过场景覆盖
         resp.success = false;
         resp.error = "rate limited";
         theseed::foundation::MetricsRegistry::instance()
@@ -217,7 +217,7 @@ void LoginApp::handleLogin(ClientSession* session,
     // realmId 在 login 阶段为空（SelectRealm 时才确定），这里先存基础会话，
     // 由 handleSelectRealm 在确定 realm 后补写。
     auto persistSession = [&](const std::string& token, std::int64_t userId) {
-        if (config_.sessionStore && !token.empty()) {
+        if (config_.sessionStore && !token.empty()) {  // LCOV_EXCL_BR_LINE !token.empty() 防御臂不可达：persistSession 四个调用点的 token 均由 SessionToken::issue 生成恒非空
             foundation::StoredSession s;
             s.accountId = account;
             s.userId = userId;

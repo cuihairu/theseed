@@ -28,7 +28,7 @@ void RealmApp::init() {
     listener_.listen(config_.listenHost, config_.listenPort);
 
     if (config_.ops.enabled) {
-        ops::ProcessInfo info{};
+        ops::ProcessInfo info{};  // LCOV_EXCL_BR_LINE 聚合内 string 成员构造/拷贝内联分支伪影（与 LoginApp/BaseApp 同构）
         info.role = "RealmApp";
         info.version = "0.1.0";
         info.startTime = std::chrono::system_clock::now();
@@ -39,9 +39,9 @@ void RealmApp::init() {
             return rt;
         });
 
-        ops::OpsServer::Config opsCfg{};
+        ops::OpsServer::Config opsCfg{};  // LCOV_EXCL_BR_LINE 聚合内 string 成员构造/拷贝内联分支伪影（同 LoginApp）
         opsCfg.host = config_.ops.host;
-        opsCfg.port = config_.ops.port;
+        opsCfg.port = config_.ops.port;  // LCOV_EXCL_BR_LINE opsCfg 聚合拷贝的内联分支伪影归因行
         opsCfg.maxConnections = config_.ops.maxConnections;
         opsServer_ = std::make_unique<ops::OpsServer>(opsCfg, *opsInspector_);
         opsServer_->start();

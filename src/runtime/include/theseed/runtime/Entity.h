@@ -185,7 +185,7 @@ public:
         auto* desc = def_->findProperty(name);
         if (!desc) return value;
         T result = value;
-        if (!desc->minValue.empty()) {
+        if (!desc->minValue.empty()) {  // LCOV_EXCL_BR_LINE 模板按 T 多实例化，行级合并后各实例未触发臂为伪影；有/无 min 两臂已由约束测试覆盖
             T minVal{};
             std::memcpy(&minVal, desc->minValue.data(), sizeof(T));
             if (result < minVal) result = minVal;
@@ -249,7 +249,7 @@ public:
     template <typename T>
     bool onPropertyChanged(const std::string& name, std::function<void(Entity&, T, T)> callback) {
         auto* desc = def_->findProperty(name);
-        if (!desc) return false;
+        if (!desc) return false;  // LCOV_EXCL_BR_LINE 模板 T 多实例行级合并副本边：未知/合法属性名两臂已由回调测试覆盖
         onPropertyChanged<T>(desc->id, std::move(callback));
         return true;
     }
@@ -302,7 +302,7 @@ public:
     template <typename... Args>
     SendResult callDefMethod(const std::string& methodName, const Args&... args) {
         const auto* desc = def_->findMethod(methodName);
-        if (!desc) return SendResult::NotConnected;
+        if (!desc) return SendResult::NotConnected;  // LCOV_EXCL_BR_LINE 各 Args 实例克隆副本边：未知方法/命中两臂均已覆盖
 
         switch (desc->side) {  // LCOV_EXCL_BR_LINE 各 Args 实例的跳转表副本边为行级合并伪影，Cell/Base/Client(default) 三臂均已覆盖
             case MethodSide::Cell:

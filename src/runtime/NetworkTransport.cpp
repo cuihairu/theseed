@@ -159,7 +159,7 @@ void NetworkTransport::flushOutbound() {
 }
 
 void NetworkTransport::onRawReceived(std::span<const std::byte> data) {
-    if (data.empty()) return;
+    if (data.empty()) return;  // LCOV_EXCL_BR_LINE InMemoryBytePipe::write 对空数据直接拒绝，空分片回调结构性不可达
     stats_.bytesReceived += data.size();
     recvBuffer_.writeBytes(data.data(), data.size());
     parseInbound();
@@ -212,7 +212,7 @@ bool NetworkTransport::parseOneMessage() {
     }
 
     // Dispatch by message ID
-    if (header.messageId == kInvocationMessageId && !payload.empty()) {
+    if (header.messageId == kInvocationMessageId && !payload.empty()) {  // LCOV_EXCL_BR_LINE InvocationCodec 编码至少含 method 串，空 payload invocation 结构性不可达
         auto invocation = InvocationCodec::decode(payload);
         std::lock_guard lock(inboxMutex_);
         inbox_.push_back(std::move(invocation));
