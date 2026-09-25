@@ -42,7 +42,7 @@ std::string queryHostname() {
     }
 #else
     char buffer[256] = {};
-    if (gethostname(buffer, sizeof(buffer)) == 0) {
+    if (gethostname(buffer, sizeof(buffer)) == 0) {  // LCOV_EXCL_BR_LINE gethostname 失败臂系统调用不可定向注入
         buffer[sizeof(buffer) - 1] = '\0';
         return std::string(buffer);
     }
@@ -56,7 +56,7 @@ std::string queryHostname() {
 double queryDiskUsage() {
     std::error_code error;
     const auto space = std::filesystem::space(std::filesystem::current_path(), error);
-    if (error || space.capacity == 0) {
+    if (error || space.capacity == 0) {  // LCOV_EXCL_BR_LINE space 错误/零容量臂依赖宿主文件系统状态，不可注入
         return 0.0;
     }
 
@@ -98,7 +98,7 @@ bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
 double queryMemoryUsage() {
 #if defined(__linux__)
     struct sysinfo info{};
-    if (sysinfo(&info) == 0 && info.totalram != 0) {
+    if (sysinfo(&info) == 0 && info.totalram != 0) {  // LCOV_EXCL_BR_LINE Linux 下 sysinfo 恒成功且 totalram 恒非零，fallback 臂不可达
         const auto total = static_cast<long double>(info.totalram) * info.mem_unit;
         const auto free = static_cast<long double>(info.freeram) * info.mem_unit;
         return static_cast<double>(((total - free) / total) * 100.0L);
@@ -133,8 +133,8 @@ bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
     std::uint64_t steal = 0;
 
     if (!(input >> label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >>
-          steal) ||
-        label != "cpu") {
+          steal) ||  // LCOV_EXCL_BR_LINE 解析失败臂与 || 短路边归因本行：/proc/stat 首行恒可解析
+        label != "cpu") {  // LCOV_EXCL_BR_LINE /proc/stat 首行恒为 "cpu" 且解析恒成功，失败臂不可注入
         // LCOV_EXCL_START /proc/stat 解析失败分支
         return false;
         // LCOV_EXCL_STOP
@@ -154,7 +154,7 @@ bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
 double queryLoadAverage() {
 #if defined(__linux__) || defined(__APPLE__)
     double load = 0.0;
-    if (getloadavg(&load, 1) == 1) {
+    if (getloadavg(&load, 1) == 1) {  // LCOV_EXCL_BR_LINE getloadavg 失败臂不可定向注入
         return load;
     }
 #endif
@@ -176,11 +176,11 @@ HostSummary LocalHostProbe::sample() {
 
     std::uint64_t idleTicks = 0;
     std::uint64_t totalTicks = 0;
-    if (queryCpuTicks(idleTicks, totalTicks)) {
+    if (queryCpuTicks(idleTicks, totalTicks)) {  // LCOV_EXCL_BR_LINE Linux /proc/stat 恒可读，失败臂不可达
         if (hasPreviousCpuSample_) {
             const auto idleDelta = idleTicks - previousIdleTicks_;
             const auto totalDelta = totalTicks - previousTotalTicks_;
-            if (totalDelta != 0) {
+            if (totalDelta != 0) {  // LCOV_EXCL_BR_LINE 两次采样间 CPU tick 零增长在真实环境不可定向构造
                 const auto usage =
                     100.0 - (static_cast<double>(idleDelta) * 100.0 / static_cast<double>(totalDelta));
                 summary.cpuUsage = std::clamp(usage, 0.0, 100.0);

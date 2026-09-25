@@ -214,12 +214,69 @@ static void testConsoleLoggerLevelAccessors() {
     if (ok) PASS(); else FAIL("level accessors mismatch");
 }
 
+// 字符串属性中的引号与反斜杠必须转义输出（formatValue 的两条转义臂）。
+static void testStringAttributeEscaping() {
+    TEST("string attribute escapes quotes and backslashes");
+
+    LogRecord rec;
+    rec.level = LogLevel::Info;
+    rec.message = "esc";
+    const std::string tricky = std::string("a\"b\\c");
+    rec.attrs = {{"payload", tricky}};
+    auto out = capture(LogLevel::Debug, rec);
+
+    bool ok = out.find("payload=\"a\\\"b\\\\c\"") != std::string::npos;
+    if (ok) PASS(); else FAIL("escaping wrong: " + out);
+}
+
+// bool=false 属性渲染 "false"（ternary 的另一臂）。
+static void testBoolFalseAttribute() {
+    TEST("bool false attribute renders false");
+
+    LogRecord rec;
+    rec.level = LogLevel::Info;
+    rec.message = "bool";
+    rec.attrs = {{"alive", false}};
+    auto out = capture(LogLevel::Debug, rec);
+
+    bool ok = out.find("alive=false") != std::string::npos;
+    if (ok) PASS(); else FAIL("expected alive=false: " + out);
+}
+
+// 枚举外值走 default 臂的 UNKNOWN 兜底。
+static void testLevelNameUnknownFallback() {
+    TEST("levelName returns UNKNOWN for out-of-range level");
+
+    const auto weird = static_cast<LogLevel>(99);
+    bool ok = std::string(levelName(weird)) == "UNKNOWN";
+    ok = ok && std::string(levelName(LogLevel::Error)) == "ERROR";
+    if (ok) PASS(); else FAIL("unknown level fallback wrong");
+}
+
+// 空 logger 入参：setGlobalLogger 保持原状（if (logger) 假臂）。
+static void testSetGlobalLoggerNullptrIsNoop() {
+    TEST("setGlobalLogger(nullptr) keeps current logger");
+
+    auto original = takeGlobalLogger();
+    setGlobalLogger(original);            // 先把原件设回"当前"
+    setGlobalLogger(nullptr);             // if (logger) 假臂：应为 noop
+    auto after = takeGlobalLogger();
+
+    bool ok = after.get() == original.get();  // 指针未被替换
+    setGlobalLogger(original);
+    if (ok) PASS(); else FAIL("null logger should not replace storage");
+}
+
 int main() {
     std::cout << "Logger tests:\n";
 
     testLogLevelFilter();
     testConsoleLoggerFormat();
     testStructuredAttributes();
+    testStringAttributeEscaping();
+    testBoolFalseAttribute();
+    testLevelNameUnknownFallback();
+    testSetGlobalLoggerNullptrIsNoop();
     testGlobalLoggerReplace();
     testConvenienceFunctions();
     testTraceSpanOptional();

@@ -181,7 +181,7 @@ bool NetworkTransport::parseOneMessage() {
     [[maybe_unused]] const bool headerOk = foundation::decodeHeader(header, recvBuffer_);
     // 上方已预检 kEncodedSize，decodeHeader 只做长度检查（无 magic/version），
     // 恒真；断言用于防御未来 decodeHeader 引入字段校验后的静默破坏。
-    assert(headerOk);
+    assert(headerOk);  // LCOV_EXCL_BR_LINE decodeHeader 已预检长度恒真（见上方注释），断言假臂不可达
 
     if (recvBuffer_.readRemaining() < header.payloadLength) {
         // Not enough data for the full payload yet.

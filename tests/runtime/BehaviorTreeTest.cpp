@@ -235,6 +235,30 @@ static void testRepeatNode() {
     else FAIL("repeat count=" + std::to_string(count));
 }
 
+// 分支覆盖：Repeat 无限模式（maxCount_ == 0 时 count 达到检查被跳过）
+static void testRepeatUnlimited() {
+    TEST("Repeat: unlimited mode skips max-count check");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+
+    int count = 0;
+    auto rep = repeat(
+        action([&](Entity&) { ++count; return BehaviorStatus::Success; }),
+        0  // 0 = unlimited
+    );
+    BehaviorTree tree(std::move(rep));
+
+    bool ok = true;
+    for (int i = 0; i < 5; ++i) {
+        ok = ok && tree.tick(e) == BehaviorStatus::Running;
+    }
+    ok = ok && count == 5;
+
+    if (ok) PASS();
+    else FAIL("unlimited repeat count=" + std::to_string(count));
+}
+
 // Test 9: Succeeder always succeeds
 static void testSucceeder() {
     TEST("Succeeder: always returns success");
@@ -392,6 +416,29 @@ static void testChildCountAndRunningPaths() {
     else FAIL("running propagation wrong");
 }
 
+// Test 14: Succeeder 子节点 Running 时透传（真臂）
+static void testSucceederRunningTransparency() {
+    TEST("Succeeder: Running child propagates Running");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+
+    int calls = 0;
+    auto suc = succeeder(action([&](Entity&) {
+        return ++calls < 2 ? BehaviorStatus::Running : BehaviorStatus::Success;
+    }));
+    BehaviorTree tree(std::move(suc));
+
+    bool ok = tree.tick(e) == BehaviorStatus::Running;
+    ok = ok && calls == 1;
+
+    // 子节点转为 Success 后 succeeder 归一为 Success
+    ok = ok && tree.tick(e) == BehaviorStatus::Success && calls == 2;
+
+    if (ok) PASS();
+    else FAIL("succeeder running propagation failed");
+}
+
 int main() {
     std::cout << "Behavior tree tests:\n";
 
@@ -403,11 +450,13 @@ int main() {
     testConditionGuard();
     testInverter();
     testRepeatNode();
+    testRepeatUnlimited();
     testSucceeder();
     testNestedTree();
     testResetReExecution();
     testIsRunningFlag();
     testChildCountAndRunningPaths();
+    testSucceederRunningTransparency();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

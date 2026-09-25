@@ -182,6 +182,19 @@ static void testConstStreamAccess() {
     PASS();
 }
 
+// 未 begin 就 end：inMessage_ 假臂直接返回，不回填长度也不计数。
+static void testEndMessageWithoutBegin() {
+    TEST("endMessage without begin is a no-op");
+
+    Bundle bundle;
+    bundle.endMessage();
+
+    bool ok = bundle.messageCount() == 0;
+    ok = ok && bundle.stream().size() == 0;  // 没有写入任何 header
+
+    if (ok) PASS(); else FAIL("stray endMessage should do nothing");
+}
+
 int main() {
     std::cout << "Bundle tests:\n";
 
@@ -192,6 +205,7 @@ int main() {
     testClear();
     testHeaderDecodeInsufficientData();
     testConstStreamAccess();
+    testEndMessageWithoutBegin();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

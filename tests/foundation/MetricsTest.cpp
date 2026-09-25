@@ -1,6 +1,7 @@
 #include "theseed/foundation/Metrics.h"
 
 #include <atomic>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -237,6 +238,36 @@ static void testRegistryJsonHistogramSnapshot() {
     if (ok) PASS(); else FAIL("histogram snapshot missing in json: " + json);
 }
 
+// NaN 观测直接丢弃：不计入 count/sum/桶。
+static void testHistogramNaNRejected() {
+    TEST("histogram ignores NaN observations");
+    MetricsRegistry::instance().reset();
+    auto& h = MetricsRegistry::instance().histogram("nan_hist", {1.0});
+    h.observe(0.5);
+    h.observe(std::nan(""));
+
+    auto snap = h.snapshot();
+    bool ok = snap.count == 1;
+    ok = ok && snap.bucketCounts[0] == 1;  // 只有 0.5 计入
+    ok = ok && (snap.sum > 0.4 && snap.sum < 0.6);
+
+    if (ok) PASS(); else FAIL("NaN observation leaked into histogram");
+}
+
+// 空 boundaries 的直方图：renderJson 走“无桶可列”的假臂，仅剩 +Inf 桶。
+static void testRegistryJsonEmptyBoundariesHistogram() {
+    TEST("renderJson handles histogram with empty boundaries");
+    MetricsRegistry::instance().reset();
+    auto& h = MetricsRegistry::instance().histogram("bare_hist", {}, "no buckets");
+    h.observe(7.0);
+
+    auto json = MetricsRegistry::instance().renderJson();
+    bool ok = json.find("\"le\":\"+Inf\",\"count\":1") != std::string::npos;
+    ok = ok && json.find("\"le\":7") == std::string::npos;  // 没有任何有限桶
+
+    if (ok) PASS(); else FAIL("empty-boundaries histogram json wrong: " + json);
+}
+
 int main() {
     std::cout << "Metrics tests:\n";
 
@@ -245,12 +276,14 @@ int main() {
     testGaugeSetIncDec();
     testHistogramBucket();
     testHistogramOutOfBounds();
+    testHistogramNaNRejected();
     testRegistrySingleton();
     testRegistryRenderText();
     testRegistryRenderJson();
     testRegistryTypeConflictAndJsonVariants();
     testRegistryReset();
     testRegistryJsonHistogramSnapshot();
+    testRegistryJsonEmptyBoundariesHistogram();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

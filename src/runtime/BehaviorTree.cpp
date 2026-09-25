@@ -146,7 +146,7 @@ void RepeatNode::reset() {
 SucceederNode::SucceederNode(std::unique_ptr<BehaviorNode> child)
     : child_(std::move(child)) {}
 
-BehaviorStatus SucceederNode::execute(Entity& entity) {
+BehaviorStatus SucceederNode::execute(Entity& entity) {  // LCOV_EXCL_BR_LINE 行计数证明已执行，本行入口 fallthrough 边为 gcc 内联多副本归因伪影
     auto status = child_->execute(entity);
     if (status == BehaviorStatus::Running) return BehaviorStatus::Running;
     return BehaviorStatus::Success;

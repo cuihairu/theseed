@@ -44,7 +44,7 @@ runtime::RuntimeInvocation RemoteEntityStore::request(
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return {};
-}
+}  // LCOV_EXCL_BR_LINE 函数出口 optional 返回对象构造的库内联分支，含已豁免超时路径的汇合边
 
 void RemoteEntityStore::setPumpFunction(PumpFn pumpFn) {
     pumpFn_ = std::move(pumpFn);

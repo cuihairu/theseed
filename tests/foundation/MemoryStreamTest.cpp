@@ -255,6 +255,73 @@ static void testResetWriteAndPointers() {
     PASS();
 }
 
+// 自移动赋值：this == &other 假臂，对象保持有效且状态不变。
+static void testSelfMoveAssign() {
+    TEST("self move assign is a no-op");
+
+    MemoryStream stream;
+    stream.writeUint32(0xDEADBEEF);
+    stream.resetRead();
+    stream.readInt32();  // rpos 推进到 4
+
+    MemoryStream& alias = stream;
+    stream = std::move(alias);
+
+    bool ok = stream.size() == 4;
+    ok = ok && stream.readPos() == 4;  // 状态未被交换破坏
+    stream.resetRead();
+    ok = ok && stream.readUint32() == 0xDEADBEEF;
+
+    if (ok) PASS(); else FAIL("self move should keep state intact");
+}
+
+// 零容量起步：ensureWriteCapacity 走 newCap==0 → 直接取 additionalBytes 的臂。
+static void testGrowFromZeroCapacity() {
+    TEST("grow from zero capacity");
+
+    MemoryStream stream(0);
+    bool ok = stream.capacity() == 0;
+    stream.writeUint32(42);  // 从 0 容量起步扩容
+    stream.resetRead();
+    ok = ok && stream.capacity() > 0;
+    ok = ok && stream.readUint32() == 42;
+
+    if (ok) PASS(); else FAIL("zero-capacity growth failed");
+}
+
+// readBytes(size=0)：边界检查前的空读早退臂，EOF 处也不抛。
+static void testReadZeroBytes() {
+    TEST("readBytes with zero size is a no-op");
+
+    MemoryStream stream;
+    std::uint32_t sink = 0;
+    bool threw = false;
+    try {
+        stream.readBytes(&sink, 0);  // 流为空，size==0 不应触发越界
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    bool ok = !threw && sink == 0;
+    if (ok) PASS(); else FAIL("zero-size read should not throw");
+}
+
+// resetWrite 后 wpos < rpos：readRemaining 的饱和假臂。
+static void testReadRemainingAfterResetWrite() {
+    TEST("readRemaining saturates at 0 after resetWrite");
+
+    MemoryStream stream;
+    stream.writeUint32(1);
+    stream.writeUint32(2);
+    stream.resetRead();
+    stream.readInt32();  // rpos=4 > wpos（即将归零）
+
+    stream.resetWrite();  // wpos=0，rpos 仍为 4
+
+    auto remaining = stream.readRemaining();
+    if (remaining == 0) PASS();
+    else FAIL("expected 0 remaining, got " + std::to_string(remaining));
+}
+
 int main() {
     std::cout << "MemoryStream tests:\n";
 
@@ -271,6 +338,10 @@ int main() {
     testAutoGrow();
     testReadRemaining();
     testResetWriteAndPointers();
+    testSelfMoveAssign();
+    testGrowFromZeroCapacity();
+    testReadZeroBytes();
+    testReadRemainingAfterResetWrite();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

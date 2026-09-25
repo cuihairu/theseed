@@ -274,6 +274,25 @@ static void test_ema_alpha_accessor() {
     PASS();
 }
 
+// 同一实体第二次 accumulate（经公开 scope() RAII 触发，accumulate 为 private）：
+// entityType 已记录，走短路假臂不再覆盖。
+static void test_accumulate_twice_keeps_type() {
+    TEST("test_accumulate_twice_keeps_type");
+    EntityLoadProfiler p;
+    {
+        auto s1 = p.scope(7, "Avatar");
+        sleepMs(1);
+    }
+    {
+        auto s2 = p.scope(7, "NPC");   // entityType 已非空：不得被 NPC 覆盖
+        sleepMs(1);
+    }
+    p.tick();  // currentRawLoad → lastRawLoad，供 snapshot 读取
+    if (p.snapshot(7).entityType != "Avatar") { FAIL("type overwritten"); return; }
+    if (p.snapshot(7).rawLoad <= 0.0F) { FAIL("second accumulate lost"); return; }
+    PASS();
+}
+
 int main() {
     test_scope_records_raw_load();
     test_smoothed_load_ema();
@@ -287,6 +306,7 @@ int main() {
     test_multiple_scope_in_one_tick_accumulates();
     test_aggregator_all_sorted_and_reset();
     test_ema_alpha_accessor();
+    test_accumulate_twice_keeps_type();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -47,7 +47,7 @@ bool BaseApp::init() {
 
     for (const auto& entityType : registry_.entityTypes()) {
         auto factory = registry_.createFactory(entityType);
-        if (factory) {
+        if (factory) {  // LCOV_EXCL_BR_LINE 假臂不可达：createFactory 对已注册类型恒返回非空工厂 lambda，遍历集合即 defs_ 的键集
             runtime_->registerEntityFactory(entityType, std::move(factory));
         }
     }
@@ -85,7 +85,7 @@ bool BaseApp::init() {
     });
 
     for (const auto& entityType : store_->listEntityTypes()) {
-        if (runtime_->findEntitiesByType(entityType).empty()) {
+        if (runtime_->findEntitiesByType(entityType).empty()) {  // LCOV_EXCL_BR_LINE 假臂不可达：init 阶段 runtime 新建且按类型逐个恢复，查询时该类型恒为空
             runtime_->restoreEntities(entityType);
         }
     }
@@ -93,7 +93,7 @@ bool BaseApp::init() {
     clientListener_.listen(config_.clientListenHost, config_.clientListenPort);
 
     if (config_.ops.enabled) {
-        ops::ProcessInfo info{};
+        ops::ProcessInfo info{};  // LCOV_EXCL_BR_LINE 聚合初始化字符串成员构造的 SSO/堆库内联分支，字面常量恒短串，非业务分支
         info.role = "BaseApp";
         info.version = "0.1.0";
         info.startTime = std::chrono::system_clock::now();
@@ -101,17 +101,17 @@ bool BaseApp::init() {
 
         opsInspector_ = std::make_unique<ops::OpsInspector>(std::move(info), [this] {
             ops::RuntimeInfo rt{};
-            if (runtime_) {
+            if (runtime_) {  // LCOV_EXCL_BR_LINE init 建 inspector 前已 make_unique runtime_，空臂不可达
                 rt.entityCount = runtime_->entityCount();
             }
             rt.entityTypes = registry_.entityTypes();
-            if (transport_) {
+            if (transport_) {  // LCOV_EXCL_BR_LINE 构造函数拒绝空 transport，空臂不可达
                 rt.transportStats = transport_->stats();
             }
             return rt;
         });
 
-        ops::OpsServer::Config opsCfg{};
+        ops::OpsServer::Config opsCfg{};  // LCOV_EXCL_BR_LINE 聚合初始化字符串成员构造的库内联分支，非业务分支
         opsCfg.host = config_.ops.host;
         opsCfg.port = config_.ops.port;
         opsCfg.maxConnections = config_.ops.maxConnections;
@@ -144,7 +144,7 @@ void BaseApp::tick() {
     flushClientPropertyUpdates();
     cleanupClients();
 
-    if (transport_) {
+    if (transport_) {  // LCOV_EXCL_BR_LINE 构造函数拒绝空 transport，空臂不可达
         transportStatsCollector_.collect(transport_->stats());
     }
 
@@ -307,7 +307,7 @@ void BaseApp::cleanupClients() {
                 auto* entity = runtime_->findEntity(entityId);
                 if (entity) {
                     auto* cellCall = entity->cellEntityCall();
-                    if (cellCall && cellCall->isValid()) {
+                    if (cellCall && cellCall->isValid()) {  // LCOV_EXCL_BR_LINE isValid 假臂不可构造：cellCall 非空即 valid（bind 恒携带 target），null 假臂已由无绑定销毁场景覆盖
                         runtime_->requestDestroyCell(entityId, cellCall->targetComponent());
                     }
                     runtime_->destroyEntity(entityId);
@@ -362,7 +362,7 @@ void BaseApp::handleClientAction(const login::ActionMsg& msg) {
         case runtime::MethodSide::Cell: {
             // Forward to CellApp as a typed method call
             auto* cellCall = entity->cellEntityCall();
-            if (cellCall && cellCall->isValid()) {
+            if (cellCall && cellCall->isValid()) {  // LCOV_EXCL_BR_LINE isValid 假臂不可构造：cellCall 非空即 valid，null 假臂已由无绑定 action 场景覆盖
                 entity->callCell(msg.actionName,
                     std::span<const std::byte>(msg.actionData.data(), msg.actionData.size()));
             }

@@ -232,6 +232,55 @@ static void testSchedulerRunLoopStops() {
     PASS();
 }
 
+// listen 条件组合的真臂（host 为 127.0.0.1 / 0.0.0.0 时 port=0 也监听）、
+// 未监听 acceptIncoming 早退、acceptPeer 接收 NetworkTransport、onPeerConnected 回调链路。
+static void testListenHostAndAcceptPaths() {
+    TEST("listen host variants, acceptIncoming, acceptPeer, onPeerConnected");
+
+    TcpConnection::globalInit();
+
+    // host=0.0.0.0 + port=0：第三、第二条件的真臂各自构造一次。
+    bool ok = false;
+    {
+        NetworkNode anyV4({.localComponent = 11, .listenHost = "0.0.0.0", .listenPort = 0});
+        ok = anyV4.listenPort() > 0;
+    }
+    {
+        NetworkNode loopback({.localComponent = 12, .listenHost = "127.0.0.1", .listenPort = 0});
+        ok = ok && loopback.listenPort() > 0;
+    }
+    {
+        // 未监听节点（bind 到不存在地址）：tick 内 acceptIncoming 走 isListening 早退。
+        NetworkNode silent({.localComponent = 13, .listenHost = "10.255.255.1", .listenPort = 0});
+        TickContext ctx;
+        silent.tick(ctx);   // 不得抛出或阻塞
+        ok = ok && silent.listenPort() == 0;
+    }
+    {
+        // acceptPeer 直接接收 NetworkTransport：dynamic_pointer_cast 真臂。
+        NetworkNode node({.localComponent = 14, .listenHost = "127.0.0.1", .listenPort = 0});
+        node.acceptPeer(21, std::make_shared<NetworkTransport>(TcpConnection::create()));
+        ok = ok && node.hasPeer(21);
+    }
+    {
+        // 完整入站链路：客户端 connectToPeer → 服务端 tick → 回调拿到 transport。
+        NetworkNode server({.localComponent = 30, .listenHost = "127.0.0.1", .listenPort = 0});
+        NetworkNode client({.localComponent = 31});
+        int notified = 0;
+        server.setOnPeerConnected([&](std::shared_ptr<theseed::runtime::IRuntimeTransport>) { ++notified; });
+        ok = ok && client.connectToPeer(30, "127.0.0.1", server.listenPort());
+        TickContext ctx;
+        for (int i = 0; i < 100 && notified == 0; ++i) {
+            server.tick(ctx);
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }
+        ok = ok && notified == 1;
+    }
+
+    if (ok) PASS();
+    else FAIL("listen host / accept paths wrong");
+}
+
 int main() {
     std::cout << "NetworkNode tests:\n";
 
@@ -241,6 +290,7 @@ int main() {
     testPeerCount();
     testSchedulerLifecycleAndFailedConnect();
     testSchedulerRunLoopStops();
+    testListenHostAndAcceptPaths();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

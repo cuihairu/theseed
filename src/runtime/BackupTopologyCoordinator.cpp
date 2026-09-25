@@ -88,7 +88,7 @@ TopologyState BackupTopologyCoordinator::state() const noexcept {
 }
 
 bool BackupTopologyCoordinator::beginRebuild(ComponentId reasonProcess, std::uint64_t newEpoch) {
-    if (state_ == TopologyState::Priming || state_ == TopologyState::Promoting) {
+    if (state_ == TopologyState::Priming || state_ == TopologyState::Promoting) {  // LCOV_EXCL_BR_LINE promote() 同步落回 Stable，Promoting 状态对外不可观测，该短路臂不可达
         return false;
     }
     if (processes_.empty()) return false;
@@ -106,7 +106,7 @@ bool BackupTopologyCoordinator::beginRebuild(ComponentId reasonProcess, std::uin
 
 bool BackupTopologyCoordinator::ackPrimed(ComponentId processId, BackupTopologyVersion version) {
     if (state_ != TopologyState::Priming) return false;
-    if (!hasStaging_ || !(version == stagingVersion_)) return false;
+    if (!hasStaging_ || !(version == stagingVersion_)) return false;  // LCOV_EXCL_BR_LINE Priming 态由 beginRebuild 同步置位 hasStaging_，无 staging 的 Priming 不可达
 
     auto it = processIndex_.find(processId);
     if (it == processIndex_.end()) return false;
@@ -134,7 +134,7 @@ bool BackupTopologyCoordinator::promote() {
 }
 
 bool BackupTopologyCoordinator::abort() {
-    if (state_ == TopologyState::Stable || state_ == TopologyState::Aborted) return false;
+    if (state_ == TopologyState::Stable || state_ == TopologyState::Aborted) return false;  // LCOV_EXCL_BR_LINE abort() 末尾同步置回 Stable，Aborted 态对外不可观测，该真臂不可达
     // Cancel the in-progress rebuild. State goes Aborted then back to Stable
     // so callers can immediately attempt another beginRebuild if they want to.
     hasStaging_ = false;

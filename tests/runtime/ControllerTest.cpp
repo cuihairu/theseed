@@ -371,6 +371,20 @@ int main() {
             if (hunter.controllers().find(cid2) == nullptr) return fail("mte_stop_not_added");
             hunter.cancelController(cid2);
             if (hunter.hasVelocity()) return fail("mte_stop_velocity");
+
+            // cancelController 即 remove：controller 直接出册（无"cancel 后留册"状态）
+            if (hunter.controllers().find(cid2) != nullptr) return fail("mte_cancel_still_registered");
+            if (hunter.controllers().count() != 0) return fail("mte_cancel_count");
+            hunter.controllers().remove(9999);   // 未知 id：早退无副作用
+            if (hunter.controllers().count() != 0) return fail("remove_unknown_mutated");
+
+            // remove 在册且 active 的 controller：走 stop + 出册
+            targetVisible = false;
+            auto cid3 = hunter.moveToEntity(53, 10.0F, 1.0F);
+            if (cid3 == 0) return fail("mte_remove_add_failed");
+            hunter.controllers().remove(cid3);
+            if (hunter.controllers().find(cid3) != nullptr) return fail("mte_remove_not_erased");
+            if (hunter.hasVelocity()) return fail("mte_remove_velocity");
         }
     }
     std::cout << "OK" << std::endl;

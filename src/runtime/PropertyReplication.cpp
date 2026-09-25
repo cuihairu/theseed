@@ -13,6 +13,9 @@ std::vector<PropertyDelta> PropertyReplication::buildDirtyDelta(const EntityDef&
                                                                 const std::byte* storage,
                                                                 const DirtyMask& dirtyMask,
                                                                 PropertyFlag excludeFlags) {
+    // 零属性实体（空 def）的 storage vector data() 为 nullptr：无脏位时
+    // 无需触碰 storage，先于 null 防御返回空集，避免泵阶段误伤合法空实体。
+    if (!dirtyMask.any()) return {};
     if (storage == nullptr) {
         throw std::invalid_argument("property storage is null");
     }
@@ -37,6 +40,8 @@ std::vector<PropertyDelta> PropertyReplication::buildDirtyDelta(const EntityDef&
 void PropertyReplication::applyDelta(const EntityDef& def,
                                      std::span<const PropertyDelta> deltas,
                                      std::byte* storage) {
+    // 与 buildDirtyDelta 对称：空 delta 集无需 storage（零属性实体场景）。
+    if (deltas.empty()) return;
     if (storage == nullptr) {
         throw std::invalid_argument("property storage is null");
     }

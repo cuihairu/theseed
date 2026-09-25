@@ -128,5 +128,54 @@ int main() {
     PipedTransport piped(1);
     piped.tick();
 
+    // PipedTransport receive：容量打满即退出；目标不匹配的消息保留在箱内。
+    {
+        PipedTransport piped2(1);
+        PipedTransport piped2Peer(9);   // send 需要对端：connect 后才 Accepted
+        piped2.connect(piped2Peer);
+        RuntimeInvocation a;
+        a.sourceComponent = 1; a.targetComponent = 2; a.method = "a";
+        RuntimeInvocation b;
+        b.sourceComponent = 1; b.targetComponent = 3; b.method = "b";
+        RuntimeInvocation c;
+        c.sourceComponent = 1; c.targetComponent = 2; c.method = "c";
+        if (piped2.send(a) != SendResult::Accepted || piped2.send(b) != SendResult::Accepted ||
+            piped2.send(c) != SendResult::Accepted) {
+            return fail("piped_send");
+        }
+
+        std::array<RuntimeInvocation, 2> out{};
+        // send 进的是对端收件箱：在 piped2Peer 上 receive。
+        // 容量 1：取走第一条 target=2 的，target=3 的跳过保留（++it 分支），count 达容量即 break。
+        if (piped2Peer.receive(2, out.data(), 1) != 1 || out[0].method != "a") {
+            return fail("piped_receive_cap");
+        }
+        // 容量 2：剩余 target=2 的 c 可取，b 仍在箱内。
+        if (piped2Peer.receive(2, out.data(), 2) != 1 || out[0].method != "c") {
+            return fail("piped_receive_skip");
+        }
+        if (piped2Peer.receive(3, out.data(), 2) != 1 || out[0].method != "b") {
+            return fail("piped_receive_b");
+        }
+    }
+
+    // InMemoryRuntimeTransport drain：容量打满退出（循环假臂），余量保留。
+    {
+        InMemoryRuntimeTransport t2;
+        RuntimeInvocation a;
+        a.sourceComponent = 1; a.targetComponent = 1; a.method = "a";
+        RuntimeInvocation b;
+        b.sourceComponent = 1; b.targetComponent = 1; b.method = "b";
+        t2.send(a);
+        t2.send(b);
+        std::array<RuntimeInvocation, 2> out{};
+        if (t2.drain(out.data(), 1) != 1 || out[0].method != "a") {
+            return fail("drain_cap");
+        }
+        if (t2.drain(out.data(), 2) != 1 || out[0].method != "b") {
+            return fail("drain_rest");
+        }
+    }
+
     return EXIT_SUCCESS;
 }

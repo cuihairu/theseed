@@ -4,6 +4,7 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/RuntimeTypes.h"
 #include "theseed/runtime/TcpConnection.h"
+#include "theseed/runtime/TickScheduler.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -97,6 +98,20 @@ static void testInit() {
 
     std::filesystem::remove_all(dir);
     if (ok) PASS(); else FAIL("init failed");
+}
+
+// entityDefPath 为空：init 跳过 loadDirectory 直接起默认空间（L20 假臂），registry 保持空。
+static void testInitWithoutDefPath() {
+    TEST("init without entityDefPath skips definition loading");
+
+    CellApp::Config config;
+    config.componentId = 3;
+    CellApp app(config, std::make_shared<InMemoryRuntimeTransport>());
+    bool ok = app.init();
+    ok = ok && app.registry().defCount() == 0;
+    ok = ok && !app.registry().hasDef("Avatar");
+
+    if (ok) PASS(); else FAIL("init without def path failed");
 }
 
 static void testCreateEntity() {
@@ -342,10 +357,31 @@ static void testDestroyBeforeInit() {
     if (!app.destroyEntity(1)) PASS(); else FAIL("destroy should fail before init");
 }
 
+// 未 init 的防御臂：tick / attach / detach / findEntity / opsListenPort 全部安全跳过。
+static void testUninitializedDefensiveArms() {
+    TEST("uninitialized app defensive arms");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    CellApp app(CellApp::Config{}, transport);  // runtime_ / opsServer_ 均为空
+
+    bool ok = true;
+    ok = ok && app.findEntity(1) == nullptr;      // runtime_ 空臂 → nullptr
+    ok = ok && app.opsListenPort() == 0;          // opsServer_ 空臂 → 0
+
+    theseed::runtime::TickScheduler scheduler;
+    app.attach(scheduler);                        // runtime_ 空臂 → 不注册
+    app.tick();                                   // runtime_ / transport_ / opsServer_ 空臂全部走假臂
+    app.detach(scheduler);                        // runtime_ 空臂 → 不注销
+
+    // init 后同一定时器对象 attach/detach 才走真臂；这里只需验证未 init 全程 no-throw。
+    if (ok) PASS(); else FAIL("uninitialized defensive arms failed");
+}
+
 int main() {
     std::cout << "CellApp tests:\n";
 
     testInit();
+    testInitWithoutDefPath();
     testCreateEntity();
     testFindAndDestroy();
     testSetProperty();
@@ -354,6 +390,7 @@ int main() {
     testOnEnterLeaveSpace();
     testEdgeBranches();
     testDestroyBeforeInit();
+    testUninitializedDefensiveArms();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

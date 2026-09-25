@@ -120,6 +120,7 @@ int main() {
         if (supervisorPtr->lastRestart != 4322) FAIL("restart pid not forwarded");
         if (agent.execute("restart", "-1")) FAIL("negative pid should fail");
         if (agent.execute("restart", "99999999999")) FAIL("overflow pid should fail");
+        if (agent.execute("restart", "42x")) FAIL("trailing garbage pid should fail");
         if (agent.execute("restart", "")) FAIL("empty pid should fail");
         PASS();
     }

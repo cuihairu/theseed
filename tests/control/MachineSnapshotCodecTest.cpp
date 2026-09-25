@@ -133,6 +133,32 @@ int main() {
         FAIL("empty processes array mismatch:\n" + emptyJson);
     PASS();
 
+    TEST("formatSnapshotText falls back to first process when pid absent");
+    {
+        NodeSummary foreign = makeSummary();
+        for (auto& p : foreign.processes) {
+            p.pid += 1'000'000;  // 无一匹配当前 pid：selectDisplayProcess 走 front() 兜底
+        }
+        const auto foreignText = formatSnapshotText(foreign);
+        if (foreignText.find("process_name=baseapp\n") == std::string::npos)
+            FAIL("should display first process:\n" + foreignText);
+        if (foreignText.find("process_healthy=false\n") == std::string::npos)
+            FAIL("unhealthy flag should render false:\n" + foreignText);
+        PASS();
+    }
+
+    TEST("formatSnapshotJson renders overloaded true and draining false");
+    {
+        NodeSummary hot = makeSummary();
+        hot.overloaded = true;
+        hot.draining = false;
+        const auto hotJson = formatSnapshotJson(hot);
+        if (hotJson.find("\"overloaded\":true") == std::string::npos ||
+            hotJson.find("\"draining\":false") == std::string::npos)
+            FAIL("flag rendering mismatch:\n" + hotJson);
+        PASS();
+    }
+
     std::cout << "\nAll MachineSnapshotCodec tests passed!" << std::endl;
     return 0;
 }

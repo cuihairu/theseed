@@ -13,9 +13,11 @@ using theseed::runtime::Entity;
 using theseed::runtime::EntityDef;
 using theseed::runtime::EntitySide;
 using theseed::runtime::PropertyDelta;
+using theseed::runtime::PropertyFlag;
 using theseed::runtime::PropertyId;
 using theseed::runtime::PropertyType;
 using theseed::runtime::PropertyBlock;
+using theseed::runtime::PropertyDirtyTarget;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -508,6 +510,55 @@ static void testUninitializedBlockThrows() {
     else FAIL("expected logic_error");
 }
 
+// PropertyBlock 分支边界（分支覆盖批次）：init 默认值拷贝、变量属性
+// excludeFlags 跳过、固定属性 delta 尺寸校验、Client 脏目标分账。
+static void testBlockBranchEdges() {
+    TEST("property block branch edges");
+
+    auto def = std::make_unique<EntityDef>("Avatar");
+    def->addProperty("plain", PropertyType::Int32);            // 无默认值 → 跳过拷贝
+    std::vector<std::byte> dv(4);
+    std::int32_t seed = 33;
+    std::memcpy(dv.data(), &seed, 4);
+    def->addProperty("seeded", PropertyType::Int32, 0, PropertyFlag::None, dv);  // 默认值 → memcpy
+    def->addProperty("hidden", PropertyType::String, 0, PropertyFlag::Persistent); // 带 flag 的变量属性
+    PropertyBlock block;
+    block.init(*def);
+
+    bool ok = block.get<std::int32_t>(0) == 0;      // 无默认值：storage 保持零
+    ok = ok && block.get<std::int32_t>(1) == seed;  // 默认值已落 storage
+
+    // applyDelta：固定属性 value 尺寸不匹配 → 该条被跳过，storage 不变。
+    // 先于 setString 场景执行：此时 runtime 脏表为空，才能断言 Client 目标不污染它。
+    PropertyDelta bad{};
+    bad.propertyId = 0;
+    bad.value = {std::byte{0x01}};  // Int32 需要 4 字节
+    PropertyDelta good{};
+    good.propertyId = 2;
+    std::string text = "synced";
+    good.value.assign(reinterpret_cast<const std::byte*>(text.data()),
+                      reinterpret_cast<const std::byte*>(text.data()) + text.size());
+    std::vector<PropertyDelta> deltas = {bad, good};
+    block.applyDelta(deltas, PropertyDirtyTarget::Client);
+
+    ok = ok && block.get<std::int32_t>(0) == 0;          // 尺寸不符被跳过
+    ok = ok && block.getString(2) == "synced";
+    ok = ok && block.clientDirtyMask().isDirty(2);       // markTargets=Client 分账
+    ok = ok && !block.clientDirtyMask().isDirty(0);      // 被跳过的条目不标脏
+    ok = ok && !block.dirtyMask().isDirty(2);            // Client 目标不污染 runtime 脏表
+
+    // 变量属性被 excludeFlags 命中 → buildDirtyDelta 跳过该属性。
+    // setString 走 markDirty(All)，runtime 脏位由它自己引入，与上一段互不干扰。
+    block.setString(2, "marked");
+    auto filtered = block.buildDirtyDelta(PropertyFlag::Persistent);
+    ok = ok && filtered.empty();
+    auto kept = block.buildDirtyDelta();
+    ok = ok && kept.size() == 1 && kept[0].propertyId == 2;
+
+    if (ok) PASS();
+    else FAIL("block branch edges");
+}
+
 int main() {
     std::cout << "Variable-sized property tests:\n";
 
@@ -533,6 +584,7 @@ int main() {
     testLongString();
     testSetBlobOverwritesOldValue();
     testUninitializedBlockThrows();
+    testBlockBranchEdges();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -173,6 +173,9 @@ int main() {
         CHECK(d.execute("SET SESSION wait_timeout = 1"), "set wait_timeout (no-reconnect)");
         std::this_thread::sleep_for(std::chrono::seconds(2));
         CHECK(!d.execute("SELECT 1"), "dead connection fails without reconnect");
+        // queryParams 同路径的 ensureConnected 失败臂。
+        CHECK(!d.queryParams("SELECT 1", {}).has_value(),
+              "queryParams on dead connection without reconnect");
     }
 
     // ---- 存储层 ----
@@ -243,6 +246,12 @@ int main() {
               "insert empty blob");
         CHECK(!store.load(910002, "Avatar", out), "load rejects empty blob");
 
+        // data 列为非法 EntityData 字节：decodeEntityData 失败臂。
+        CHECK(store.executeRaw(
+                  "INSERT INTO `tbl_Avatar` (`id`, `data`) VALUES (910003, 0x00deadbeef)"),
+              "insert garbage blob");
+        CHECK(!store.load(910003, "Avatar", out), "load rejects garbage blob");
+
         // executeRaw 自身的失败臂。
         CHECK(!store.executeRaw("THIS IS NOT SQL"), "executeRaw rejects bad SQL");
 
@@ -298,6 +307,12 @@ int main() {
         std::string pw;
         CHECK(fresh.queryAccount("covbr_u4", id, pw), "queryAccount roundtrip");
         CHECK(pw == "pw4", "password roundtrip");
+        // 不存在的用户名：查询成功但空结果集，next() 为假臂。
+        CHECK(!fresh.queryAccount("covbr_nobody", id, pw),
+              "queryAccount on missing user");
+        // 重复用户名：查重查询命中，dup && next() 为真臂。
+        CHECK(!fresh.createAccount("covbr_u4", "other", id),
+              "duplicate username rejected");
     }
 
     // 收尾：重建系统表，不留缺失表状态给后续测试。

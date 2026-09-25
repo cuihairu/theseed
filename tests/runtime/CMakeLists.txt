@@ -27,6 +27,17 @@ target_link_libraries(
 
 add_test(NAME theseed_entity_core_test COMMAND theseed_entity_core_test)
 
+add_executable(theseed_entity_template_branch_test EntityTemplateBranchTest.cpp)
+
+target_link_libraries(
+    theseed_entity_template_branch_test
+    PRIVATE theseed_project_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_entity_template_branch_test
+         COMMAND theseed_entity_template_branch_test)
+
 add_executable(theseed_runtime_transport_test RuntimeTransportTest.cpp)
 
 target_link_libraries(

@@ -237,6 +237,35 @@ static void testPerKeySettings() {
     PASS();
 }
 
+// 空通道不产生字节：drainAll 的 hasPending 假臂。
+static void testDrainAllWithEmptyChannels() {
+    TEST("drainAll ignores channels without pending bundles");
+
+    ChannelRouter router;
+    ChannelRouter::RoutingKey key{5, 0};
+    static_cast<void>(router.getOrCreate(key));  // 建通道但不发数据
+
+    theseed::foundation::MemoryStream out;
+    auto drained = router.drainAll(out);
+    if (drained == 0 && out.size() == 0) PASS();
+    else FAIL("empty channels should drain nothing");
+}
+
+// RoutingKey 相等比较三臂：全等、peer 异、class_ 异（operator== default）。
+static void testRoutingKeyEquality() {
+    TEST("routing key equality compares peer and class");
+
+    const ChannelRouter::RoutingKey base{7, 1};
+    const ChannelRouter::RoutingKey same{7, 1};
+    const ChannelRouter::RoutingKey otherPeer{8, 1};
+    const ChannelRouter::RoutingKey otherClass{7, 2};
+
+    if (!(base == same)) { FAIL("identical keys should be equal"); return; }
+    if (base == otherPeer) { FAIL("different peer should not be equal"); return; }
+    if (base == otherClass) { FAIL("different class should not be equal"); return; }
+    PASS();
+}
+
 int main() {
     std::cout << "ChannelRouter tests:\n";
 
@@ -245,6 +274,8 @@ int main() {
     testFind();
     testCloseChannel();
     testDrainAll();
+    testDrainAllWithEmptyChannels();
+    testRoutingKeyEquality();
     testTotalPendingCount();
     testBackPressure();
     testDefaultWatermark();

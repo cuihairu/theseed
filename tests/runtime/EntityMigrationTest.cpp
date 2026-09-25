@@ -162,5 +162,33 @@ int main() {
         if (!threw) return fail("restore_size_mismatch");
     }
 
+    // --- 分支覆盖：无 position 的 capture/encode/decode 全路径 ---
+    {
+        Entity plain(1003, EntitySide::Cell, def);
+        plain.activate();
+        plain.beginMigration();
+        // 显式传 std::nullopt（capture 默认实参行的显式实参形态）
+        const auto bare = EntityMigration::capture(plain, 3, 1, 2, std::nullopt);
+        if (bare.position.has_value()) return fail("capture_explicit_nullopt");
+
+        // 空 propertyStorage（无属性 def）走 restore/encode 的空块跳过臂
+        EntityDef bareDef("Bare");
+        Entity noProps(1004, EntitySide::Cell, bareDef);
+        noProps.activate();
+        noProps.beginMigration();
+        const auto emptySnap = EntityMigration::capture(noProps, 1, 0, 0);
+        if (!emptySnap.propertyStorage.empty()) return fail("capture_empty_storage");
+
+        Entity landing(1004, EntitySide::Cell, bareDef);
+        landing.activate();
+        EntityMigration::restore(landing, emptySnap);  // 空块 memcpy 跳过臂
+        if (landing.state() != EntityState::Active) return fail("restore_empty_active");
+
+        // 无 position 的 encode/decode 往返（hasPosition=0 写读两臂）
+        const auto barePayload = EntityMigration::encode(bare);
+        const auto bareDecoded = EntityMigration::decode(barePayload);
+        if (bareDecoded.position.has_value()) return fail("decode_no_position");
+    }
+
     return EXIT_SUCCESS;
 }

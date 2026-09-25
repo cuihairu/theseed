@@ -172,6 +172,29 @@ int main() {
     CHECK(recovered.has_value() && recovered->next() && recovered->asUint64(0) == 7,
           "query works after recovery");
 
+    // 分支覆盖补充：asUint64 非数字文本 / 未消费行与越界列的 asBytes 防御 /
+    // 未连接时的 disconnect。
+    {
+        auto txt = c.query("SELECT 'not-a-number' AS a, '-42' AS b");
+        CHECK(txt.has_value(), "text literals query");
+        if (txt.has_value()) {
+            CHECK(txt->next(), "text literals row");
+            CHECK(txt->asUint64(0) == 0, "non-numeric text yields 0");
+            CHECK(txt->asUint64(1) == 0, "leading '-' yields 0");
+        }
+        auto unconsumed = c.query("SELECT 5 AS v");
+        CHECK(unconsumed.has_value(), "unconsumed query");
+        if (unconsumed.has_value()) {
+            CHECK(unconsumed->asBytes(0).empty(), "asBytes before next yields empty");
+            CHECK(unconsumed->next(), "next on unconsumed query");
+            CHECK(unconsumed->asBytes(99).empty(), "asBytes out-of-range column");
+            CHECK(unconsumed->asUint64(0) == 5, "value intact after guard probes");
+        }
+        PostgreSQLConnection fresh(cfg);
+        fresh.disconnect();  // 未连接时 disconnect：保护分支直通
+        CHECK(!fresh.isConnected(), "fresh connection stays disconnected");
+    }
+
     // disconnect 关闭连接
     c.disconnect();
     CHECK(!c.isConnected(), "not connected after disconnect");

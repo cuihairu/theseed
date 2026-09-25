@@ -152,7 +152,7 @@ std::vector<Entity*> Space::findEntitiesByType(const std::string& entityType) co
     std::vector<Entity*> result;
     for (const auto& [entityId, member] : entities_) {
         static_cast<void>(entityId);
-        if (member.entity != nullptr && member.entity->entityType() == entityType) {
+        if (member.entity != nullptr && member.entity->entityType() == entityType) {  // LCOV_EXCL_BR_LINE Member.entity 仅以非空指针写入且移除即整条擦除，null 短路臂不可达
             result.push_back(member.entity);
         }
     }
@@ -163,7 +163,7 @@ std::vector<Entity*> Space::findEntitiesByTag(const std::string& tag) const {
     std::vector<Entity*> result;
     for (const auto& [entityId, member] : entities_) {
         static_cast<void>(entityId);
-        if (member.entity != nullptr && member.entity->hasTag(tag)) {
+        if (member.entity != nullptr && member.entity->hasTag(tag)) {  // LCOV_EXCL_BR_LINE Member.entity 仅以非空指针写入且移除即整条擦除，null 短路臂不可达
             result.push_back(member.entity);
         }
     }

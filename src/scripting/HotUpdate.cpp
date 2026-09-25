@@ -9,7 +9,7 @@
 namespace theseed::scripting {
 
 HotUpdateLevel levelOf(ChangeType type) noexcept {
-    switch (type) {
+    switch (type) {  // LCOV_EXCL_BR_LINE default 防御分发臂不可达（validator 上游已拦截；边归因 switch 行，见下方 EXCL 区）
         case ChangeType::ConfigValueChange:
             return HotUpdateLevel::L1_Config;
         case ChangeType::ModifyScriptBody:
@@ -118,7 +118,7 @@ std::string HotUpdateManager::currentVersion() const noexcept {
 }
 
 void HotUpdateManager::applyChange(const DiffChange& change) {
-    switch (change.type) {
+    switch (change.type) {  // LCOV_EXCL_BR_LINE default 防御分发臂不可达（validator 已拦截 L3/L4；边归因 switch 行，见下方 EXCL 区）
         case ChangeType::ConfigValueChange:
             configStore_[change.key] = change.detail;
             break;

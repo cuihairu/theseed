@@ -58,7 +58,7 @@ void EntityDefRegistry::resolveInheritance() {
     std::function<void(const std::string&)> resolve;
     resolve = [&](const std::string& name) {  // LCOV_EXCL_LINE std::function 赋值的闭包包装符号使本行条目恒 0（lambda 体有计数），gcc 归因伪影
         auto it = defs_.find(name);
-        if (it == defs_.end() || resolved.contains(name)) {
+        if (it == defs_.end() || resolved.contains(name)) {  // LCOV_EXCL_BR_LINE it==end 臂结构性不可达：resolve 仅从 defs_ 遍历或经下方父存在检查的递归进入
             return;
         }
         resolved.insert(name);

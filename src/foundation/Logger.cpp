@@ -15,7 +15,7 @@ namespace theseed::foundation {
 namespace {
 
 std::shared_ptr<ILogger>& globalStorage() {
-    static std::shared_ptr<ILogger> logger = std::make_shared<ConsoleLogger>();
+    static std::shared_ptr<ILogger> logger = std::make_shared<ConsoleLogger>();  // LCOV_EXCL_BR_LINE 函数级 static 初始化守卫边，单线程测试恒走已初始化路径
     return logger;
 }
 

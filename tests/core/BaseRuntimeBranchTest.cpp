@@ -2,6 +2,7 @@
 // send 失败臂、timer 正向链路与 sync 时序编排。
 // 与 BaseRuntimeTest 互补——那边是功能路径，这边专收防御与边界分支。
 #include "theseed/core/BaseRuntime.h"
+#include "theseed/core/EntityData.h"
 #include "theseed/core/IEntityStore.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
@@ -990,6 +991,84 @@ static void testStoreFailureEdges() {
     if (ok) PASS(); else FAIL("store failure edges");
 }
 
+// InMemoryEntityStore load 的类型闸：id 存在但 entityType 不符 → false（L55）。
+static void testInMemoryStoreTypeMismatch() {
+    TEST("in-memory store load rejects type mismatch");
+
+    InMemoryEntityStore store;
+    theseed::core::EntityData data;
+    data.id = 5;
+    data.entityType = "Avatar";
+    theseed::core::PropertyData hp;
+    hp.id = 0;
+    hp.name = "hp";
+    hp.type = theseed::core::DataType::Int32;
+    std::int32_t hpVal = 10;
+    hp.rawValue.resize(4);
+    std::memcpy(hp.rawValue.data(), &hpVal, 4);
+    data.properties.push_back(hp);
+
+    bool ok = store.save(5, data);
+
+    theseed::core::EntityData out;
+    ok = ok && !store.load(5, "Monster", out);   // 类型不匹配 → 拒绝
+    ok = ok && store.load(5, "Avatar", out);     // 匹配 → 成功还原
+    ok = ok && out.properties.size() == 1;
+    std::int32_t restored = 0;
+    if (out.properties.size() == 1) {
+        std::memcpy(&restored, out.properties[0].rawValue.data(), 4);
+    }
+    ok = ok && restored == 10;
+
+    if (ok) PASS(); else FAIL("store type mismatch");
+}
+
+// destroy 双臂（有/无 cell bind）、requestTeleport 无 bind 拒绝、
+// spawnRequest 成功臂（requester 已 bind → requestCreateCell 发送成功）。
+static void testDestroyTeleportSpawnArmMatrix() {
+    TEST("destroy both arms / teleport unbound / spawn success");
+
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto rt = makeRuntime(transport);
+    bool ok = true;
+
+    // ① 无 cell bind 的实体 destroy → 立即销毁臂（263），不在册。
+    auto* plain = rt->createEntity("Avatar");
+    const auto plainId = plain->id();
+    ok = ok && rt->destroyEntity(plainId);
+    ok = ok && rt->findEntity(plainId) == nullptr;
+
+    // ② 有 cell bind 的实体 destroy → pending 臂（255-259），仍在册等 cell 确认。
+    auto* bound = rt->createEntity("Avatar");
+    ok = ok && rt->setCellEntityCall(bound->id(), 2);
+    const auto boundId = bound->id();
+    ok = ok && rt->destroyEntity(boundId);
+    ok = ok && rt->findEntity(boundId) != nullptr;   // 进入 Destroying pending
+
+    // ③ requestTeleport：未知 id → false；在册但无 bind → false（629）。
+    auto* mover = rt->createEntity("Avatar");
+    const auto moverId = mover->id();
+    ok = ok && !rt->requestTeleport(9999, 1, Vector3{});
+    ok = ok && !rt->requestTeleport(moverId, 1, Vector3{1, 2, 3});
+    // bind 后真臂：teleport 请求发出（无害重复覆盖）。
+    ok = ok && rt->setCellEntityCall(moverId, 3);
+    ok = ok && rt->requestTeleport(moverId, 1, Vector3{4, 5, 6});
+
+    // ④ spawnRequest 成功臂：requester bind cell → 新实体创建且 requestCreateCell 发出。
+    auto* req = rt->createEntity("Avatar");
+    ok = ok && rt->setCellEntityCall(req->id(), 4);
+    const auto before = rt->findEntitiesByType("Avatar").size();
+    {
+        std::vector<std::byte> v;
+        appendStr(v, "Avatar");
+        appendF32(v, 1.f); appendF32(v, 2.f); appendF32(v, 3.f);
+        ok = ok && dispatch(*rt, "entity.spawnRequest", std::move(v), req->id());
+        ok = ok && rt->findEntitiesByType("Avatar").size() == before + 1;
+    }
+
+    if (ok) PASS(); else FAIL("destroy/teleport/spawn arm matrix");
+}
+
 int main() {
     std::cout << "BaseRuntime branch tests:\n";
 
@@ -1011,6 +1090,8 @@ int main() {
     testCellCallEdgeVariants();
     testPropertySyncUnknownEntityAndFlushFailure();
     testStoreFailureEdges();
+    testInMemoryStoreTypeMismatch();
+    testDestroyTeleportSpawnArmMatrix();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

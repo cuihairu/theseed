@@ -297,6 +297,36 @@ int main() {
         failing.run();      // start 失败 → 早退
     }
 
+    // 空 app_ 防御臂：start 直接失败；未启动 stop 早退。
+    {
+        ServiceApp noApp(nullptr, std::make_unique<InMemoryIORuntime>(),
+                         std::chrono::milliseconds{0});
+        if (noApp.start()) {
+            return fail("null_app_start_should_fail");
+        }
+        noApp.stop();
+    }
+
+    // 已启动后的短路臂：runOnce/run 跳过 start；重复 start 幂等。
+    {
+        auto stub5 = std::make_unique<StubServiceApp>();
+        auto* stubPtr5 = stub5.get();
+        ServiceApp service5(std::move(stub5), std::make_unique<InMemoryIORuntime>(),
+                            std::chrono::milliseconds{0});
+        if (!service5.start()) {
+            return fail("service5_start");
+        }
+        if (!service5.start()) {  // started_ 真臂：幂等返回 true
+            return fail("repeat_start_should_be_idempotent");
+        }
+        service5.runOnce();               // started_ 真 → 跳过 start 直接 tick
+        service5.scheduler().requestStop();
+        service5.run();                   // started_ 真 → 跳过 start → run 立即返回 → stop()
+        if (!stubPtr5->stopped) {
+            return fail("run_after_start_should_stop");
+        }
+    }
+
     // run()：主循环跑至 requestStop 后自动 stop
     {
         auto stub4 = std::make_unique<StubServiceApp>();
@@ -388,6 +418,20 @@ int main() {
 
         // 无请求无唤醒：等满 maxWait 后空转返回
         ioEdge.runOnce(std::chrono::milliseconds{5});
+
+        // drainCompletions 容量打满：两条取消完成只取一条，剩余下轮取走（循环假臂）。
+        auto tok1 = ioEdge.submit(theseed::runtime::IoRequest{});
+        auto tok2 = ioEdge.submit(theseed::runtime::IoRequest{});
+        if (!ioEdge.cancel(tok1) || !ioEdge.cancel(tok2)) {
+            return fail("io_cancel_pair");
+        }
+        std::array<IoCompletion, 2> two{};
+        if (ioEdge.drainCompletions(two.data(), 1) != 1) {
+            return fail("drain_cap_one");
+        }
+        if (ioEdge.drainCompletions(two.data(), 2) != 1) {
+            return fail("drain_rest_one");
+        }
     }
 
     return EXIT_SUCCESS;

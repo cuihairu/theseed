@@ -96,6 +96,13 @@ static void test_basename_of() {
            "no token splitting inside basenameOf");
 
     EXPECT(supervisor.basenameOf("") == "unknown", "empty command line fallback");
+
+    // stripQuotes 短路链残缺变体：只有前引号（尾字符非引号）不剥离；成对空引号剥离为空。
+    EXPECT(supervisor.basenameOf("\"/opt/theseed/node") == "node",
+           "leading-quote-only path should skip stripping");
+
+    EXPECT(supervisor.basenameOf("\"\"") == "unknown",
+           "empty quoted string strips to empty then falls back");
     PASS();
 }
 

@@ -267,6 +267,63 @@ static void testInMemoryStoreAllocId() {
     if (ok) PASS(); else FAIL("id sequence wrong");
 }
 
+// 分支覆盖：encode 的空 rawValue 跳过臂、decode 的 size==0 跳过臂、
+// count 超限防御臂与空属性列表边界。
+static void testEncodeDecodeEdgeCases() {
+    TEST("EntityData encode/decode edge cases");
+
+    bool ok = true;
+
+    // 空 String 属性：encode 跳过 writeBytes（rawValue 空）、decode size==0 跳过 readBytes
+    {
+        EntityData original;
+        original.id = 1;
+        original.entityType = "Ghost";
+        PropertyData emptyStr;
+        emptyStr.id = 0;
+        emptyStr.name = "nick";
+        emptyStr.type = DataType::String;
+        // rawValue 保持为空
+        original.properties.push_back(emptyStr);
+
+        theseed::core::MemoryStream stream;
+        theseed::core::encodeEntityData(stream, original);
+        stream.resetRead();
+        EntityData decoded;
+        ok = ok && theseed::core::decodeEntityData(stream, decoded);
+        ok = ok && decoded.properties.size() == 1;
+        ok = ok && decoded.properties[0].name == "nick";
+        ok = ok && decoded.properties[0].rawValue.empty();
+    }
+
+    // 空属性列表：count=0 往返
+    {
+        EntityData original;
+        original.id = 2;
+        original.entityType = "Empty";
+        theseed::core::MemoryStream stream;
+        theseed::core::encodeEntityData(stream, original);
+        stream.resetRead();
+        EntityData decoded;
+        ok = ok && theseed::core::decodeEntityData(stream, decoded);
+        ok = ok && decoded.properties.empty();
+    }
+
+    // 垃圾 count 超出合理上限：防御臂直接拒绝（不触发超大分配）
+    {
+        theseed::core::MemoryStream evil;
+        evil.writeUint64(3);
+        evil.writeString("Evil");
+        evil.writeUint32((1u << 20) + 1);  // kMaxPropertyCount + 1
+        evil.resetRead();
+        EntityData out;
+        ok = ok && !theseed::core::decodeEntityData(evil, out);
+    }
+
+    if (ok) PASS();
+    else FAIL("encode/decode edge case failed");
+}
+
 int main() {
     std::cout << "EntityData tests:\n";
 
@@ -275,6 +332,7 @@ int main() {
     testEntityDataFindProperty();
     testDecodeTruncatedProperty();
     testEntityDataEncodeDecode();
+    testEncodeDecodeEdgeCases();
     testInMemoryStoreSaveLoad();
     testInMemoryStoreRemove();
     testInMemoryStoreListEntityTypes();

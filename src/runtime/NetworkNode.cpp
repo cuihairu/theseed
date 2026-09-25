@@ -40,7 +40,7 @@ bool NetworkNode::connectToPeer(ComponentId peerId,
                                  const std::string& host,
                                  std::uint16_t port) {
     auto conn = TcpConnection::create();
-    if (!conn->connect(host, port)) {
+    if (!conn->connect(host, port)) {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，立即失败臂不可达（同 LoginApp 先例）
         // LCOV_EXCL_START 同 LoginApp：非阻塞 connect 恒 EINPROGRESS，connect 失败分支不可触发
         return false;
         // LCOV_EXCL_STOP

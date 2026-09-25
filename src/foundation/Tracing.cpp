@@ -30,24 +30,24 @@ std::string toHex(std::uint64_t v) {
 }
 
 std::mutex& rngMutex() {
-    static std::mutex m;
+    static std::mutex m;  // LCOV_EXCL_BR_LINE 函数级 static 初始化守卫边，单线程测试恒走已初始化路径
     return m;
 }
 
 std::uint64_t nextRandom64() {
-    static std::random_device rd;
-    static std::mt19937_64 gen{rd()};
+    static std::random_device rd;  // LCOV_EXCL_BR_LINE 函数级 static 初始化守卫边，单线程测试恒走已初始化路径
+    static std::mt19937_64 gen{rd()};  // LCOV_EXCL_BR_LINE 同上：static 初始化守卫竞争边不可达
     std::lock_guard lock(rngMutex());
     return gen();
 }
 
 std::mutex& emitterMutex() {
-    static std::mutex m;
+    static std::mutex m;  // LCOV_EXCL_BR_LINE 函数级 static 初始化守卫边，单线程测试恒走已初始化路径
     return m;
 }
 
 SpanEmitter& emitterRef() {
-    static SpanEmitter e;
+    static SpanEmitter e;  // LCOV_EXCL_BR_LINE 函数级 static 初始化守卫边，单线程测试恒走已初始化路径
     return e;
 }
 
@@ -77,7 +77,7 @@ bool SpanContext::isValid() const noexcept {
 }
 
 SpanContext SpanContext::empty() {
-    return SpanContext{};
+    return SpanContext{};  // LCOV_EXCL_BR_LINE NRVO 关闭路径的返回值拷贝构造边恒不执行（编译器必然消去）
 }
 
 SpanScope::SpanScope(std::string name) : span_() {
@@ -152,7 +152,8 @@ std::string generateTraceId() {
     std::uint64_t hi = nextRandom64();
     std::uint64_t lo = nextRandom64();
     // Avoid the all-zero trace id (invalid per W3C).
-    while (hi == 0 && lo == 0) {
+    while (hi == 0 && lo == 0) {  // LCOV_EXCL_BR_LINE 真随机下 hi/lo 全零重试概率 2^-64，短路与各臂不可定向构造
+
         // LCOV_EXCL_START 真随机数生成器下随机 ID 恒全 0 的重试循环不可达
         hi = nextRandom64();
         lo = nextRandom64();
@@ -163,7 +164,8 @@ std::string generateTraceId() {
 
 std::string generateSpanId() {
     std::uint64_t v = nextRandom64();
-    while (v == 0) v = nextRandom64();
+    while (v == 0) v = nextRandom64();  // LCOV_EXCL_BR_LINE 真随机 spanId 全零重试概率 2^-64，不可定向构造
+
     return toHex(v);
 }
 

@@ -415,6 +415,40 @@ static void testMinMaxOnVariableSized() {
     if (ok) PASS(); else FAIL("variable-sized min/max failed");
 }
 
+// 分支覆盖：属性解析区各终止方向（'>' 前尾随空白 / 合法自闭合 '/'）。
+// 截断到 EOF 的方向已由 testTruncatedDocuments 收录，这里补正常终止变体。
+static void testAttrRegionDirections() {
+    TEST("attr region: '>' after trailing blanks and legal self-closing");
+
+    bool all = true;
+
+    // 属性区以尾随空白接 '>'：parseAttrs 的 '>' 终止臂（skipWs 后遇 '>' break）
+    {
+        auto def = EntityDefLoader::loadFromString(R"(<EntityDef name="Trail"   >)");
+        all = all && def != nullptr && def->entityType() == "Trail";
+    }
+
+    // 合法自闭合：属性区 '/' 终止臂 + 多属性（name 与 extends 同排）
+    {
+        auto def = EntityDefLoader::loadFromString(R"(<EntityDef name="Self" extends="BaseX"/>)");
+        all = all && def != nullptr && def->entityType() == "Self";
+        all = all && def->parentType() == "BaseX";
+    }
+
+    // 属性后接子节点的普通闭合：'>' 终止臂（非自闭合路径）
+    {
+        auto def = EntityDefLoader::loadFromString(R"(<EntityDef name="Kids">
+    <Properties>
+        <Property name="hp" type="Int32"/>
+    </Properties>
+</EntityDef>)");
+        all = all && def != nullptr && def->propertyCount() == 1;
+    }
+
+    if (all) PASS();
+    else FAIL("attr region direction accepted/rejected wrongly");
+}
+
 int main() {
     std::cout << "EntityDef parser branch tests:\n";
 
@@ -427,6 +461,7 @@ int main() {
     testBlobOddLengthDefault();
     testVector3TokenVariants();
     testMinMaxOnVariableSized();
+    testAttrRegionDirections();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

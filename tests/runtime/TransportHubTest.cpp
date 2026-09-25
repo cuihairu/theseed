@@ -242,6 +242,92 @@ static void testAwaitingIdentityLifecycle() {
     else FAIL("awaiting identity lifecycle wrong");
 }
 
+// 防御臂：connectPeer 拒绝空 transport 与 0 号 peer；attachServerTransport 拒绝空；receive 容量 0/空缓冲早退。
+static void testDefensiveArms() {
+    TEST("connectPeer/attachServerTransport/receive defensive arms");
+
+    auto hub = TransportHub(1);
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+
+    hub.connectPeer(0, transport);          // peerId == 0 → 忽略
+    hub.connectPeer(2, nullptr);            // 空 transport → 忽略
+    bool ok = hub.peerCount() == 0;
+
+    hub.attachServerTransport(nullptr);     // 空 transport → 忽略
+    ok = ok && hub.pendingCount() == 0;
+
+    RuntimeInvocation inv;
+    ok = ok && hub.receive(1, nullptr, 4) == 0;   // 空缓冲
+    ok = ok && hub.receive(1, &inv, 0) == 0;      // 容量 0
+
+    if (ok) PASS();
+    else FAIL("defensive arms wrong");
+}
+
+// receive 容量打满即 break：peers 段与 awaitingIdentity 段各覆盖一次。
+static void testReceiveCapacityBreaks() {
+    TEST("receive stops at capacity in both loops");
+
+    auto hub = TransportHub(1);
+    auto p2 = std::make_shared<InMemoryRuntimeTransport>();
+    auto p3 = std::make_shared<InMemoryRuntimeTransport>();
+    hub.connectPeer(2, p2);
+    hub.connectPeer(3, p3);
+    p2->send(makeInvocation(10, 1, "a"));
+    p3->send(makeInvocation(20, 1, "b"));
+
+    RuntimeInvocation out[2]{};
+    auto n = hub.receive(1, out, 1);        // 容量 1：拉到一条即 break，第二个 peer 不拉
+    bool ok = n == 1;
+    // peers_ 是 unordered_map，遍历顺序不固定：两次收取合计应恰好 a、b 各一条。
+    const std::string first = out[0].method;
+    RuntimeInvocation rest[1]{};
+    ok = ok && hub.receive(1, rest, 2) == 1;
+    ok = ok && (first == "a" ? rest[0].method == "b" : rest[0].method == "a");
+
+    // awaitingIdentity 段：容量 1 时同样 break，剩余 transport 留在队列。
+    auto server = TransportHub(20);
+    auto t1 = std::make_shared<InMemoryRuntimeTransport>();
+    auto t2 = std::make_shared<InMemoryRuntimeTransport>();
+    RuntimeInvocation hello1;
+    hello1.sourceComponent = 30; hello1.targetComponent = 20; hello1.method = "hi1";
+    RuntimeInvocation hello2;
+    hello2.sourceComponent = 31; hello2.targetComponent = 20; hello2.method = "hi2";
+    t1->send(hello1);
+    t2->send(hello2);
+    server.attachServerTransport(t1);
+    server.attachServerTransport(t2);
+    RuntimeInvocation one[1]{};
+    ok = ok && server.receive(20, one, 1) == 1 && one[0].method == "hi1";
+
+    if (ok) PASS();
+    else FAIL("capacity break wrong");
+}
+
+// 服务端连接自学习：首条消息的 sourceComponent 注册为 peer，回复可路由。
+static void testServerIdentitySelfLearning() {
+    TEST("server transport self-registers peer from first message source");
+
+    auto hub = TransportHub(20);
+    auto t = std::make_shared<InMemoryRuntimeTransport>();
+    RuntimeInvocation hello;
+    hello.sourceComponent = 30; hello.targetComponent = 20; hello.method = "hello";
+    t->send(hello);
+    hub.attachServerTransport(t);
+
+    RuntimeInvocation out[1]{};
+    auto n = hub.receive(20, out, 1);
+    bool ok = n == 1 && out[0].method == "hello";
+    ok = ok && hub.hasPeer(30) && hub.pendingCount() == 0;
+
+    // 自学习后按 sourceComponent 路由回复。
+    ok = ok && hub.send(makeInvocation(1, 30, "reply")) == SendResult::Accepted;
+    ok = ok && t->receive(30, out, 1) == 1 && out[0].method == "reply";
+
+    if (ok) PASS();
+    else FAIL("self learning wrong");
+}
+
 int main() {
     std::cout << "TransportHub tests:\n";
 
@@ -254,6 +340,9 @@ int main() {
     testPendingCountAggregation();
     testPeerCount();
     testAwaitingIdentityLifecycle();
+    testDefensiveArms();
+    testReceiveCapacityBreaks();
+    testServerIdentitySelfLearning();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

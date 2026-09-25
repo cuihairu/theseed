@@ -41,13 +41,13 @@ void LoginApp::init() {
             transport = config_.dbTransportFactory(config_.dbHost, config_.dbPort);
         } else {
             auto conn = runtime::TcpConnection::create();
-            if (!conn->connect(config_.dbHost, config_.dbPort)) {
+            if (!conn->connect(config_.dbHost, config_.dbPort)) {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（见下方 EXCL 区同理由）
                 // LCOV_EXCL_START Linux 非阻塞 connect 对无服务端口恒返回 EINPROGRESS；inet_pton 无 DNS，坏主机名解析为 0.0.0.0 同样如此
                 return;
                 // LCOV_EXCL_STOP
             }
             transport = std::make_shared<runtime::NetworkTransport>(conn);
-        }
+        }  // LCOV_EXCL_BR_LINE 无 factory 臂必先经上方不可达 connect 失败，此汇合边不可达
         hub_->connectPeer(config_.dbComponentId, transport);
     }
 

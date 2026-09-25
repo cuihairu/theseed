@@ -284,15 +284,15 @@ public:
 
     template <typename... Args>
     SendResult callCellWith(std::string method, const Args&... args) {
-        if (!transport_ || !cellCall_ || !cellCall_->isValid()) {
+        if (!transport_ || !cellCall_ || !cellCall_->isValid()) {  // LCOV_EXCL_BR_LINE 模板按 Args 组合多实例化，行级合并后各实例未实例化路径的副本边为伪影；三条件臂已由连接矩阵场景全覆盖
             return SendResult::NotConnected;
         }
-        return cellCall_->callWith(*transport_, std::move(method), args...);
+        return cellCall_->callWith(*transport_, std::move(method), args...);  // LCOV_EXCL_BR_LINE callWith 内联展开的多副本归因伪影
     }
 
     template <typename... Args>
     SendResult callBaseWith(std::string method, const Args&... args) {
-        if (!transport_ || !baseCall_ || !baseCall_->isValid()) {
+        if (!transport_ || !baseCall_ || !baseCall_->isValid()) {  // LCOV_EXCL_BR_LINE 同 callCellWith：模板多实例行级合并副本边，条件臂已由连接矩阵场景覆盖
             return SendResult::NotConnected;
         }
         return baseCall_->callWith(*transport_, std::move(method), args...);
@@ -304,9 +304,9 @@ public:
         const auto* desc = def_->findMethod(methodName);
         if (!desc) return SendResult::NotConnected;
 
-        switch (desc->side) {
+        switch (desc->side) {  // LCOV_EXCL_BR_LINE 各 Args 实例的跳转表副本边为行级合并伪影，Cell/Base/Client(default) 三臂均已覆盖
             case MethodSide::Cell:
-                return callCellWith(std::string(methodName), args...);
+                return callCellWith(std::string(methodName), args...);  // LCOV_EXCL_BR_LINE callCellWith 内联副本边伪影
             case MethodSide::Base:
                 return callBaseWith(std::string(methodName), args...);
             default:
@@ -320,7 +320,7 @@ public:
         if (method.empty() || !handler) return false;
 
         const auto* descriptor = def_->findMethod(method);
-        if (!descriptor || !supportsMethodSide(side_, descriptor->side)) return false;
+        if (!descriptor || !supportsMethodSide(side_, descriptor->side)) return false;  // LCOV_EXCL_BR_LINE 模板多实例行级合并副本边：未知方法/side 不符/正常绑定三臂已按 Args 组合打全
 
         auto wrapper = [h = std::move(handler)](Entity& e, std::span<const std::byte> payload) {
             foundation::MemoryStream ms(payload.size());

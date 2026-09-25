@@ -70,6 +70,21 @@ struct MockClient {
 int main() {
     std::cout << "RealmApp tests:" << std::endl;
 
+    // ClientSession::send 防御臂：无 pipe（nullptr）与 pipe 未连接时静默丢弃。
+    TEST("client session send guards");
+    {
+        ClientSession nullSession(nullptr);
+        const std::byte buf[] = {std::byte{0x01}};
+        nullSession.send(std::span<const std::byte>(buf, 1));  // pipe_ 为空 → 跳过
+
+        auto lonePipe = InMemoryBytePipe::createPair().first;  // 未 connect 的管道
+        ClientSession detachedSession(lonePipe);
+        detachedSession.send(std::span<const std::byte>(buf, 1));  // !isConnected → 跳过
+        nullSession.close();
+        detachedSession.close();
+    }
+    PASS();
+
     TEST("query realms returns configured list");
     {
         RealmAppConfig config;
@@ -152,6 +167,19 @@ int main() {
             FAIL("session gauge missing");
         if (text.find("tick_duration_ms") == std::string::npos)
             FAIL("tick histogram missing");
+    }
+    PASS();
+
+    TEST("ops.enabled init starts inspect server");
+    {
+        RealmAppConfig config;
+        config.listenPort = 0;  // ephemeral
+        config.ops.enabled = true;
+        config.ops.host = "127.0.0.1";
+        config.ops.port = 0;
+        RealmApp app(std::move(config));
+        app.init();     // ops.enabled 真臂：ProcessInfo / OpsServer 初始化
+        app.tick();
     }
     PASS();
 

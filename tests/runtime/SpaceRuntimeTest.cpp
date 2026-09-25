@@ -111,6 +111,9 @@ int main() {
             return fail("topology_cell_id");
         }
 
+        // 未设回调时 rebalance() 空臂：no-throw 直跳。
+        topoPtr->rebalance();
+
         bool rebalanced = false;
         topoPtr->onTopologyChanged([&] {
             rebalanced = true;

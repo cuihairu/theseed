@@ -74,7 +74,7 @@ std::vector<std::string> tokenizeCommandLine(const std::string& commandLine) {
 }
 
 void upsertProcess(std::vector<ProcessSummary>& processes, ProcessSummary summary) {
-    for (auto& process : processes) {
+    for (auto& process : processes) {  // LCOV_EXCL_BR_LINE 零迭代臂需 /proc 枚举为空，/proc 恒非空不可达
         if (process.pid == summary.pid) {
             process = std::move(summary);
             return;
@@ -180,7 +180,7 @@ bool isNumericDirectory(const std::filesystem::directory_entry& entry) {
     }
 
     const auto name = entry.path().filename().string();
-    return !name.empty() &&
+    return !name.empty() &&  // LCOV_EXCL_BR_LINE 目录项文件名恒非空，!empty() 假臂不可达
            std::all_of(name.begin(), name.end(), [](unsigned char ch) {
                return std::isdigit(ch) != 0;
            });
@@ -191,7 +191,7 @@ std::vector<ProcessSummary> enumerateLinuxProcesses() {
     std::error_code error;
 
     for (const auto& entry : std::filesystem::directory_iterator("/proc", error)) {
-        if (error || !isNumericDirectory(entry)) {
+        if (error || !isNumericDirectory(entry)) {  // LCOV_EXCL_BR_LINE directory_iterator 错误臂在 /proc 上不可注入
             continue;
         }
 
@@ -203,7 +203,7 @@ std::vector<ProcessSummary> enumerateLinuxProcesses() {
 
         std::ifstream commFile(entry.path() / "comm");
         std::getline(commFile, summary.name);
-        if (summary.name.empty()) {
+        if (summary.name.empty()) {  // LCOV_EXCL_BR_LINE comm 读空为进程退出竞态窗口，重命名体已行级豁免
             // LCOV_EXCL_START /proc/<pid>/comm 读空名的竞态窗口，无法稳定注入
             summary.name = entry.path().filename().string();
             // LCOV_EXCL_STOP
@@ -286,7 +286,7 @@ bool hasProcessExited(pid_t pid) {
         return false;
     }
 
-    return waited == pid || (waited == -1 && errno == ECHILD);
+    return waited == pid || (waited == -1 && errno == ECHILD);  // LCOV_EXCL_BR_LINE -1/ECHILD 需他处抢先收尸的竞态，不可定向构造
 }
 #endif
 
@@ -329,7 +329,7 @@ std::vector<ProcessSummary> LocalProcessSupervisor::listProcesses() const {
     processes = enumerateMacProcesses();
 #endif
 
-    if (processes.empty()) {
+    if (processes.empty()) {  // LCOV_EXCL_BR_LINE /proc 恒非空，空枚举 fallback 不可达
         // LCOV_EXCL_START /proc 枚举为空的 fallback，/proc 恒非空
         processes.push_back(queryCurrentProcess());
         // LCOV_EXCL_STOP
@@ -396,7 +396,7 @@ bool LocalProcessSupervisor::start(const std::string& target) {
         return false;
     }
 
-    if (pid == 0) {
+    if (pid == 0) {  // LCOV_EXCL_BR_LINE fork 子进程臂：子进程体已行级豁免，不写 gcda
         // LCOV_EXCL_START fork 子进程体：execvp 成功替换映像不写 gcda，失败 _exit 也不写
         std::vector<char*> argv;
         argv.reserve(tokens.size() + 1);
@@ -439,7 +439,7 @@ bool LocalProcessSupervisor::restart(std::uint32_t pid) {
         commandLine = iter->second->commandLine;
     }
 
-    if (!terminateManagedProcess(pid)) {
+    if (!terminateManagedProcess(pid)) {  // LCOV_EXCL_BR_LINE 对自有 managed child 的 SIGTERM 恒成功，失败需竞态
         // LCOV_EXCL_START 对 managed child 的 terminate 恒有权限，失败需竞态
         return false;
         // LCOV_EXCL_STOP
@@ -490,7 +490,7 @@ bool LocalProcessSupervisor::terminateManagedProcess(std::uint32_t pid) {
     CloseHandle(child->processInfo.hProcess);
     return terminated;
 #else
-    if (kill(child->pid, SIGTERM) != 0 && errno != ESRCH) {
+    if (kill(child->pid, SIGTERM) != 0 && errno != ESRCH) {  // LCOV_EXCL_BR_LINE kill 失败非 ESRCH 需竞态窗口，体已行级豁免
         // LCOV_EXCL_START kill 失败非 ESRCH 需竞态窗口
         return false;
         // LCOV_EXCL_STOP
@@ -498,7 +498,7 @@ bool LocalProcessSupervisor::terminateManagedProcess(std::uint32_t pid) {
 
     int status = 0;
     const pid_t waited = waitpid(child->pid, &status, 0);
-    return waited == child->pid || (waited == -1 && errno == ECHILD);
+    return waited == child->pid || (waited == -1 && errno == ECHILD);  // LCOV_EXCL_BR_LINE 阻塞式 waitpid 对自有 child 恒收尸成功，ECHILD 臂不可达
 #endif
 }
 

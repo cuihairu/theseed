@@ -473,6 +473,72 @@ static void testEnterGameBaseOnlyAvatar() {
     std::filesystem::remove_all(dir);
 }
 
+// init 全景：store 存量 Avatar 恢复（factory 真臂 / restoreEntities 分派）、
+// ops.enabled 段与 /inspect 触发 inspector lambda 的 runtime/transport 真臂。
+static void testInitRestoresStoredEntitiesWithOps() {
+    TEST("init restores stored entities and serves /inspect with ops enabled");
+
+    auto dir = createDefDir();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+    auto store = std::make_shared<InMemoryEntityStore>();
+
+    // 预置一条存量 Avatar：level=7（Int32 定长 4 字节小端）。
+    theseed::core::EntityData stored;
+    stored.id = 77;
+    stored.entityType = "Avatar";
+    theseed::core::PropertyData level;
+    level.id = 0;
+    level.name = "level";
+    level.type = theseed::core::DataType::Int32;
+    std::int32_t levelVal = 7;
+    level.rawValue.resize(4);
+    std::memcpy(level.rawValue.data(), &levelVal, 4);
+    stored.properties.push_back(level);
+    const bool stored_ = store->save(77, stored);
+
+    BaseApp::Config config;
+    config.entityDefPath = dir;
+    config.componentId = 1;
+    config.autoSaveInterval = {};
+    config.clientListenPort = 0;
+    config.ops.enabled = true;
+    config.ops.host = "127.0.0.1";
+    config.ops.port = 0;  // ephemeral
+    auto app = std::make_unique<BaseApp>(config, transport, store);
+
+    bool ok = stored_;
+    ok = ok && app->init();
+    // 存量数据恢复：Avatar 在册且属性还原。
+    auto* restored = app->findEntity(77);
+    ok = ok && restored != nullptr && restored->entityType() == "Avatar";
+    ok = ok && restored->getProperty<std::int32_t>(0) == 7;
+
+    // ops 服务已起，/inspect 触发 inspector lambda（entityCount / transportStats 真臂）。
+    ok = ok && app->opsListenPort() != 0;
+    auto opsConn = TcpConnection::create();
+    std::vector<std::byte> rx;
+    opsConn->setOnReceived([&rx](std::span<const std::byte> data) {
+        rx.insert(rx.end(), data.begin(), data.end());
+    });
+    ok = ok && opsConn->connect("127.0.0.1", app->opsListenPort());
+    if (ok) {
+        static const std::string req = "GET /inspect HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        opsConn->write(std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(req.data()), req.size()));
+        for (int i = 0; i < 2000 && rx.empty(); ++i) {
+            app->tick();
+            opsConn->pump();
+        }
+        std::string body(reinterpret_cast<const char*>(rx.data()), rx.size());
+        ok = ok && body.find("\"role\":\"BaseApp\"") != std::string::npos;
+        ok = ok && body.find("\"entity_count\":1") != std::string::npos;
+    }
+    opsConn->close();
+
+    if (ok) PASS(); else FAIL("init restore + ops inspect failed");
+    std::filesystem::remove_all(dir);
+}
+
 int main() {
     std::cout << "BaseApp branch tests:\n";
 
@@ -481,6 +547,7 @@ int main() {
     testClientLifecycleBranches();
     testCellActionWithoutCellBinding();
     testEnterGameBaseOnlyAvatar();
+    testInitRestoresStoredEntitiesWithOps();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

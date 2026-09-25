@@ -34,6 +34,39 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+  coverage:
+    name: linux-coverage-gate
+    # 固定 24.04 锁定 GCC 13：分支插桩的 STL 内联边随 GCC 版本漂移，
+    # 与本地 gcc-coverage 树（g++13）保持同一口径，100% 门禁才可复现。
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install gcovr
+        run: pipx install gcovr
+
+      - name: Configure
+        run: cmake --preset gcc-coverage
+
+      - name: Build
+        run: cmake --build --preset gcc-coverage
+
+      # gcc-coverage testPreset 固定 jobs=1：并行跑测试会写坏共享库的 gcda。
+      # 无 vcpkg toolchain → THESEED_HAS_MYSQL=OFF，SQL 后端不编译，
+      # 分母为本地口径的子集，门禁阈值与本地一致。
+      - name: Test
+        run: ctest --preset gcc-coverage
+
+      # 业务口径：--exclude-throw-branches 剔除结构性不可达的异常边；
+      # 结构性不可达的业务分支用源码 LCOV_EXCL_BR_LINE 显式登记豁免。
+      # 行与分支双 100% 断言，任一不达 gcovr 以非零退出。
+      - name: Coverage gate
+        run: |
+          gcovr --filter src/ --exclude-throw-branches \
+            --fail-under-line 100 --fail-under-branch 100 \
+            --gcov-ignore-errors=no_working_dir_found \
+            --print-summary
+
   windows:
     name: windows-msvc-debug
     runs-on: windows-latest

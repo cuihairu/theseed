@@ -191,6 +191,125 @@ static void test_inject_writes_traceparent() {
     PASS();
 }
 
+// isValidHex 三段短路链的各假臂：按字符类逐一构造非法 traceId。
+static void test_is_valid_hex_character_classes() {
+    TEST("test_is_valid_hex_character_classes");
+    const char badChars[] = {'/', ':', '@', '`', 'g', '\x01'};
+    for (const char bad : badChars) {
+        SpanContext ctx;
+        ctx.traceId = std::string(32, '0');
+        ctx.traceId[31] = bad;  // 末位换成非法字符，循环走完整链后中断
+        ctx.spanId = std::string(16, 'a');
+        if (ctx.isValid()) {
+            FAIL(std::string("character should be invalid: ") + bad);
+            return;
+        }
+    }
+    // 大写 A-F 合法（第三段短路臂的路径）
+    SpanContext upper;
+    upper.traceId = std::string(32, 'F');
+    upper.spanId = std::string(16, 'A');
+    if (!upper.isValid()) { FAIL("uppercase hex should be valid"); return; }
+    // traceId 长度错误：isValid 第一段短路，不再评估 spanId
+    SpanContext shortTrace;
+    shortTrace.traceId = std::string(31, '0');
+    shortTrace.spanId = std::string(16, 'a');
+    if (shortTrace.isValid()) { FAIL("wrong trace length should be invalid"); return; }
+    // traceId 合法、spanId 长度错误：第二段短路臂
+    SpanContext shortSpan;
+    shortSpan.traceId = std::string(32, '0');
+    shortSpan.spanId = std::string(17, 'a');
+    if (shortSpan.isValid()) { FAIL("wrong span length should be invalid"); return; }
+    PASS();
+}
+
+static void test_inject_extract_defensive_shortcuts() {
+    TEST("test_inject_extract_defensive_shortcuts");
+    SpanContext valid;
+    valid.traceId = generateTraceId();
+    valid.spanId = generateSpanId();
+    // 空 setter：injectContext 直接返回，不产生调用
+    int setterCalls = 0;
+    injectContext(valid, [&](std::string_view, std::string_view) { ++setterCalls; });
+    if (setterCalls != 1) { FAIL("valid inject should call setter once"); return; }
+    injectContext(valid, nullptr);
+    if (setterCalls != 1) { FAIL("null setter should be skipped"); return; }
+    // 空 getter / 缺键：extractContext 返回无效上下文
+    auto noGetter = extractContext(nullptr);
+    if (noGetter.isValid()) { FAIL("null getter should yield invalid ctx"); return; }
+    auto missing = extractContext([](std::string_view) -> std::optional<std::string> {
+        return std::nullopt;
+    });
+    if (missing.isValid()) { FAIL("missing header should yield invalid ctx"); return; }
+    PASS();
+}
+
+// traceparent 解析链（getline + 长度校验）各失败臂的畸形输入矩阵。
+static void test_extract_malformed_matrix() {
+    TEST("test_extract_malformed_matrix");
+    const std::string trace32(32, '5');
+    const std::string span16(16, '8');
+    const std::string bad[] = {
+        "",                                 // 空串：首段 getline 直接失败
+        "0-x",                              // version 长度 1
+        "00",                               // traceId 段缺失
+        "00-" + trace32 + "0-" + span16 + "-ff",  // traceId 33 位
+        "00-" + trace32 + "-abc-ff",        // spanId 3 位
+        "00-" + trace32 + "-",              // spanId 段缺失：getline 失败
+        "00-" + trace32 + "-" + span16,     // flags 段缺失
+        "00-" + trace32 + "-" + span16 + "-xyz",  // flags 3 位
+        "zz-" + trace32 + "-" + span16 + "-ff",   // version 内容不影响（仅长度）
+    };
+    for (const auto& raw : bad) {
+        auto ctx = extractContext([&raw](std::string_view) -> std::optional<std::string> {
+            return raw;
+        });
+        if (raw.substr(0, 2) == "zz") {
+            // version 只查长度不查内容：此条应解析成功
+            if (!ctx.isValid()) { FAIL("version content should not matter"); return; }
+            continue;
+        }
+        if (ctx.isValid()) { FAIL("malformed traceparent should be rejected: " + raw); return; }
+    }
+    PASS();
+}
+
+// resetTracing 时栈非空：析构在 reset 后发生，覆盖析构的空栈臂与 reset 的 pop 循环体。
+static void test_scope_destroy_after_reset_pops_stack() {
+    TEST("test_scope_destroy_after_reset_pops_stack");
+    resetTracing();
+    auto* scope = new auto(startSpan("leaked-then-reset"));
+    const auto spanId = scope->context().spanId;
+    resetTracing();  // 栈内仍有该 span：while 循环体执行 pop
+    if (currentSpanContext().isValid()) { FAIL("stack should be empty after reset"); return; }
+    delete scope;  // 析构时栈已空：!stack.empty() 假臂；无 emitter → 不发射
+    if (spanId.empty()) { FAIL("span id should have been captured"); return; }
+    PASS();
+}
+
+// 同一 span 追加多个属性：attrs 向量经历 0→1 增长与 1→2 重分配两条分支。
+static void test_set_attribute_growth() {
+    TEST("test_set_attribute_growth");
+    resetTracing();
+    int emitCount = 0;
+    Span lastSpan;
+    setSpanEmitter([&](const Span& s) {
+        ++emitCount;
+        lastSpan = s;
+    });
+    {
+        auto scope = startSpan("attrs-growth");
+        scope.setAttribute("first", std::string("1"));
+        scope.setAttribute("second", std::string("2"));
+        scope.setAttribute("third", std::int64_t{3});
+        scope.setAttribute("fourth", std::string("4"));  // 触发 2→4 重分配
+    }
+    if (emitCount != 1) { FAIL("emit not called once"); return; }
+    if (lastSpan.attrs.size() != 4) { FAIL("expected 4 attrs"); return; }
+    resetTracing();
+    PASS();
+}
+
 static void test_extract_round_trips() {
     TEST("test_extract_round_trips");
     resetTracing();
@@ -332,6 +451,7 @@ int main() {
     test_generate_span_id_length();
     test_generate_trace_id_is_unique();
     test_span_context_empty_invalid();
+    test_is_valid_hex_character_classes();
     test_start_span_creates_root();
     test_current_span_context_tracks_stack();
     test_start_child_span_with_external_parent();
@@ -339,9 +459,13 @@ int main() {
     test_emit_called_on_destruction();
     test_emit_can_be_disabled();
     test_inject_writes_traceparent();
+    test_inject_extract_defensive_shortcuts();
     test_extract_round_trips();
+    test_extract_malformed_matrix();
     test_extract_rejects_malformed();
     test_inject_invalid_context_skips();
+    test_scope_destroy_after_reset_pops_stack();
+    test_set_attribute_growth();
     test_thread_isolation();
     test_logger_auto_attaches_trace();
     test_span_accessor_returns_scope_span();

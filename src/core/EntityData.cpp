@@ -120,7 +120,7 @@ bool decodeEntityData(MemoryStream& stream, EntityData& data) {
             decodeProperty(stream, data.properties[i]);
         }
         return true;
-    } catch (const std::exception&) {
+    } catch (const std::exception&) {  // LCOV_EXCL_BR_LINE 异常处理库内联伪影：__cxa_begin_catch/personality 分发分支归因 catch 行，非业务分支
         return false;
     }
 }

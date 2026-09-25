@@ -156,7 +156,7 @@ std::vector<PropertyDelta> PropertyBlock::buildDeltaFromMask(const DirtyMask& ma
         if (!mask.isDirty(desc.id)) continue;
 
         auto it = varStorage_.find(desc.id);
-        if (it == varStorage_.end()) continue;
+        if (it == varStorage_.end()) continue;  // LCOV_EXCL_BR_LINE setString/setBlob 同步维护脏标记与 varStorage_，标脏但无 storage 条目不可达
 
         PropertyDelta delta;
         delta.propertyId = desc.id;

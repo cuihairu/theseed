@@ -302,6 +302,33 @@ static void test_apply_reports_warning_count() {
     PASS();
 }
 
+// 8b. L3 出现在 L4 之后：maxLevel 已是 L4，不再重复提升（分支假臂）
+static void test_validate_l3_after_l4_keeps_l4() {
+    TEST("test_validate_l3_after_l4_keeps_l4");
+    DiffResult diff;
+    diff.changes.push_back(makeChange(ChangeType::ChangePropertyType, "Avatar", "hp", "Float32→Int32"));  // L4
+    diff.changes.push_back(makeChange(ChangeType::AddPropertyDefault, "Avatar", "stamina", "100"));        // L3
+    HotUpdateValidator validator;
+    auto result = validator.validate(diff);
+    if (result.level != HotUpdateLevel::L4_NeedRestart) { FAIL("expected L4"); return; }
+    if (result.rejections.size() != 2) { FAIL("expected 2 rejections"); return; }
+    PASS();
+}
+
+// describeChange 三段独立拼接：entityName/key 为空的 change 同样进 rejection 描述。
+static void test_validate_describe_segments() {
+    TEST("test_validate_describe_segments");
+    DiffResult diff;
+    diff.changes.push_back(makeChange(ChangeType::ChangePropertyType, "", "hp", "x"));       // entityName 空
+    diff.changes.push_back(makeChange(ChangeType::ChangeSerialization, "Avatar", "", "x"));  // key 空
+    diff.changes.push_back(makeChange(ChangeType::RemoveProperty, "Avatar", "mp", ""));      // detail 空
+    HotUpdateValidator validator;
+    auto result = validator.validate(diff);
+    if (result.level != HotUpdateLevel::L4_NeedRestart) { FAIL("expected L4"); return; }
+    if (result.rejections.size() != 3) { FAIL("expected 3 rejections"); return; }
+    PASS();
+}
+
 int main() {
     test_change_type_classification();
     test_helper_predicates();
@@ -311,6 +338,8 @@ int main() {
     test_validate_l2_timer_warning();
     test_validate_forbidden_promotes_to_l4();
     test_validate_l3_rejected();
+    test_validate_l3_after_l4_keeps_l4();
+    test_validate_describe_segments();
     test_apply_l1_config();
     test_apply_l2_script();
     test_apply_with_warnings();

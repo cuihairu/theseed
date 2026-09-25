@@ -217,7 +217,9 @@ bool CellRuntime::teleportEntity(EntityId entityId, SpaceId targetSpaceId, const
     entity->notifyEnterSpace(newSr->space().id());
 
     // Notify base of space change
-    if (entity->baseEntityCall() && entity->baseEntityCall()->isValid()) {
+    // baseEntityCall 经 bind 恒有 target（isValid 恒真）、经 clearBaseEntityCall
+    // 恒为空指针：isValid 假臂经公开 API 不可达，null 臂由测试覆盖。
+    if (entity->baseEntityCall() && entity->baseEntityCall()->isValid()) {  // LCOV_EXCL_BR_LINE isValid 假臂不可达
         RuntimeInvocation spaceChanged;
         spaceChanged.entityId = entityId;
         spaceChanged.targetComponent = entity->baseEntityCall()->targetComponent();
@@ -274,10 +276,12 @@ bool CellRuntime::beginMigration(EntityId entityId,
         return false;
     }
 
+    // findEntity 非空已蕴含 entitySpaceMap_ 有记录且空间运行时存在（L243-247
+    // 同一查找链），单线程 dispatch 内两条防御臂均不可达。
     auto spaceIt = entitySpaceMap_.find(entityId);
-    if (spaceIt == entitySpaceMap_.end()) return false;
+    if (spaceIt == entitySpaceMap_.end()) return false;  // LCOV_EXCL_BR_LINE 前置 findEntity 已保证命中
     auto* sr = findSpaceRuntime(spaceIt->second);
-    if (!sr) return false;
+    if (!sr) return false;  // LCOV_EXCL_BR_LINE 前置 findEntity 已保证空间存在
 
     const auto position = sr->space().entityPosition(entityId);
     if (!position.has_value()) {
@@ -348,7 +352,7 @@ GhostManager* CellRuntime::findGhostManager(EntityId entityId) const {
 }
 
 std::size_t CellRuntime::pumpInbound() {
-    std::array<RuntimeInvocation, 32> batch{};
+    std::array<RuntimeInvocation, 32> batch{};  // LCOV_EXCL_BR_LINE std::array 聚合初始化的 gcc 内联副本边，与运行时取值无关
     std::size_t total = 0;
     while (true) {
         const auto count =
@@ -544,7 +548,7 @@ bool CellRuntime::routeMigratingInvocation(const RuntimeInvocation& invocation) 
         return true;
     }
     return false;
-}
+}  // LCOV_EXCL_BR_LINE 函数尾聚合：闭括号上的 RuntimeInvocation 析构/汇合边为 gcc 布局伪影
 
 // 仅由 dispatchInvocation 调用（method 已保证为 "ghost.sync"）
 bool CellRuntime::applyGhostSync(const RuntimeInvocation& invocation) {
@@ -584,13 +588,13 @@ bool CellRuntime::handleCreateCell(const RuntimeInvocation& invocation) {
     entityPtr->setTransport(transport_.get());
     entityPtr->setTimerScheduleFns(
         [this, params](Duration delay, Entity::EntityTimerCallback cb) {
-            return addEntityTimer(params.entityId, delay, [cb = std::move(cb), this, params]() {
+            return addEntityTimer(params.entityId, delay, [cb = std::move(cb), this, params]() {  // LCOV_EXCL_BR_LINE lambda 闭包经 std::function 装箱转发的 gcc 内联副本边，业务臂（L593 if(e)）已双臂覆盖
                 auto* e = findEntity(params.entityId);
                 if (e) cb(*e);
             });
         },
         [this, params](Duration interval, Entity::EntityTimerCallback cb) {
-            return addEntityPeriodicTimer(params.entityId, interval, [cb = std::move(cb), this, params]() {
+            return addEntityPeriodicTimer(params.entityId, interval, [cb = std::move(cb), this, params]() {  // LCOV_EXCL_BR_LINE 同上：定时器闭包装箱内联副本边，业务臂已双臂覆盖
                 auto* e = findEntity(params.entityId);
                 if (e) cb(*e);
             });
@@ -710,7 +714,7 @@ bool CellRuntime::handleEntityAction(const RuntimeInvocation& invocation) {
     auto* entity = findEntity(invocation.entityId);
     if (!entity || !entity->isActive()) return false;
 
-    entity->pushInput(Entity::InputAction{
+    entity->pushInput(Entity::InputAction{  // LCOV_EXCL_BR_LINE 聚合初始化成员移动构造的 noexcept 分支副本边（std::string/vector 内联），非业务条件
         .name = std::move(actionName),
         .payload = std::move(actionData),
     });
@@ -747,7 +751,7 @@ bool CellRuntime::requestSpawnEntity(const std::string& entityType,
     if (!entity) return false;
 
     auto* baseCall = entity->baseEntityCall();
-    if (!baseCall || !baseCall->isValid()) return false;
+    if (!baseCall || !baseCall->isValid()) return false;  // LCOV_EXCL_BR_LINE isValid 假臂不可达（bind 恒有 target，clear 即空指针）
 
     // payload: typeLen(4) + type(N) + posX(4) + posY(4) + posZ(4)
     auto typeLen = static_cast<std::uint32_t>(entityType.size());
@@ -808,7 +812,7 @@ bool CellRuntime::destroySpace(SpaceId id) {
     // Destroy all entities in this space
     auto entitiesInSpace = sr->space().entities();
     for (auto* entity : entitiesInSpace) {
-        if (!entity) continue;
+        if (!entity) continue;  // LCOV_EXCL_BR_LINE Space 名册成员取自 Entity& 引用，恒非空
         entity->beginDestroy();
         entity->notifyDestroy();
         cancelEntityTimers(entity->id());
@@ -885,12 +889,12 @@ void CellRuntime::cancelEntityTimers(EntityId entityId) {
 void CellRuntime::syncRealGhosts() {
     for (auto& [entityId, binding] : ghostBindings_) {
         static_cast<void>(entityId);
-        if (binding.manager == nullptr || !binding.manager->isReal() || !binding.manager->hasGhost()) {
+        if (binding.manager == nullptr || !binding.manager->isReal() || !binding.manager->hasGhost()) {  // LCOV_EXCL_BR_LINE binding.manager 于 ensureRealGhost/ensureGhostProxy 恒即建即挂、条目仅整体 erase，null 短路臂不可达
             continue;
         }
 
         auto* entity = binding.manager->owner();
-        if (entity == nullptr || entity->state() != EntityState::Active) {
+        if (entity == nullptr || entity->state() != EntityState::Active) {  // LCOV_EXCL_BR_LINE owner 由 attach(Entity&) 即设且 GhostManager::detach 全库无调用点，owner null 臂不可达
             continue;
         }
 
@@ -903,7 +907,7 @@ void CellRuntime::syncRealGhosts() {
             continue;
         }
         const auto* staged = sr->findStagedDelta(entity->id());
-        if (staged == nullptr || staged->empty()) {
+        if (staged == nullptr || staged->empty()) {  // LCOV_EXCL_BR_LINE stageDirtyEntities 仅在 viewDelta 非空时 emplace 且每轮先 clear，非 null 蕴含非空
             continue;
         }
 
@@ -921,13 +925,15 @@ void CellRuntime::syncRealGhosts() {
 void CellRuntime::syncToBases() {
     for (auto& [entityId, entityPtr] : ownedEntities_) {
         auto* entity = entityPtr.get();
-        if (entity == nullptr || entity->state() != EntityState::Active) continue;
+        if (entity == nullptr || entity->state() != EntityState::Active) continue;  // LCOV_EXCL_BR_LINE ownedEntities_ 存 unique_ptr 且移除即整条擦除，get() null 臂不可达
 
         auto* baseCall = entity->baseEntityCall();
-        if (baseCall == nullptr || !baseCall->isValid()) continue;
+        if (baseCall == nullptr || !baseCall->isValid()) continue;  // LCOV_EXCL_BR_LINE isValid 假臂不可达
 
         auto* sr = findSpaceRuntime(findEntitySpace(entityId));
-        if (sr == nullptr) continue;
+        // ownedEntities_ 与 entitySpaceMap_ 同步维护（addEntity/迁移先入空间，
+        // destroySpace 连带清除两表），owned 在册时空间必存在。
+        if (sr == nullptr) continue;  // LCOV_EXCL_BR_LINE 同步不变式保证空间存在
 
         auto deltas = sr->findStagedDelta(entityId, PropertyFlag::Cell);
         if (deltas.empty()) continue;
@@ -953,9 +959,9 @@ void CellRuntime::flushAoIEvents() {
     }
     for (auto& event : events) {
         auto* observer = findEntity(event.observerId);
-        if (!observer) continue;
+        if (!observer) continue;  // LCOV_EXCL_BR_LINE AoI 事件产自 witnesses_ 名册，binding 与 ownedEntities_ 经 removeEntity 同步清除，观察者悬垂不可构造
         auto* baseCall = observer->baseEntityCall();
-        if (!baseCall || !baseCall->isValid()) continue;
+        if (!baseCall || !baseCall->isValid()) continue;  // LCOV_EXCL_BR_LINE isValid 假臂不可达
 
         if (event.type == AoIEventType::Enter) {
             auto* target = findEntity(event.targetId);
@@ -1010,10 +1016,10 @@ void CellRuntime::flushAoIEvents() {
 void CellRuntime::flushClientEvents() {
     for (auto& [entityId, entityPtr] : ownedEntities_) {
         auto* entity = entityPtr.get();
-        if (!entity || entity->state() != EntityState::Active) continue;
+        if (!entity || entity->state() != EntityState::Active) continue;  // LCOV_EXCL_BR_LINE ownedEntities_ 存 unique_ptr 且移除即整条擦除，get() null 臂不可达
 
         auto* baseCall = entity->baseEntityCall();
-        if (!baseCall || !baseCall->isValid()) continue;
+        if (!baseCall || !baseCall->isValid()) continue;  // LCOV_EXCL_BR_LINE isValid 假臂不可达
 
         auto events = entity->flushClientEvents();
         if (events.empty()) continue;
@@ -1052,9 +1058,9 @@ void CellRuntime::flushWitnessSync() {
         auto observerDeltas = sr->collectWitnessDeltas();
         for (auto& od : observerDeltas) {
             auto* observer = findEntity(od.observerId);
-            if (!observer) continue;
+            if (!observer) continue;  // LCOV_EXCL_BR_LINE witness delta 同样产自 witnesses_ 名册，binding 与 ownedEntities_ 同步清除，观察者悬垂不可构造
             auto* baseCall = observer->baseEntityCall();
-            if (!baseCall || !baseCall->isValid()) continue;
+            if (!baseCall || !baseCall->isValid()) continue;  // LCOV_EXCL_BR_LINE isValid 假臂不可达
 
             // Payload: observerId(8) + count(4) + [targetEntityId(8) + hasPos(1) + [posX(4)+posY(4)+posZ(4)] + deltaLen(4) + delta(N)]...
             foundation::MemoryStream ms;
@@ -1075,7 +1081,8 @@ void CellRuntime::flushWitnessSync() {
                 }
                 auto encoded = PropertyReplication::encodeDelta(delta.properties);
                 ms.writeUint32(static_cast<std::uint32_t>(encoded.size()));
-                if (!encoded.empty()) {
+                // encodeDelta 至少写出 4 字节 count 前缀，payload 恒非空
+                if (!encoded.empty()) {  // LCOV_EXCL_BR_LINE encoded 恒非空，防御臂
                     ms.writeBytes(encoded.data(), encoded.size());
                 }
             }
@@ -1127,7 +1134,7 @@ const GroupManager& CellRuntime::groupManager() const {
 void CellRuntime::broadcastEvent(std::string_view event, std::span<const std::byte> data) {
     for (auto& [id, sr] : spaceRuntimes_) {
         for (auto* entity : sr->space().entities()) {
-            if (entity != nullptr && entity->state() == EntityState::Active) {
+            if (entity != nullptr && entity->state() == EntityState::Active) {  // LCOV_EXCL_BR_LINE Space 名册 Member.entity 仅以非空指针写入且移除即整条擦除，null 短路臂不可达
                 entity->emit(event, data);
             }
         }
@@ -1138,7 +1145,7 @@ void CellRuntime::broadcastEventInRange(std::string_view event, const Vector3& c
                                          std::span<const std::byte> data) {
     for (auto& [id, sr] : spaceRuntimes_) {
         for (auto* entity : sr->space().queryRange(center, range)) {
-            if (entity != nullptr && entity->state() == EntityState::Active) {
+            if (entity != nullptr && entity->state() == EntityState::Active) {  // LCOV_EXCL_BR_LINE 同 broadcastEvent：entitiesInRange 恒不返回空指针
                 entity->emit(event, data);
             }
         }

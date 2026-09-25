@@ -39,6 +39,10 @@ struct SimpleObj {
     SimpleObj(int x_, double y_, std::string n) : x(x_), y(y_), name(std::move(n)) {}
 };
 
+struct alignas(64) OverAlignedObj {
+    char payload[64] {};
+};
+
 static void testAcquireAndRelease() {
     TEST("acquire and release");
 
@@ -195,6 +199,73 @@ static void testSimpleObjGrowthAndReset() {
     if (ok) PASS(); else FAIL("growth/reset failed");
 }
 
+// 超过 max_align_t 的对齐需求：alignedAlloc 的提升对齐假臂。
+static void testOverAlignedType() {
+    TEST("over-aligned type gets upgraded alignment");
+
+    ObjectPool<OverAlignedObj> pool(2);
+    auto* obj = pool.acquire();
+    bool ok = obj != nullptr;
+    ok = ok && (reinterpret_cast<std::uintptr_t>(obj) % 64) == 0;  // 64 字节对齐
+    pool.release(obj);
+    ok = ok && pool.activeCount() == 0;
+
+    if (ok) PASS(); else FAIL("over-aligned allocation misaligned");
+}
+
+// release(nullptr) 与默认构造的 PooledObject：守卫假臂均不触碰池。
+static void testReleaseGuards() {
+    TEST("release(nullptr) and empty PooledObject are no-ops");
+
+    ObjectPool<int> pool(4);
+    pool.release(nullptr);  // 空指针早退臂
+
+    {
+        PooledObject<int> detached;  // 默认构造：pool_/ptr_ 双空
+        static_cast<void>(detached);
+    }  // 析构走 if (ptr_ && pool_) 假臂
+
+    bool ok = pool.activeCount() == 0;
+    ok = ok && pool.totalCount() == 0;  // 未分配任何块
+    if (ok) PASS(); else FAIL("guards should not touch the pool");
+}
+
+// lvalue 与 rvalue 混合传参：placement new 转发臂的两种实例。
+static void testAcquireForwardsLvalueAndRvalue() {
+    TEST("acquire forwards lvalue and rvalue args distinctly");
+
+    ObjectPool<SimpleObj> pool(2);
+    std::string lvalueName = "left-value";
+
+    auto* fromLvalue = pool.acquire(1, 1.0, lvalueName);
+    bool ok = fromLvalue->name == "left-value";
+    pool.release(fromLvalue);
+
+    auto* fromRvalue = pool.acquire(2, 2.0, std::string("right-value"));
+    ok = ok && fromRvalue->name == "right-value";
+    pool.release(fromRvalue);
+
+    if (ok) PASS(); else FAIL("forwarding produced wrong values");
+}
+
+// release 后再 acquire：active 回到原水位，比较臂走假臂、水位不涨。
+static void testHighWatermarkUnchangedAfterRecycle() {
+    TEST("recycling does not raise high watermark");
+
+    ObjectPool<int> pool(4);
+    std::vector<int*> ptrs;
+    for (int i = 0; i < 4; ++i) ptrs.push_back(pool.acquire(i));
+    bool ok = pool.highWatermark() == 4;
+
+    for (auto* p : ptrs) pool.release(p);
+    for (int i = 0; i < 4; ++i) ptrs[i] = pool.acquire(i);  // active 逐次爬升但不超 4
+
+    ok = ok && pool.highWatermark() == 4;
+    for (auto* p : ptrs) pool.release(p);
+
+    if (ok) PASS(); else FAIL("watermark should stay at 4");
+}
+
 int main() {
     std::cout << "ObjectPool tests:\n";
 
@@ -208,6 +279,10 @@ int main() {
     testReuseAfterRelease();
     testSimpleObjGrowthAndReset();
     testTotalCount();
+    testOverAlignedType();
+    testReleaseGuards();
+    testAcquireForwardsLvalueAndRvalue();
+    testHighWatermarkUnchangedAfterRecycle();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -33,13 +33,13 @@ bool CellApp::init() {
 
     for (const auto& entityType : registry_.entityTypes()) {
         auto factory = registry_.createFactory(entityType);
-        if (factory) {
+        if (factory) {  // LCOV_EXCL_BR_LINE 假臂不可达：createFactory 对已注册类型恒返回非空工厂 lambda，遍历集合即 defs_ 的键集
             runtime_->registerEntityFactory(entityType, std::move(factory));
         }
     }
 
     if (config_.ops.enabled) {
-        ops::ProcessInfo info{};
+        ops::ProcessInfo info{};  // LCOV_EXCL_BR_LINE 聚合初始化字符串成员构造的 SSO/堆库内联分支，字面常量恒短串，非业务分支
         info.role = "CellApp";
         info.version = "0.1.0";
         info.startTime = std::chrono::system_clock::now();
@@ -47,17 +47,17 @@ bool CellApp::init() {
 
         opsInspector_ = std::make_unique<ops::OpsInspector>(std::move(info), [this] {
             ops::RuntimeInfo rt{};
-            if (runtime_) {
+            if (runtime_) {  // LCOV_EXCL_BR_LINE init 建 inspector 前已 make_unique runtime_，空臂不可达
                 rt.entityCount = runtime_->spaceRuntime().space().entityCount();
             }
             rt.entityTypes = registry_.entityTypes();
-            if (transport_) {
+            if (transport_) {  // LCOV_EXCL_BR_LINE 构造函数拒绝空 transport，空臂不可达
                 rt.transportStats = transport_->stats();
             }
             return rt;
         });
 
-        ops::OpsServer::Config opsCfg{};
+        ops::OpsServer::Config opsCfg{};  // LCOV_EXCL_BR_LINE 聚合初始化字符串成员构造的库内联分支，非业务分支
         opsCfg.host = config_.ops.host;
         opsCfg.port = config_.ops.port;
         opsCfg.maxConnections = config_.ops.maxConnections;
@@ -76,7 +76,7 @@ void CellApp::tick() {
             .gauge("entity_count", "live entities held by this runtime")
             .set(static_cast<std::int64_t>(count));
     }
-    if (transport_) {
+    if (transport_) {  // LCOV_EXCL_BR_LINE 构造函数拒绝空 transport，空臂不可达
         transportStatsCollector_.collect(transport_->stats());
     }
     if (opsServer_) {

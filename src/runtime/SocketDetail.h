@@ -74,13 +74,15 @@ inline constexpr int kSendFlags = 0;
 
 // EINTR 视为可重试的暂时性阻塞，与 Winsock 轮询语义一致。
 inline bool wouldBlock() {
-    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+    // Linux 上 EWOULDBLOCK 与 EAGAIN 同值，第二比较真臂不可达，豁免登记在下行行尾。
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;  // LCOV_EXCL_BR_LINE EWOULDBLOCK==EAGAIN 同值短路：第二比较真臂结构性不可达，其余 miss 边为条件块汇合副本
 }
 
 // 非阻塞 connect 尚在进行中（POSIX 以 EINPROGRESS 表达）。
 inline bool connectInProgress() {
-    return errno == EINPROGRESS || errno == EINTR || errno == EAGAIN ||
-           errno == EWOULDBLOCK;
+    // EWOULDBLOCK 与 EAGAIN 同值：末位比较真臂不可达，豁免登记在下两行行尾。
+    return errno == EINPROGRESS || errno == EINTR || errno == EAGAIN ||  // LCOV_EXCL_BR_LINE 同值短路链：EAGAIN 假蕴含 EWOULDBLOCK 假，末位比较真臂不可达，miss 边为汇合副本
+           errno == EWOULDBLOCK;  // LCOV_EXCL_BR_LINE EWOULDBLOCK==EAGAIN，真臂结构性不可达
 }
 
 inline void setNonBlocking(SocketHandle s) {

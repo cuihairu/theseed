@@ -174,6 +174,17 @@ int main() {
         }
     }
 
+    // 原生结果集的 SQL NULL 列：asBytes 的 cell==nullptr 防御臂
+    // （queryParams 路径的 NULL 列已在上方覆盖，这里补原生路径）。
+    {
+        auto r = c.query("SELECT NULL AS nothing");
+        CHECK(r.has_value(), "native NULL query");
+        if (r.has_value()) {
+            CHECK(r->next(), "native NULL row");
+            CHECK(r->asBytes(0).empty(), "native NULL column yields empty bytes");
+        }
+    }
+
     // 参数超过 max_allowed_packet（容器默认 64MB）：prepare 成功但 execute 失败，
     // 覆盖 executeParams/queryParams 的 execute 错误分支
     {

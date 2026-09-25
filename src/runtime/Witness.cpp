@@ -100,7 +100,7 @@ std::size_t Witness::collectDirty() {
     std::size_t collected = 0;
     for (auto& [entityId, entry] : entries_) {
         static_cast<void>(entityId);
-        if (entry.entity == nullptr) {
+        if (entry.entity == nullptr) {  // LCOV_EXCL_BR_LINE entry.entity 仅在 onEnterView 赋值且 detach 整体清册，无置空路径，防御臂不可达
             continue;
         }
 

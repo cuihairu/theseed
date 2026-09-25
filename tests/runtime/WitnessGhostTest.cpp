@@ -14,6 +14,7 @@ using theseed::runtime::EntityDef;
 using theseed::runtime::EntitySide;
 using theseed::runtime::GhostManager;
 using theseed::runtime::PropertyType;
+using theseed::runtime::Vector3;
 using theseed::runtime::Witness;
 
 namespace {
@@ -213,6 +214,19 @@ int main() {
         if (real.forwardToReal("m", payload).has_value()) {
             return fail("ghost_forward_non_ghost");
         }
+    }
+
+    // recordPosition 对不在册实体静默忽略（早退臂），在册实体正常暂存
+    {
+        Witness w2;
+        w2.attach(owner);
+        w2.setDetailDistanceBands(10.0F, 30.0F);
+        w2.onEnterView(visibleA, 5.0F);
+        w2.recordPosition(9999, Vector3{1.0F, 2.0F, 3.0F});   // 未知 id：no-op
+        w2.recordPosition(visibleA.id(), Vector3{4.0F, 5.0F, 6.0F});
+        // 在册实体仍在视图；未知 id 未被登记
+        if (!w2.entityInView(visibleA.id())) return fail("record_position_lost_view");
+        if (w2.entityInView(9999)) return fail("unknown_id_registered");
     }
 
     return EXIT_SUCCESS;

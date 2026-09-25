@@ -39,7 +39,7 @@ void ControllerManager::remove(ControllerId id) {
     if (it == controllers_.end()) return;
 
     auto& ctrl = *it->second;
-    if (ctrl.active_) {
+    if (ctrl.active_) {  // LCOV_EXCL_BR_LINE 在册 controller 恒 active（add 时置位，非 active 即被 erase），假臂不可达
         ctrl.active_ = false;
         ctrl.stop();
     }
@@ -49,7 +49,7 @@ void ControllerManager::remove(ControllerId id) {
 void ControllerManager::clear() {
     for (auto& [id, ctrl] : controllers_) {
         static_cast<void>(id);
-        if (ctrl->active_) {
+        if (ctrl->active_) {  // LCOV_EXCL_BR_LINE 同 remove：在册即 active，假臂不可达
             ctrl->active_ = false;
             ctrl->stop();
         }
@@ -62,7 +62,7 @@ void ControllerManager::tick(float deltaTime) {
     std::vector<ControllerId> completed;
 
     for (auto& [id, ctrl] : controllers_) {
-        if (!ctrl->active_) continue;
+        if (!ctrl->active_) continue;  // LCOV_EXCL_BR_LINE add 恒置 active、tick 后非 active 同批 erase，"在册且非 active"经公开 API 不可构造
         ctrl->tick(deltaTime);
         if (!ctrl->active_) {
             completed.push_back(id);

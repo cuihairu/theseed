@@ -329,6 +329,92 @@ int main() {
         PASS();
     }
 
+    // --- 分支覆盖补充：查重扫描不匹配臂 / 缺 password 属性命中 / listIds 边界 ---
+    {
+        RuntimeInvocation resp;
+
+        TEST("second account exercises scan-mismatch arms");
+        // 创建 bob 时查重扫描遇到 alice：username 不匹配（storedName !=
+        // username）与 password 属性（prop.name != "username"）两向分支。
+        if (!client.request(DBMethod::kCreateAccount,
+                            DBProtocol::encodeCreateAccountRequest("bob", "pw2"),
+                            appTick, resp))
+            FAIL("no response to createAccount(bob)");
+        bool okBob = false;
+        EntityId bobId = 0;
+        if (!DBProtocol::decodeCreateAccountResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                okBob, bobId))
+            FAIL("decode createAccount(bob) response failed");
+        if (!okBob || bobId == 0) FAIL("createAccount(bob) rejected");
+        PASS();
+
+        TEST("queryAccount finds account without password property");
+        // 手造只有 username 属性的 Account：命中后找 password 的循环自然
+        // 走空退出，password 以空串返回。
+        {
+            RemoteEntityStore store(client.transport, kDbComponent, kClientComponent);
+            store.setPumpFunction([&client, &appTick] {
+                if (++client.pumpCount > 20000) {
+                    std::cout << "FAILED: pump guard tripped" << std::endl;
+                    std::exit(1);
+                }
+                appTick();
+                client.transport->tick();
+                usleep(500);
+            });
+            EntityData nameOnly;
+            nameOnly.id = 901;
+            nameOnly.entityType = "Account";
+            PropertyData un;
+            un.id = 0;
+            un.name = "username";
+            un.type = DataType::String;
+            const std::string uname = "nopw_user";
+            un.rawValue.resize(uname.size());
+            std::memcpy(un.rawValue.data(), uname.data(), uname.size());
+            nameOnly.properties.push_back(un);
+            if (!store.save(901, nameOnly)) FAIL("save name-only account failed");
+        }
+        if (!client.request(DBMethod::kQueryAccount,
+                            DBProtocol::encodeQueryAccountRequest("nopw_user"),
+                            appTick, resp))
+            FAIL("no response to queryAccount(nopw_user)");
+        bool foundNp = false;
+        EntityId npId = 0;
+        std::string npPassword = "sentinel";
+        if (!DBProtocol::decodeQueryAccountResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                foundNp, npId, npPassword))
+            FAIL("decode queryAccount(nopw_user) response failed");
+        if (!foundNp || npId != 901) FAIL("name-only account not found");
+        if (!npPassword.empty()) FAIL("password should be empty without property");
+        PASS();
+
+        TEST("malformed listIds payload is tolerated");
+        // len 字段撒谎（0xFFFFFFFF）：handleListIds 走越界防御，返回空列表。
+        std::vector<std::byte> badListIds(4, std::byte{0xFF});
+        if (!client.request(DBMethod::kListIds, badListIds, appTick, resp))
+            FAIL("no response to malformed listIds");
+        if (resp.method != DBMethod::kListIdsOk) FAIL("wrong response method");
+        {
+            std::vector<EntityId> outIds{1};
+            DBProtocol::decodeListIdsResponse(
+                std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                outIds);
+            if (!outIds.empty()) FAIL("malformed listIds should yield empty list");
+        }
+        PASS();
+
+        TEST("empty entityType listIds request");
+        // len=0：handleListIds 跳过 memcpy，按空类型名查询。
+        if (!client.request(DBMethod::kListIds,
+                            DBProtocol::encodeListIdsRequest(""), appTick, resp))
+            FAIL("no response to listIds(\"\")");
+        if (resp.method != DBMethod::kListIdsOk) FAIL("wrong response method");
+        PASS();
+    }
+
     // --- 畸形载荷 → 错误响应分支 ---
     {
         std::vector<std::byte> garbage(64, std::byte{0xAB});

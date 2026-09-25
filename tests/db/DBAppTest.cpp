@@ -290,6 +290,114 @@ int main() {
     }
     PASS();
 
+    // 协议解码边界：短载荷 / 空载荷 / count 撒谎 / 空串字段——把 readString
+    // 与各 decode 的防御分支全部驱动一遍。
+    TEST("DBProtocol decode boundary arms");
+    {
+        auto span = [](const std::vector<std::byte>& v) {
+            return std::span<const std::byte>(v.data(), v.size());
+        };
+
+        // 不足 8 字节的 load/save 请求；空载荷的 queryAccount 请求
+        // （readString 首道防线 offset+4 > size）。
+        std::vector<std::byte> seven(7, std::byte{1});
+        std::vector<std::byte> none;
+        EntityId id = 0;
+        EntityData data;
+        std::string text;
+        if (DBProtocol::decodeLoadRequest(span(seven), id, text))
+            FAIL("7-byte load request accepted");
+        if (DBProtocol::decodeSaveRequest(span(seven), id, data))
+            FAIL("7-byte save request accepted");
+        if (DBProtocol::decodeQueryAccountRequest(span(none), text))
+            FAIL("empty queryAccount request accepted");
+
+        // 空串字段：encode 走 writeString 空臂、decode 走 len==0 臂。
+        auto emptyReq = DBProtocol::encodeCreateAccountRequest("", "");
+        std::string username;
+        std::string password;
+        if (!DBProtocol::decodeCreateAccountRequest(span(emptyReq), username, password))
+            FAIL("empty-credential request should decode");
+        if (!username.empty() || !password.empty()) FAIL("empty strings corrupted");
+
+        // 长度恰为 8+4 的 load 请求、空 entityType：readString 正向全臂。
+        auto loadReq = DBProtocol::encodeLoadRequest(7, "");
+        if (!DBProtocol::decodeLoadRequest(span(loadReq), id, text))
+            FAIL("empty-type load request should decode");
+        if (id != 7 || !text.empty()) FAIL("empty-type load request mismatch");
+
+        // load 响应：success=1 但缺 EntityData 体。
+        std::vector<std::byte> bareSuccess{std::byte{1}};
+        bool success = false;
+        if (DBProtocol::decodeLoadResponse(span(bareSuccess), success, data))
+            FAIL("bare success byte should not decode");
+
+        // listIds 响应：首部不足 / count 撒谎。
+        std::vector<std::byte> three{std::byte{1}, std::byte{0}, std::byte{0}};
+        std::vector<EntityId> ids;
+        if (DBProtocol::decodeListIdsResponse(span(three), ids))
+            FAIL("3-byte listIds accepted");
+        std::vector<std::byte> liar{std::byte{2}, std::byte{0}, std::byte{0}, std::byte{0},
+                                    std::byte{1}, std::byte{0}, std::byte{0}, std::byte{0},
+                                    std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+        if (DBProtocol::decodeListIdsResponse(span(liar), ids))
+            FAIL("truncated id list accepted");
+
+        // listTypes 响应：首部不足 / count 撒谎 / 字符串截断 / 空列表。
+        std::vector<std::string> types;
+        if (DBProtocol::decodeListTypesResponse(span(three), types))
+            FAIL("3-byte listTypes accepted");
+        std::vector<std::byte> typeLiar{std::byte{2}, std::byte{0}, std::byte{0},
+                                        std::byte{0}};
+        if (DBProtocol::decodeListTypesResponse(span(typeLiar), types))
+            FAIL("truncated type list accepted");
+        std::vector<std::byte> typeShort{std::byte{1}, std::byte{0}, std::byte{0},
+                                         std::byte{0}, std::byte{9},  std::byte{0},
+                                         std::byte{0}, std::byte{0}, std::byte{'A'},
+                                         std::byte{'v'}};
+        if (DBProtocol::decodeListTypesResponse(span(typeShort), types))
+            FAIL("short type string accepted");
+        auto emptyTypes = DBProtocol::encodeListTypesResponse({});
+        if (!DBProtocol::decodeListTypesResponse(span(emptyTypes), types))
+            FAIL("empty type list should decode");
+        if (!types.empty()) FAIL("empty type list corrupted");
+
+        // queryAccount 响应：空载荷 / found=1 但不足 9 字节 / 密码串截断 /
+        // 空密码往返。
+        bool found = true;
+        EntityId qid = 9;
+        std::string pw = "sentinel";
+        if (DBProtocol::decodeQueryAccountResponse(span(none), found, qid, pw))
+            FAIL("empty queryAccount response accepted");
+        std::vector<std::byte> bare{std::byte{1}, std::byte{2}};
+        if (DBProtocol::decodeQueryAccountResponse(span(bare), found, qid, pw))
+            FAIL("short found response accepted");
+        auto npw = DBProtocol::encodeQueryAccountResponse(true, 5, "");
+        if (!DBProtocol::decodeQueryAccountResponse(span(npw), found, qid, pw))
+            FAIL("empty-password response should decode");
+        if (!found || qid != 5 || !pw.empty()) FAIL("empty-password roundtrip mismatch");
+        std::vector<std::byte> pwTrunc{std::byte{1},   std::byte{0},   std::byte{0},
+                                       std::byte{0},   std::byte{0},   std::byte{0},
+                                       std::byte{0},   std::byte{0},   std::byte{3},
+                                       std::byte{0},   std::byte{0},   std::byte{0},
+                                       std::byte{'a'}, std::byte{'b'}};
+        if (DBProtocol::decodeQueryAccountResponse(span(pwTrunc), found, qid, pw))
+            FAIL("truncated password accepted");
+
+        // createAccount 响应：空载荷 / success=1 但不足 9 字节 / 失败清零 id。
+        bool ok = true;
+        EntityId cid = 9;
+        if (DBProtocol::decodeCreateAccountResponse(span(none), ok, cid))
+            FAIL("empty createAccount response accepted");
+        if (DBProtocol::decodeCreateAccountResponse(span(bare), ok, cid))
+            FAIL("short createAccount response accepted");
+        auto failResp = DBProtocol::encodeCreateAccountResponse(false, 0);
+        if (!DBProtocol::decodeCreateAccountResponse(span(failResp), ok, cid))
+            FAIL("failure response should decode");
+        if (ok || cid != 0) FAIL("failure response should clear id");
+    }
+    PASS();
+
     std::cout << "\nAll DBApp tests passed!" << std::endl;
     return 0;
 }

@@ -180,6 +180,36 @@ int main() {
         CHECK(r.status == 200, "server healthy after idle/dropped connections");
     }
 
+    // 头部以 \n\n 终止（eoh2 独立命中路径）
+    {
+        auto r = sendRequest(server, port, "GET /health HTTP/1.1\n\n");
+        CHECK(r.status == 200, "LF-only header terminator accepted");
+    }
+
+    // 请求行无空格（sp1 缺失）→ 400
+    {
+        auto r = sendRequest(server, port, "PING\r\n\r\n");
+        CHECK(r.status == 400, "request line without spaces rejected");
+    }
+
+    // 请求行仅一个空格（sp1 命中、sp2 缺失）→ 400
+    {
+        auto r = sendRequest(server, port, "GET /onlypath\r\n\r\n");
+        CHECK(r.status == 400, "request line with single space rejected");
+    }
+
+    // maxConnections=0：accept 循环不进（while 假臂），请求得不到服务
+    {
+        OpsServer::Config cfg0;
+        cfg0.port = 0;
+        cfg0.maxConnections = 0;
+        OpsServer server0(cfg0, inspector);
+        CHECK(server0.start(), "start zero-conn server");
+        auto r = sendRequest(server0, server0.localPort(), "GET /health HTTP/1.1\r\n\r\n", 20);
+        CHECK(r.status == 0, "zero maxConnections serves nothing");
+        server0.stop();
+    }
+
     // stop 后不再监听；重复 stop 安全
     server.stop();
     CHECK(!server.isListening(), "not listening after stop");

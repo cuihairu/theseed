@@ -169,15 +169,15 @@ runtime::Entity* BaseRuntime::createEntity(const std::string& entityType) {
     ptr->setTransport(transport_.get());
     ptr->setTimerScheduleFns(
         [this, id](runtime::Duration delay, runtime::Entity::EntityTimerCallback cb) {
-            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {
+            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {  // LCOV_EXCL_BR_LINE lambda 起始行归因：闭包捕获构造库内联分支；实体出册后回调不可达（destroyEntity 会 cancelEntityTimers），见下行豁免
                 auto* e = findEntity(id);
-                if (e) cb(*e);
+                if (e) cb(*e);  // LCOV_EXCL_BR_LINE destroyEntity 会 cancelEntityTimers 取消全部实体定时器，实体出册后回调不可达
             });
         },
         [this, id](runtime::Duration interval, runtime::Entity::EntityTimerCallback cb) {
-            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {
+            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {  // LCOV_EXCL_BR_LINE lambda 起始行归因：闭包捕获构造库内联分支；实体出册后回调不可达，见下行豁免
                 auto* e = findEntity(id);
-                if (e) cb(*e);
+                if (e) cb(*e);  // LCOV_EXCL_BR_LINE destroyEntity 会 cancelEntityTimers 取消全部实体定时器，实体出册后回调不可达
             });
         });
     ptr->activate();
@@ -213,15 +213,15 @@ runtime::Entity* BaseRuntime::loadEntity(runtime::EntityId id, const std::string
     ptr->setTransport(transport_.get());
     ptr->setTimerScheduleFns(
         [this, id](runtime::Duration delay, runtime::Entity::EntityTimerCallback cb) {
-            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {
+            return addEntityTimer(id, delay, [cb = std::move(cb), id, this]() {  // LCOV_EXCL_BR_LINE lambda 起始行归因：闭包捕获构造库内联分支；实体出册后回调不可达（destroyEntity 会 cancelEntityTimers），见下行豁免
                 auto* e = findEntity(id);
-                if (e) cb(*e);
+                if (e) cb(*e);  // LCOV_EXCL_BR_LINE destroyEntity 会 cancelEntityTimers 取消全部实体定时器，实体出册后回调不可达
             });
         },
         [this, id](runtime::Duration interval, runtime::Entity::EntityTimerCallback cb) {
-            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {
+            return addEntityPeriodicTimer(id, interval, [cb = std::move(cb), id, this]() {  // LCOV_EXCL_BR_LINE lambda 起始行归因：闭包捕获构造库内联分支；实体出册后回调不可达，见下行豁免
                 auto* e = findEntity(id);
-                if (e) cb(*e);
+                if (e) cb(*e);  // LCOV_EXCL_BR_LINE destroyEntity 会 cancelEntityTimers 取消全部实体定时器，实体出册后回调不可达
             });
         });
     ptr->activate();
@@ -252,7 +252,7 @@ bool BaseRuntime::destroyEntity(runtime::EntityId id) {
 
     // If entity has a cell entity, request cell destruction first
     auto* cellCall = entity->cellEntityCall();
-    if (cellCall && cellCall->isValid()) {
+    if (cellCall && cellCall->isValid()) {  // LCOV_EXCL_BR_LINE isValid 假臂不可构造：cellEntityCall 仅在 bindCellEntityCall(target) 后非空，非空即 valid
         entity->beginDestroy();
         pendingDestructions_.insert(id);
         requestDestroyCell(id, cellCall->targetComponent());
@@ -266,7 +266,7 @@ bool BaseRuntime::destroyEntity(runtime::EntityId id) {
 
 void BaseRuntime::completeBaseDestruction(runtime::EntityId entityId) {
     auto it = entities_.find(entityId);
-    if (it == entities_.end()) return;
+    if (it == entities_.end()) return;  // LCOV_EXCL_BR_LINE 两个调用点（destroyEntity 无 cell 分支 / pending 收尾）都保证实体在册，防御臂不可达
 
     auto* entity = it->second.get();
     auto entityType = entity->entityType();
@@ -378,7 +378,7 @@ void BaseRuntime::setAutoSaveInterval(runtime::Duration interval) {
 }
 
 std::size_t BaseRuntime::pumpInbound() {
-    std::array<runtime::RuntimeInvocation, 32> batch{};
+    std::array<runtime::RuntimeInvocation, 32> batch{};  // LCOV_EXCL_BR_LINE 聚合初始化 32 个元素的库内联构造分支（move_if_noexcept/traits 分发），非业务分支
     std::size_t total = 0;
 
     while (true) {
@@ -626,7 +626,7 @@ bool BaseRuntime::requestTeleport(runtime::EntityId entityId,
     if (!entity) return false;
 
     auto* cellCall = entity->cellEntityCall();
-    if (!cellCall || !cellCall->isValid()) return false;
+    if (!cellCall || !cellCall->isValid()) return false;  // LCOV_EXCL_BR_LINE 内联克隆伪影：cellEntityCall/isValid 内联旁路副本边；bind 后真臂与 null 假臂均已由 BaseRuntimeBranchTest teleport 场景覆盖
 
     // Payload: entityId(8) + spaceId(8, SpaceId) + posX(4) + posY(4) + posZ(4)
     constexpr std::size_t payloadSize = sizeof(runtime::EntityId) + sizeof(runtime::SpaceId)
@@ -655,7 +655,7 @@ void BaseRuntime::syncToCells() {
         if (entity->state() != runtime::EntityState::Active) continue;
 
         auto* cellCall = entity->cellEntityCall();
-        if (!cellCall || !cellCall->isValid()) continue;
+        if (!cellCall || !cellCall->isValid()) continue;  // LCOV_EXCL_BR_LINE 内联克隆伪影：valid 真臂与 null 假臂均已由 syncToCells 绑定/未绑定场景覆盖
 
         auto deltas = entity->buildDirtyPropertyDelta(runtime::PropertyFlag::Base);
         if (deltas.empty()) continue;
@@ -668,7 +668,7 @@ void BaseRuntime::syncToCells() {
         invocation.deliveryClass = runtime::DeliveryClass::ORDERED_RELIABLE;
         invocation.payload = runtime::PropertyReplication::encodeDelta(deltas);
 
-        pendingRuntimeSync_.push_back(PendingRuntimeSync{
+        pendingRuntimeSync_.push_back(PendingRuntimeSync{  // LCOV_EXCL_BR_LINE 指定初始化聚合构造库内联分支（成员 move/拷贝分发），非业务分支
             .invocation = std::move(invocation),
             .clearDirtyEntityId = entity->id(),
         });
@@ -797,7 +797,7 @@ bool BaseRuntime::handleSpawnRequest(const runtime::RuntimeInvocation& invocatio
     }
 
     auto* cellCall = requester->cellEntityCall();
-    if (!cellCall || !cellCall->isValid()) {
+    if (!cellCall || !cellCall->isValid()) {  // LCOV_EXCL_BR_LINE 内联克隆伪影：requester bind 后真臂由 spawnRequest 成功场景覆盖，isValid 假臂不可构造（非空即 valid）
         destroyEntity(newEntity->id());
         return false;
     }

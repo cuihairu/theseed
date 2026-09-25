@@ -70,14 +70,14 @@ void RangeTrigger::refresh() {
     std::unordered_set<EntityId> nextInside;
     const auto entities = coordinateSystem_->entitiesInRange(ownerNode->position(), range_);
     for (Entity* entity : entities) {
-        if (entity == nullptr || entity->id() == owner_->id()) {
+        if (entity == nullptr || entity->id() == owner_->id()) {  // LCOV_EXCL_BR_LINE entitiesInRange 恒不返回空指针且 owner 节点自身在查询结果里已含，空指针短路臂为防御不可达
             continue;
         }
 
         nextInside.insert(entity->id());
         if (!inside_.contains(entity->id())) {
             auto* node = coordinateSystem_->find(entity->id());
-            if (node != nullptr) {
+            if (node != nullptr) {  // LCOV_EXCL_BR_LINE 实体 id 来自同一坐标系的范围查询，find 恒命中，空分支防御不可达
                 onEnter(*node, std::sqrt(distanceSquared(ownerNode->position(), node->position())));
             }
         }

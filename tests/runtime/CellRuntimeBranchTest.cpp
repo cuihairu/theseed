@@ -818,6 +818,22 @@ int main() {
         clearTransport(*transport);
         ++g_checked;
 
+        // 路由窗口内重建同 id Active 实体：commit 命中路由+epoch、实体在册但非
+        // Migrating → 拒绝且重建实体保留
+        auto& rebuilt = keepAlive.emplace_back(274, EntitySide::Cell, def);
+        addLocal(cellA, rebuilt, Vector3{10.5F, 0.0F, 0.0F});
+        if (!cellA.beginMigration(274, 22, 9)) return fail("migrate_begin_274");
+        cellA.removeEntity(274);
+        auto& revived = keepAlive.emplace_back(274, EntitySide::Cell, def);
+        addLocal(cellA, revived, Vector3{10.6F, 0.0F, 0.0F});
+        if (cellA.dispatchInvocation(makeInv(274, 11, "Avatar", "migration.commit", epochWire(9)))) {
+            return fail("migrate_commit_not_migrating");
+        }
+        if (cellA.findEntity(274) == nullptr) return fail("migrate_commit_not_migrating_kept");
+        cellA.clearMigrationRoute(274);
+        clearTransport(*transport);
+        ++g_checked;
+
         // createCell 尾部 snapshot 损坏（decodeDelta 抛）→ 吞掉异常，实体照常创建
         auto badSnapWire = createCellWire(0, 245, 55, Vector3{1.0F, 2.0F, 3.0F});
         badSnapWire.push_back(std::byte{0xFF});
@@ -1107,6 +1123,321 @@ int main() {
             scheduler.runOnce();
             if (!drainMatches(*transport, 421, 78, "aoi.leave")) return fail("p_aoi_leave");
             clearTransport(*transport);
+        }
+        ++g_checked;
+    }
+
+    // ---- Q. 分支覆盖补充：泵过滤臂、ghost 二次接线、AoI 残影、空类型名 ----
+    {
+        // Q1. addEntity 未知空间 → 早退，不入 entitySpaceMap_
+        auto& drift = keepAlive.emplace_back(501, EntitySide::Cell, def);
+        cellA.addEntity(drift, Vector3{1.0F, 0.0F, 0.0F}, 99999);
+        if (cellA.findEntitySpace(501) != 0) return fail("q_add_entity_unknown_space");
+        ++g_checked;
+
+        // Q2. ensureRealGhost 二次调用（manager 已存在）；destroyGhost 后
+        // syncRealGhosts 的 hasGhost 假臂；ensureGhostProxy 二次调用 +
+        // proxy 实体过泵（!isReal → continue）
+        auto& twincell = keepAlive.emplace_back(502, EntitySide::Cell, def);
+        addLocal(cellA, twincell, Vector3{1.0F, 0.0F, 0.0F});
+        auto& twinMgr = cellA.ensureRealGhost(twincell, 61);
+        static_cast<void>(cellA.ensureRealGhost(twincell, 61));  // manager 已存在分支
+        scheduler.runOnce();  // real ghost 无 staged delta → continue
+        twinMgr.destroyGhost();
+        auto& proxyHost = keepAlive.emplace_back(503, EntitySide::Cell, def);
+        addLocal(cellA, proxyHost, Vector3{2.0F, 0.0F, 0.0F});
+        static_cast<void>(cellA.ensureGhostProxy(proxyHost, 62));
+        static_cast<void>(cellA.ensureGhostProxy(proxyHost, 62));  // manager 已存在分支
+        scheduler.runOnce();  // proxy !isReal continue + real 无 ghost（hasGhost 假）continue
+        clearTransport(*transport);
+        ++g_checked;
+
+        // Q3. migration.commit 时实体存在但非 Migrating：
+        // beginMigration 因 send 被拒回滚（无路由），实体保持 Active
+        if (rejectingRuntime.beginMigration(281, 44, 2)) return fail("q_begin_rejected");
+        if (rejectingRuntime.dispatchInvocation(
+                makeInv(281, 33, "Avatar", "migration.commit", epochWire(2)))) {
+            return fail("q_commit_not_migrating");
+        }
+        ++g_checked;
+
+        // Q4. handleCreateCell：factory 注册在但产出 null（"Broken"）
+        if (cellB.handleCreateCell(makeInv(511, 22, "Broken", "entity.createCell",
+                                           createCellWire(0, 511, 66, Vector3{})))) {
+            return fail("q_createcell_factory_null");
+        }
+        ++g_checked;
+
+        // Q5. createCell 实体销毁后 periodic timer 触发：findEntity null → cb 不执行
+        {
+            if (!cellA.handleCreateCell(makeInv(512, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 512, 81, Vector3{})))) {
+                return fail("q_periodic_create");
+            }
+            auto* pe = cellA.findEntity(512);
+            if (pe == nullptr) return fail("q_periodic_entity");
+            int periodicNever = 0;
+            const auto ph = pe->addPeriodicTimer(std::chrono::milliseconds{0},
+                                                 [&periodicNever](Entity&) { periodicNever += 1; });
+            if (!cellA.handleDestroyCell(makeInv(512, 11, "Avatar", "entity.destroyCell",
+                                                 epochWire(0)))) {
+                return fail("q_periodic_destroy");
+            }
+            scheduler.runOnce();  // periodic 触发 → findEntity null → 假臂
+            if (periodicNever != 0) return fail("q_periodic_should_not_fire");
+            cellA.cancelTimer(ph);
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // Q6. requestSpawnEntity：空类型名合法（typeLen=0 跳过 memcpy 后照常发送）
+        if (!cellA.requestSpawnEntity("", Vector3{}, 281)) return fail("q_spawn_empty_type");
+        ++g_checked;
+
+        // Q7. owned 实体 beginDestroy 后：syncToBases / flushClientEvents
+        // 均在 state != Active 处 continue（脏属性与 client 事件积压不清）
+        {
+            if (!cellA.handleCreateCell(makeInv(513, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 513, 82, Vector3{})))) {
+                return fail("q_dead_create");
+            }
+            auto* dead = cellA.findEntity(513);
+            if (dead == nullptr) return fail("q_dead_entity");
+            dead->bindBaseEntityCall(83);
+            dead->setProperty<std::int32_t>(hpId, 9);
+            dead->emitToClient("x", std::span<const std::byte>{});
+            dead->beginDestroy();
+            scheduler.runOnce();
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // Q8. syncToBases：bind 了 base 但无 Cell 脏属性 → deltas 空 continue
+        {
+            if (!cellA.handleCreateCell(makeInv(514, 11, "Avatar", "entity.createCell",
+                                                createCellWire(0, 514, 84, Vector3{})))) {
+                return fail("q_nodelta_create");
+            }
+            auto* nd = cellA.findEntity(514);
+            if (nd == nullptr) return fail("q_nodelta_entity");
+            nd->bindBaseEntityCall(85);
+            scheduler.runOnce();  // 无脏 → findStagedDelta 空 → continue
+            clearTransport(*transport);
+        }
+        ++g_checked;
+
+        // Q9. AoI / witness 泵的残影与缺件臂：观察者无 baseCall、target 直删、
+        // 观察者直删、空类型名 target
+        {
+            if (!cellA.createSpace(830, "aoi2")) return fail("q_aoi2_space");
+            auto& w1 = keepAlive.emplace_back(521, EntitySide::Cell, def);
+            cellA.addEntity(w1, Vector3{0.0F, 0.0F, 0.0F}, 830);
+            w1.activate();  // 不 bind base：flushAoIEvents/witness 的 baseCall 缺件臂
+            static_cast<void>(cellA.findSpaceRuntime(830)->ensureWitness(w1, 10.0F));
+            auto& mv1 = keepAlive.emplace_back(522, EntitySide::Cell, def);
+            cellA.addEntity(mv1, Vector3{100.0F, 0.0F, 0.0F}, 830);
+            mv1.activate();
+            mv1.bindBaseEntityCall(91);
+            scheduler.runOnce();
+            clearTransport(*transport);
+
+            // mv1 移入视图：观察者 521 无 baseCall → 事件与 witness 均在缺件处 continue
+            cellA.findSpaceRuntime(830)->space().updateEntityPosition(mv1.id(),
+                                                                      Vector3{1.0F, 0.0F, 0.0F});
+            scheduler.runOnce();
+            clearTransport(*transport);
+
+            // target 直删（走 SpaceRuntime 层：正确触发观察者 onLeaveView 臂）
+            cellA.findSpaceRuntime(830)->removeEntity(522);
+            scheduler.runOnce();
+            clearTransport(*transport);
+
+            // 观察者直删（SpaceRuntime 层：trigger uninstall + witness detach + erase）
+            cellA.findSpaceRuntime(830)->removeEntity(521);
+            scheduler.runOnce();
+            clearTransport(*transport);
+
+            // 空类型名 target 进入有 baseCall 观察者的视图：aoi.enter 空名臂
+            auto& w2 = keepAlive.emplace_back(523, EntitySide::Cell, def);
+            cellA.addEntity(w2, Vector3{50.0F, 0.0F, 0.0F}, 830);
+            w2.activate();
+            w2.bindBaseEntityCall(92);
+            static_cast<void>(cellA.findSpaceRuntime(830)->ensureWitness(w2, 10.0F));
+            EntityDef emptyDef("");
+            auto& nameless = keepAlive.emplace_back(524, EntitySide::Cell, emptyDef);
+            cellA.addEntity(nameless, Vector3{100.0F, 0.0F, 0.0F}, 830);
+            nameless.activate();
+            scheduler.runOnce();
+            clearTransport(*transport);
+            cellA.findSpaceRuntime(830)->space().updateEntityPosition(nameless.id(),
+                                                                      Vector3{51.0F, 0.0F, 0.0F});
+            scheduler.runOnce();  // aoi.enter，typeName 为空 → 不写 name 字节
+            clearTransport(*transport);
+            if (!cellA.destroySpace(830)) return fail("q_aoi2_destroy");
+        }
+        ++g_checked;
+
+        // Q9b. Enter 事件入队后 target 经 CellRuntime 层移除：w3 的 witness
+        // binding 不随之清除，flush 时 enter 事件的 targetId 悬垂
+        {
+            if (!cellA.createSpace(831, "aoi3")) return fail("q_aoi3_space");
+            auto& w3 = keepAlive.emplace_back(525, EntitySide::Cell, def);
+            cellA.addEntity(w3, Vector3{0.0F, 0.0F, 0.0F}, 831);
+            w3.activate();
+            w3.bindBaseEntityCall(93);
+            static_cast<void>(cellA.findSpaceRuntime(831)->ensureWitness(w3, 10.0F));
+            auto& mv2 = keepAlive.emplace_back(526, EntitySide::Cell, def);
+            cellA.addEntity(mv2, Vector3{100.0F, 0.0F, 0.0F}, 831);
+            mv2.activate();
+            mv2.bindBaseEntityCall(94);
+            scheduler.runOnce();
+            clearTransport(*transport);
+
+            // mv2 移入 w3 视野：enter(525→526) 事件入队（尚未 flush）
+            cellA.findSpaceRuntime(831)->space().updateEntityPosition(mv2.id(),
+                                                                      Vector3{1.0F, 0.0F, 0.0F});
+            // CellRuntime 层移除 target：清自身 binding 并对 w3 补 leave，
+            // 队列中 enter 事件的 targetId 悬垂
+            cellA.removeEntity(526);
+            scheduler.runOnce();  // flushAoIEvents：observer 525 在册，findEntity(526) null
+            clearTransport(*transport);
+            if (!cellA.destroySpace(831)) return fail("q_aoi3_destroy");
+        }
+        ++g_checked;
+
+        // Q10. broadcastEvent/broadcastEventInRange 扫过非 Active 实体 → state 臂
+        // （Q7 的 513 已 beginDestroy 且仍在默认空间名册）
+        cellA.broadcastEvent("q.boom");
+        cellA.broadcastEventInRange("q.boom", Vector3{}, 1.0e9F);
+        ++g_checked;
+
+        // Q11. 第二轮缺口：teleport/beginMigration 残臂、transfer 无位置快照、
+        // ghost.sync 无 binding、定时器闭包假臂（绕过 cancelEntityTimers）、
+        // baseCall 清除后的各过滤臂
+        {
+            // Q11a. teleportEntity：map 残留指向已销毁空间 → oldSr null
+            if (!cellA.createSpace(840, "q_dead_sr")) return fail("q11a_space");
+            auto& ghosted = keepAlive.emplace_back(531, EntitySide::Cell, def);
+            cellA.addEntity(ghosted, Vector3{}, 840);
+            ghosted.activate();
+            // 名册直删 → destroySpace 不清其 map 条目，空间销毁后条目悬空
+            cellA.findSpaceRuntime(840)->space().removeEntity(531);
+            if (!cellA.destroySpace(840)) return fail("q11a_destroy");
+            if (cellA.teleportEntity(531, 100, Vector3{})) return fail("q11a_old_sr_null");
+            cellA.removeEntity(531);  // 清残留 map 条目
+            ++g_checked;
+
+            // Q11b. teleportEntity：空间健在但名册缺实体 → findEntity null
+            if (!cellA.createSpace(841, "q_roster")) return fail("q11b_space");
+            auto& vanished = keepAlive.emplace_back(532, EntitySide::Cell, def);
+            cellA.addEntity(vanished, Vector3{}, 841);
+            vanished.activate();
+            cellA.findSpaceRuntime(841)->space().removeEntity(532);
+            if (cellA.teleportEntity(532, 100, Vector3{})) return fail("q11b_roster_missing");
+            cellA.removeEntity(532);
+            if (!cellA.destroySpace(841)) return fail("q11b_destroy");
+            ++g_checked;
+
+            // Q11c. teleport 成功但实体无 baseCall：不发 spaceChanged
+            // （space 200 挂在 cellB 上；cellA 侧自建目标空间 843）
+            if (!cellA.createSpace(843, "q11c_dest")) return fail("q11c_space");
+            auto& quiet = keepAlive.emplace_back(533, EntitySide::Cell, def);
+            addLocal(cellA, quiet, Vector3{3.0F, 0.0F, 0.0F});
+            if (!cellA.teleportEntity(533, 843, Vector3{3.0F, 1.0F, 0.0F})) {
+                return fail("q11c_teleport");
+            }
+            clearTransport(*transport);
+            ++g_checked;
+
+            // Q11d. beginMigration：实体存在但非 Active（beginDestroy 后）
+            auto& retired = keepAlive.emplace_back(534, EntitySide::Cell, def);
+            addLocal(cellA, retired, Vector3{4.0F, 0.0F, 0.0F});
+            retired.beginDestroy();
+            if (cellA.beginMigration(534, 22, 1)) return fail("q11d_not_active");
+            ++g_checked;
+
+            // Q11e. migration.transfer：快照无 position（capture 可选参不传），
+            // 接收方 localComponentId 与快照 target 一致才能走到 position 检查
+            auto& posless = keepAlive.emplace_back(535, EntitySide::Cell, def);
+            addLocal(cellA, posless, Vector3{5.0F, 0.0F, 0.0F});
+            auto poslessSnapshot =
+                EntityMigration::capture(posless, 8, 11, 22, std::nullopt, 100);
+            if (cellB.dispatchInvocation(makeInv(535, 22, "Avatar", "migration.transfer",
+                                                 EntityMigration::encode(poslessSnapshot)))) {
+                return fail("q11e_no_position");
+            }
+            cellA.removeEntity(535);
+            ++g_checked;
+
+            // Q11f. ghost.sync：实体存在但无 ghost binding → manager null 臂
+            if (cellA.dispatchInvocation(makeInv(533, 11, "Avatar", "ghost.sync", {}))) {
+                return fail("q11f_no_binding");
+            }
+            ++g_checked;
+
+            // Q11g. createCell 定时器闭包：名册直删绕过 cancelEntityTimers，
+            // 定时器仍触发但 findEntity 为 null → one-shot/periodic 的 if(e) 假臂
+            {
+                if (!cellA.handleCreateCell(makeInv(536, 11, "Avatar", "entity.createCell",
+                                                    createCellWire(0, 536, 86, Vector3{})))) {
+                    return fail("q11g_create");
+                }
+                auto* qe = cellA.findEntity(536);
+                if (qe == nullptr) return fail("q11g_entity");
+                int closureFired = 0;
+                qe->addTimer(std::chrono::milliseconds{0},
+                             [&closureFired](Entity&) { closureFired += 1; });
+                qe->addPeriodicTimer(std::chrono::milliseconds{0},
+                                     [&closureFired](Entity&) { closureFired += 1; });
+                cellA.findSpaceRuntime(cellA.findEntitySpace(536))->space().removeEntity(536);
+                scheduler.runOnce();  // 闭包触发 → findEntity null → cb 不执行
+                if (closureFired != 0) return fail("q11g_should_not_fire");
+                cellA.cancelEntityTimers(536);
+                clearTransport(*transport);
+            }
+            ++g_checked;
+
+            // Q11h. clearBaseEntityCall（baseCall 指针为 null）后的各过滤臂：
+            // spawn 拒绝、teleport 不发 spaceChanged、syncToBases/flushClientEvents continue
+            {
+                if (!cellA.handleCreateCell(makeInv(537, 11, "Avatar", "entity.createCell",
+                                                    createCellWire(0, 537, 87, Vector3{})))) {
+                    return fail("q11h_create");
+                }
+                auto* be = cellA.findEntity(537);
+                if (be == nullptr) return fail("q11h_entity");
+                be->clearBaseEntityCall();
+                if (cellA.requestSpawnEntity("Avatar", Vector3{}, 537)) {
+                    return fail("q11h_spawn_no_base");
+                }
+                be->setProperty<std::int32_t>(hpId, 3);
+                be->emitToClient("y", std::span<const std::byte>{});
+                if (!cellA.teleportEntity(537, 843, Vector3{1.0F, 0.0F, 0.0F})) {
+                    return fail("q11h_teleport");
+                }
+                scheduler.runOnce();
+                clearTransport(*transport);
+                if (!cellA.handleDestroyCell(makeInv(537, 11, "Avatar", "entity.destroyCell",
+                                                     epochWire(0)))) {
+                    return fail("q11h_destroy");
+                }
+            }
+            ++g_checked;
+
+            // Q11i. syncRealGhosts：owner 仍在（裸指针）但 staged delta 为空 → continue；
+            // 顺带验证名册直删后 binding 残留的路径
+            {
+                if (!cellA.createSpace(842, "q_ghost_roster")) return fail("q11i_space");
+                auto& stale = keepAlive.emplace_back(538, EntitySide::Cell, def);
+                cellA.addEntity(stale, Vector3{}, 842);
+                stale.activate();
+                cellA.ensureRealGhost(stale, 63);
+                cellA.findSpaceRuntime(842)->space().removeEntity(538);
+                scheduler.runOnce();  // binding 在、owner Active、staged 空 → continue
+                clearTransport(*transport);
+                if (!cellA.destroySpace(842)) return fail("q11i_destroy");
+            }
+            ++g_checked;
         }
         ++g_checked;
     }

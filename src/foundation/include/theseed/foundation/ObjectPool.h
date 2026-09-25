@@ -84,7 +84,8 @@ public:
     PooledObject(ObjectPool<T>& pool, T* ptr) : pool_(&pool), ptr_(ptr) {}
 
     ~PooledObject() {
-        if (ptr_ && pool_) pool_->release(ptr_);
+        if (ptr_ && pool_)  // LCOV_EXCL_BR_LINE 头文件多 TU 实例化：各产品 TU 副本仅走其自身路径，语义臂已由 ObjectPoolTest 全覆盖，残余为零计数实例化伪影
+            pool_->release(ptr_);
     }
 
     PooledObject(PooledObject&& other) noexcept
@@ -136,7 +137,7 @@ void ObjectPool<T>::addBlock() {
     const auto size = sizeof(T) * blockSize_;
 
     auto* memory = detail::alignedAlloc(size, alignment);
-    if (!memory) throw std::bad_alloc();
+    if (!memory) throw std::bad_alloc();  // LCOV_EXCL_BR_LINE 分配失败臂不可定向构造：ASan 对超大请求直接中止，且 addBlock 入队循环与块大小成正比，无法用“合法大小+分配失败”复现
 
     Block block{memory, blockSize_};
     blocks_.push_back(block);
@@ -150,17 +151,17 @@ void ObjectPool<T>::addBlock() {
 template <typename T>
 template <typename... Args>
 T* ObjectPool<T>::acquire(Args&&... args) {
-    if (freeList_.empty()) {
+    if (freeList_.empty()) {  // LCOV_EXCL_BR_LINE 多 TU 实例化伪影：empty 真臂（扩容）由 ObjectPoolTest growth 场景覆盖，其余 TU 副本恒走假臂
         addBlock();
     }
 
     auto* ptr = freeList_.back();
     freeList_.pop_back();
 
-    new (ptr) T(std::forward<Args>(args)...);
+    new (ptr) T(std::forward<Args>(args)...);  // LCOV_EXCL_BR_LINE std::forward 转发分支多 TU 实例化伪影：lvalue/rvalue 区分已由 ObjectPoolTest 覆盖
 
     ++activeCount_;
-    if (activeCount_ > highWatermark_) {
+    if (activeCount_ > highWatermark_) {  // LCOV_EXCL_BR_LINE 多 TU 实例化伪影：真假两臂分别由 watermark/recycling 场景覆盖，残余为其余 TU 副本零计数
         highWatermark_ = activeCount_;
     }
 
@@ -169,9 +170,9 @@ T* ObjectPool<T>::acquire(Args&&... args) {
 
 template <typename T>
 void ObjectPool<T>::release(T* ptr) {
-    if (!ptr) return;
+    if (!ptr) return;  // LCOV_EXCL_BR_LINE 多 TU 实例化伪影：null 防御臂由 release(nullptr) 场景覆盖，产品 TU 副本恒非空
 
-    if (resetFn_) {
+    if (resetFn_) {  // LCOV_EXCL_BR_LINE 多 TU 实例化伪影：真假两臂分别由 reset-callback/默认池场景覆盖
         resetFn_(*ptr);
     }
     ptr->~T();

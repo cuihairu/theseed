@@ -221,7 +221,7 @@ static bool runLogin(LoginApp& app, const std::string& account, const std::strin
     outError.assign(reinterpret_cast<const char*>(respPayload.data() + off), errLen);
     off += errLen;
     std::uint32_t tokLen = readU32(off);
-    off += 4;
+    // readU32 内部已前移 off，这里不再重复 +4（重复会错位吞入尾部 NUL）
     outToken.assign(reinterpret_cast<const char*>(respPayload.data() + off), tokLen);
     return true;
 }
@@ -449,6 +449,195 @@ int main() {
         if (!runLogin(app, "alice", "pw", success, error, token)) FAIL("no login response");
         if (success) FAIL("login must fail without a db transport");
         if (error != "database unavailable") FAIL("unexpected error: " + error);
+    }
+    PASS();
+
+    // --- fallback password 模式：非空账密成功；空密码走假臂失败 ---
+    TEST("password fallback auth branches");
+    {
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "password";   // 非 "db"：init 里 db 分支整体跳过
+        LoginApp app(config);
+        app.init();
+
+        bool success = false;
+        std::string error, token;
+        if (!runLogin(app, "bob", "pw", success, error, token)) FAIL("no login response");
+        if (!success || token.empty()) FAIL("password auth should succeed");
+
+        // 空密码 → fallback 校验假臂，登录失败且无 token。
+        bool ok2 = false;
+        std::string error2, token2;
+        if (!runLogin(app, "bob", "", ok2, error2, token2)) FAIL("no response for empty pw");
+        if (ok2 || !token2.empty()) FAIL("empty password should fail");
+    }
+    PASS();
+
+    // --- 限流与会话存储：capacity=1 耗尽后第二次登录被拒；成功登录写入 session store ---
+    TEST("rate limiter and session store branches");
+    {
+        auto redis = std::make_shared<theseed::foundation::InMemoryRedisProvider>();
+        auto limiter = std::make_shared<theseed::foundation::RateLimiter>(redis);
+        theseed::foundation::RateLimiter::Config lc;
+        lc.capacity = 1;
+        lc.refillInterval = std::chrono::hours{1};
+        auto store = std::make_shared<theseed::foundation::SessionStore>(redis);
+
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "password";
+        config.rateLimiter = limiter;
+        config.rateLimitConfig = lc;
+        config.sessionStore = store;
+        LoginApp app(config);
+        app.init();
+
+        bool success = false;
+        std::string error, token;
+        if (!runLogin(app, "carl", "pw", success, error, token)) FAIL("no login response");
+        if (!success) FAIL("first login should pass limiter");
+        if (token.empty()) FAIL("token required for session store");
+        // token 已写入 store（persistSession 真臂）。
+        auto stored = store->load(token);
+        if (!stored.has_value() || stored->accountId != "carl") FAIL("session not stored");
+
+        // 第二次：桶已空 → rate limited（203/204 真臂）。
+        bool ok2 = true;
+        std::string error2, token2;
+        if (!runLogin(app, "carl", "pw", ok2, error2, token2)) FAIL("no response for limited");
+        if (ok2) FAIL("second login should be rate limited");
+        if (error2 != "rate limited") FAIL("unexpected error: " + error2);
+    }
+    PASS();
+
+    // --- 坏 payload：decode 失败被静默丢弃（177/187 假臂），连接保持 ---
+    TEST("malformed payloads are dropped silently");
+    {
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "password";
+        LoginApp app(config);
+        app.init();
+
+        MockClient client;
+        ClientSession session(client.serverPipe);
+        session.setMessageCallback([&app, &session](ClientMessageType type,
+                                                    std::span<const std::byte> payload) {
+            app.handleClientMessage(&session, type, payload);
+        });
+
+        // Login payload：account 长度谎报。
+        std::vector<std::byte> bad{std::byte{0xFF}, std::byte{0xFF}, std::byte{0}, std::byte{0}};
+        client.sendToServer(ClientMessageType::Login,
+                            std::span<const std::byte>(bad.data(), bad.size()));
+        client.pump();
+        session.pump();
+        client.pump();
+        ClientMessageType t1{};
+        std::span<const std::byte> p1;
+        if (client.parseResponse(t1, p1)) FAIL("bad login payload must not respond");
+
+        // SelectRealm payload：长度谎报。
+        client.clearReceived();
+        client.sendToServer(ClientMessageType::SelectRealm,
+                            std::span<const std::byte>(bad.data(), bad.size()));
+        client.pump();
+        session.pump();
+        client.pump();
+        if (client.parseResponse(t1, p1)) FAIL("bad selectRealm payload must not respond");
+    }
+    PASS();
+
+    // --- authType=db 但 dbHost 为空：init 跳过 hub；handleLogin 走 fallback 分支 ---
+    TEST("db auth without dbHost falls back to password check");
+    {
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "db";
+        config.dbHost = "";   // 空 host：36 行短路假臂，不建 hub
+        LoginApp app(config);
+        app.init();
+
+        bool success = false;
+        std::string error, token;
+        if (!runLogin(app, "dave", "pw", success, error, token)) FAIL("no login response");
+        // 233 行短路假臂 → fallback password 检查 → 成功。
+        if (!success || token.empty()) FAIL("fallback after empty dbHost should succeed");
+    }
+    PASS();
+
+    // --- ops 面板开启：init 起 OpsServer（55/70 段），stop 收尾 ---
+    TEST("ops enabled init and stop");
+    {
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "password";
+        config.ops.enabled = true;
+        config.ops.port = 0;   // ephemeral，避免端口冲突
+        LoginApp app(config);
+        app.init();
+        app.tick();
+        app.stop();
+    }
+    PASS();
+
+    // --- ClientSession 防御臂：无管道会话全程 no-throw；空回调；半帧缓冲 ---
+    TEST("client session defensive arms");
+    {
+        // 无管道：send/close/isConnected/pump/析构全部安全。
+        {
+            ClientSession bare(nullptr);
+            bare.send(std::span<const std::byte>{});
+            bool ok = !bare.isConnected();
+            bare.pump();
+            bare.close();
+            ok = ok && !bare.isConnected();   // 仍为假
+            if (!ok) FAIL("null-pipe session misbehaved");
+        }
+
+        // 不设置消息回调：完整帧被消费但不触发任何回调（76 假臂）。
+        {
+            MockClient client;
+            ClientSession session(client.serverPipe);
+            auto payload = encodeLoginPayload("a", "b");
+            client.sendToServer(ClientMessageType::Login,
+                                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+        }
+
+        // 半帧：前半到达不回调，补齐后回调一次（70 真臂）。
+        {
+            MockClient client;
+            int messages = 0;
+            ClientSession session(client.serverPipe);
+            session.setMessageCallback([&messages](ClientMessageType, std::span<const std::byte>) {
+                ++messages;
+            });
+
+            auto payload = encodeLoginPayload("a", "b");
+            auto frame = LoginProtocol::frameMessage(ClientMessageType::Login,
+                                                     std::span<const std::byte>(payload.data(), payload.size()));
+            const auto half = frame.size() / 2;
+            client.clientPipe->write(std::span<const std::byte>(frame.data(), half));
+            client.pump();
+            session.pump();
+            client.pump();
+            if (messages != 0) FAIL("half frame must not dispatch");
+
+            client.clientPipe->write(std::span<const std::byte>(frame.data() + half, frame.size() - half));
+            client.pump();
+            session.pump();
+            client.pump();
+            if (messages != 1) FAIL("completed frame must dispatch once");
+        }
     }
     PASS();
 

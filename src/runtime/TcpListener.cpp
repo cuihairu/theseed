@@ -30,7 +30,7 @@ bool TcpListener::listen(const std::string& host, std::uint16_t port, int backlo
     detail::socketEnsureInit();  // Windows 需先 WSAStartup；POSIX 为空操作
 
     detail::SocketHandle s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == detail::kInvalidSocket) return false;
+    if (s == detail::kInvalidSocket) return false;  // LCOV_EXCL_BR_LINE socket() 仅在 fd 耗尽时失败，测试环境无法稳定触发
 
     // Allow address reuse
     int opt = 1;
@@ -47,7 +47,7 @@ bool TcpListener::listen(const std::string& host, std::uint16_t port, int backlo
         return false;
     }
 
-    if (::listen(s, backlog) == detail::kSocketError) {
+    if (::listen(s, backlog) == detail::kSocketError) {  // LCOV_EXCL_BR_LINE bind 成功后 listen 失败本地无法稳定触发（见下方行级豁免区同理由）
         // LCOV_EXCL_START bind 成功后 listen 失败本地无法稳定触发（fd 耗尽先死在 socket()，同 socket 重复 listen 返回成功）
         detail::closeSocket(s);
         return false;

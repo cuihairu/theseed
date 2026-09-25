@@ -357,6 +357,50 @@ static void testCleanupAll() {
     else FAIL("cleanupAll failed");
 }
 
+// 死成员跳过臂：activeMembers / broadcast 的 ref.get() 假臂与
+// groupsForMember 的 isMember 假臂（存活成员遍历已在前面场景覆盖）。
+static void testDeadMemberSkipsInQueries() {
+    TEST("Group: dead members skipped in activeMembers/broadcast/groupsForMember");
+
+    auto def = makeDef("Avatar");
+    auto alive = std::make_unique<Entity>(1, EntitySide::Base, def);
+    auto dead = std::make_unique<Entity>(2, EntitySide::Base, def);
+    alive->activate();
+    dead->activate();
+
+    GroupManager mgr;
+    auto* group = mgr.createGroup(1);
+    group->addMember(*alive);
+    group->addMember(*dead);
+
+    int handlerCalls = 0;
+    auto setupHandler = [&](Entity& e) {
+        e.bindMethodHandler("heal", [&](Entity&, std::span<const std::byte>) {
+            handlerCalls += 1;
+        });
+    };
+    setupHandler(*alive);
+    setupHandler(*dead);
+
+    dead->beginDestroy();
+    dead->destroy();
+
+    // activeMembers：死成员 get() 为 null → 跳过
+    auto members = group->activeMembers();
+    bool ok = members.size() == 1 && members[0]->id() == 1;
+
+    // broadcast：死成员跳过、不投递（若未跳过则 handlerCalls == 2）
+    group->broadcast("heal");
+    ok = ok && handlerCalls == 1;
+
+    // groupsForMember：未入组 id 在每组 isMember 假臂上被跳过
+    ok = ok && mgr.groupsForMember(99).empty();
+    ok = ok && mgr.groupsForMember(1).size() == 1;
+
+    if (ok) PASS();
+    else FAIL("dead member skip failed, calls=" + std::to_string(handlerCalls));
+}
+
 int main() {
     std::cout << "Entity group tests:\n";
 
@@ -371,6 +415,7 @@ int main() {
     testFindByMember();
     testLeaderManagement();
     testCleanupAll();
+    testDeadMemberSkipsInQueries();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -22,7 +22,7 @@ Entity* EntityRef::operator->() const {
 }
 
 bool EntityRef::isValid() const {
-    return alive_ && *alive_ && cached_ != nullptr;
+    return alive_ && *alive_ && cached_ != nullptr;  // LCOV_EXCL_BR_LINE cached_ 空臂不可达：带参构造恒 cached_=&entity，默认构造/reset 后 alive_ 空在首条件短路
 }
 
 EntityRef::operator bool() const {

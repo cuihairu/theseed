@@ -42,6 +42,43 @@ static bool writeFile(const std::string& path, const std::string& content) {
     return true;
 }
 
+// 分支覆盖：loadDirectory 的目录项过滤（子目录/未知扩展名/坏 XML/.def 放行）
+// 与继承解析的自引用防御臂。
+static void testDirectoryAndResolveEdges() {
+    TEST("registry: directory item filters and resolve defensive arms");
+
+    const std::string dir = "test_registry_dir_edges";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    std::filesystem::create_directory(dir + "/nested");   // 非普通文件：跳过
+
+    writeFile(dir + "/readme.txt", "not a def");          // 未知扩展名：xml 短路臂拒绝
+    writeFile(dir + "/Plain.def", R"(
+<EntityDef name="PlainDef">
+    <Properties><Property name="p" type="Int32"/></Properties>
+</EntityDef>
+)");                                                     // .def 扩展名放行
+    writeFile(dir + "/Broken.xml", "<EntityDef name=\"Broken\"");  // 解析失败：不计数
+    writeFile(dir + "/Narcissus.xml", R"(
+<EntityDef name="Narcissus" extends="Narcissus">
+    <Properties><Property name="n" type="Int32"/></Properties>
+</EntityDef>
+)");                                                     // 自引用 extends：防御臂
+
+    EntityDefRegistry registry;
+    auto count = registry.loadDirectory(dir);
+
+    bool ok = count == 2;  // Plain.def + Narcissus.xml
+    ok = ok && registry.hasDef("PlainDef");
+    ok = ok && registry.hasDef("Narcissus");
+    ok = ok && registry.getDef("Narcissus")->parentType() == "Narcissus";
+    ok = ok && registry.getDef("Narcissus")->propertyCount() == 1;  // 自引用未触发合并
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS();
+    else FAIL("directory edges mismatch, count=" + std::to_string(count));
+}
+
 static void testRegisterDef() {
     TEST("register and retrieve definition");
 
@@ -543,6 +580,7 @@ int main() {
     testInheritanceWithFlags();
     testMergeFromIsIdempotent();
     testLoadFileErrorPaths();
+    testDirectoryAndResolveEdges();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

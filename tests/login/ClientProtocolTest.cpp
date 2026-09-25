@@ -255,6 +255,93 @@ int main() {
     }
     PASS();
 
+    // --- 截断分支矩阵：actionName 长度谎报 / actionData 长度谎报 / 空 actionData、eventData ---
+    TEST("action and event truncation branches");
+    {
+        auto appendLen = [](std::vector<std::byte>& v, std::uint32_t len) {
+            v.push_back(std::byte(len & 0xFF));
+            v.push_back(std::byte((len >> 8) & 0xFF));
+            v.push_back(std::byte((len >> 16) & 0xFF));
+            v.push_back(std::byte((len >> 24) & 0xFF));
+        };
+        auto u64 = [](std::vector<std::byte>& v, std::uint64_t x) {
+            for (int i = 0; i < 8; ++i) v.push_back(std::byte((x >> (8 * i)) & 0xFF));
+        };
+
+        ActionMsg out;
+        // actionName 长度谎报 → readStringFromSpan offset+len 越界（23/151 行真臂）。
+        {
+            std::vector<std::byte> v;
+            u64(v, 7);
+            appendLen(v, 999);   // nameLen 谎报
+            if (ClientProtocol::decodeAction(std::span<const std::byte>(v.data(), v.size()), out))
+                FAIL("lying nameLen should fail");
+        }
+        // actionData 长度谎报 → 157 行真臂。
+        {
+            std::vector<std::byte> v;
+            u64(v, 7);
+            appendLen(v, 2);
+            v.push_back(std::byte{'h'}); v.push_back(std::byte{'i'});
+            appendLen(v, 500);   // dataLen 谎报
+            if (ClientProtocol::decodeAction(std::span<const std::byte>(v.data(), v.size()), out))
+                FAIL("lying dataLen should fail");
+        }
+        // 空 actionData round-trip（125/136 空臂）。
+        {
+            ActionMsg m;
+            m.entityId = 9;
+            m.actionName = "idle";
+            auto frame = ClientProtocol::encodeAction(m);   // actionData 为空 → 136 空臂
+            ClientMessageType t{};
+            std::span<const std::byte> pl;
+            if (!LoginProtocol::parseFrame(std::span<const std::byte>(frame.data(), frame.size()), t, pl))
+                FAIL("parse empty-action failed");
+            if (!ClientProtocol::decodeAction(pl, out)) FAIL("decode empty-action failed");
+            if (!out.actionData.empty() || out.actionName != "idle") FAIL("empty-action content");
+        }
+        // 空 eventData round-trip（186 空臂）：encode + parse 即可（无独立 decodeEntityEvent）。
+        {
+            EntityEventMsg m;
+            m.entityId = 3;
+            m.eventName = "tick";
+            auto frame = ClientProtocol::encodeEntityEvent(m);   // eventData 为空 → 186 空臂
+            ClientMessageType t{};
+            std::span<const std::byte> pl;
+            if (!LoginProtocol::parseFrame(std::span<const std::byte>(frame.data(), frame.size()), t, pl))
+                FAIL("parse empty-event failed");
+            if (pl.size() != 8 + 4 + 4 + 4) FAIL("empty-event payload size");
+        }
+        // propertySync：dataLen 完整但谎报（123 真臂）与非空 propertyData（125 真臂）。
+        {
+            // 手工拼：entityId(8) + hasPos(1) + pos(12) + dataLen(4, 谎报 500)。
+            // hasPos 必须为 1：为 0 时 pos 12 字节不消费，dataLen 读到 pos 前字节（0）即合法返回。
+            std::vector<std::byte> v;
+            for (int i = 0; i < 8; ++i) v.push_back(std::byte{0});
+            v.push_back(std::byte{1});
+            for (int i = 0; i < 12; ++i) v.push_back(std::byte{0});
+            appendLen(v, 500);
+            PropertySyncMsg ps;
+            if (ClientProtocol::decodePropertySync(std::span<const std::byte>(v.data(), v.size()), ps))
+                FAIL("lying property dataLen should fail");
+        }
+        {
+            PropertySyncMsg m;
+            m.entityId = 8;
+            m.propertyData = {std::byte{0xAA}, std::byte{0xBB}};
+            auto frame = ClientProtocol::encodePropertySync(m);
+            ClientMessageType t{};
+            std::span<const std::byte> pl;
+            if (!LoginProtocol::parseFrame(std::span<const std::byte>(frame.data(), frame.size()), t, pl))
+                FAIL("parse psync failed");
+            PropertySyncMsg out;
+            if (!ClientProtocol::decodePropertySync(pl, out)) FAIL("decode psync failed");
+            if (out.propertyData.size() != 2 || out.propertyData[0] != std::byte{0xAA})
+                FAIL("psync content");
+        }
+    }
+    PASS();
+
     std::cout << "\nAll ClientProtocol tests passed!" << std::endl;
     return 0;
 }

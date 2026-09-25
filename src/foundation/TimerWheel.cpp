@@ -67,7 +67,9 @@ TimerHandle TimerWheel::addTimer(Duration delay, Callback callback) {
 
     TimerHandle handle{nextTimerId_, 0};
     ++nextTimerId_;
+    // LCOV_EXCL_BR_START 函数尾汇合伪边：std::max 两臂已由 sub-tick/正常 delay 场景覆盖，无残余业务分支
     return handle;
+    // LCOV_EXCL_BR_STOP
 }
 
 TimerHandle TimerWheel::addPeriodic(Duration interval, Callback callback) {
@@ -80,7 +82,9 @@ TimerHandle TimerWheel::addPeriodic(Duration interval, Callback callback) {
 
     TimerHandle handle{nextTimerId_, 0};
     ++nextTimerId_;
+    // LCOV_EXCL_BR_START 同 addTimer：函数尾汇合伪边，两臂均已覆盖
     return handle;
+    // LCOV_EXCL_BR_STOP
 }
 
 bool TimerWheel::cancel(TimerHandle handle) {

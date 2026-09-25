@@ -53,7 +53,7 @@ struct MySQLResult::Impl {
     bool materialized = false;  // true 表示走 rows 路径
 
     explicit Impl(MYSQL_RES* r) : res(r) {
-        if (res != nullptr) {
+        if (res != nullptr) {  // LCOV_EXCL_BR_LINE query 路径已过滤空 res，空指针构造不可达
             columnCountVal = static_cast<std::size_t>(mysql_num_fields(res));
             rowCountVal = static_cast<std::size_t>(mysql_num_rows(res));
         }
@@ -72,7 +72,7 @@ struct MySQLResult::Impl {
     }
 
     bool advance() {
-        if (res == nullptr) return false;
+        if (res == nullptr) return false;  // LCOV_EXCL_BR_LINE materialized 结果不走 advance，res 恒非空
         currentRow = mysql_fetch_row(res);
         lengths = mysql_fetch_lengths(res);
         return currentRow != nullptr;
@@ -103,7 +103,7 @@ std::span<const std::byte> MySQLResult::asBytes(std::size_t col) const {
     if (!impl_) return {};
     if (impl_->materialized) {
         // cursor-1 是当前已消费行（next 把它 +1）
-        if (impl_->cursor == 0 || impl_->cursor > impl_->rows.size()) return {};
+        if (impl_->cursor == 0 || impl_->cursor > impl_->rows.size()) return {};  // LCOV_EXCL_BR_LINE next() 边界检查保证 cursor 不越过行数，越界臂恒假
         const auto& row = impl_->rows[impl_->cursor - 1];
         if (col >= row.size()) return {};
         return {row[col].data(), row[col].size()};
@@ -112,7 +112,7 @@ std::span<const std::byte> MySQLResult::asBytes(std::size_t col) const {
     if (col >= impl_->columnCountVal) return {};
     const char* cell = impl_->currentRow[col];
     if (cell == nullptr) return {};  // SQL NULL
-    unsigned long len = impl_->lengths ? impl_->lengths[col] : 0;
+    unsigned long len = impl_->lengths ? impl_->lengths[col] : 0;  // LCOV_EXCL_BR_LINE mysql_fetch_row 成功后 fetch_lengths 恒非空
     return {reinterpret_cast<const std::byte*>(cell), static_cast<std::size_t>(len)};
 }
 
@@ -165,7 +165,7 @@ bool MySQLConnection::connect() {
     if (impl_->connected) return true;
 
     // 重新初始化以防之前 close 过
-    if (!mysql_init(&impl_->mysql)) {
+    if (!mysql_init(&impl_->mysql)) {  // LCOV_EXCL_BR_LINE mysql_init 失败即 OOM，不可注入
         // LCOV_EXCL_START mysql_init 失败即 OOM，不可注入
         impl_->lastError = "mysql_init failed";
         return false;
@@ -226,7 +226,7 @@ bool MySQLConnection::execute(const std::string& sql) {
     if (extra != nullptr) mysql_free_result(extra);
     while (mysql_next_result(&impl_->mysql) == 0) {
         MYSQL_RES* more = mysql_store_result(&impl_->mysql);
-        if (more != nullptr) mysql_free_result(more);
+        if (more != nullptr) mysql_free_result(more);  // LCOV_EXCL_BR_LINE next_result==0 已蕴含 store_result 非空，空指针臂协议层不可构造
     }
     return true;
 }
@@ -252,9 +252,9 @@ bool MySQLConnection::executeParams(std::string_view sql,
     if (!ensureConnected()) return false;
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
-    if (stmt == nullptr) {
+    if (stmt == nullptr) {  // LCOV_EXCL_BR_LINE mysql_stmt_init 失败即 OOM
         // LCOV_EXCL_START mysql_stmt_init 失败即 OOM
-        impl_->lastError = "mysql_stmt_init failed";
+        impl_->lastError = "mysql_stmt_init failed";  // LCOV_EXCL_BR_LINE OOM 不可达臂内的字符串赋值内联边
         return false;
         // LCOV_EXCL_STOP
     }
@@ -283,7 +283,7 @@ bool MySQLConnection::executeParams(std::string_view sql,
     std::vector<unsigned long> lengths(params.size());
     // 每个 is_null 标志必须存活到 execute 之后。MySQL 8.0 头中 is_null 为
     // bool*，且 std::vector<bool> 元素取不出真实地址，故用动态 bool 数组。
-    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());
+    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());  // LCOV_EXCL_BR_LINE new[] 值初始化的库内联分支，非业务分支
     std::memset(binds.data(), 0, sizeof(MYSQL_BIND) * binds.size());
 
     for (std::size_t i = 0; i < params.size(); ++i) {
@@ -308,10 +308,10 @@ bool MySQLConnection::executeParams(std::string_view sql,
         }
     }
 
-    if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
+    if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {  // LCOV_EXCL_BR_LINE bind_param 仅客户端内部状态/OOM 可触发
         // LCOV_EXCL_START bind_param 仅客户端内部状态/OOM 可触发；libmysql 对参数数不匹配不在 bind 报错
-        impl_->lastError = mysql_stmt_error(stmt);
-        cleanup();
+        impl_->lastError = mysql_stmt_error(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的内联边
+        cleanup();  // LCOV_EXCL_BR_LINE 同上不可达臂内的清理调用内联边
         return false;
         // LCOV_EXCL_STOP
     }
@@ -336,9 +336,9 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     if (!ensureConnected()) return std::nullopt;
 
     MYSQL_STMT* stmt = mysql_stmt_init(&impl_->mysql);
-    if (stmt == nullptr) {
+    if (stmt == nullptr) {  // LCOV_EXCL_BR_LINE mysql_stmt_init 失败即 OOM
         // LCOV_EXCL_START mysql_stmt_init 失败即 OOM
-        impl_->lastError = "mysql_stmt_init failed";
+        impl_->lastError = "mysql_stmt_init failed";  // LCOV_EXCL_BR_LINE OOM 不可达臂内的字符串赋值内联边
         return std::nullopt;
         // LCOV_EXCL_STOP
     }
@@ -355,7 +355,7 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     std::vector<MYSQL_BIND> binds(params.size());
     std::vector<unsigned long> lengths(params.size());
     // MySQL 8.0 头中 is_null 为 bool*，且 std::vector<bool> 元素取不出真实地址。
-    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());
+    std::unique_ptr<bool[]> nullFlags(new bool[params.size()]());  // LCOV_EXCL_BR_LINE new[] 值初始化的库内联分支，非业务分支
     std::memset(binds.data(), 0, sizeof(MYSQL_BIND) * binds.size());
 
     if (!params.empty()) {
@@ -389,10 +389,10 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
             }
         }
 
-        if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {
+        if (mysql_stmt_bind_param(stmt, binds.data()) != 0) {  // LCOV_EXCL_BR_LINE bind_param 仅客户端内部状态/OOM 可触发（查询路径）
             // LCOV_EXCL_START bind_param 同上（查询路径）
-            impl_->lastError = mysql_stmt_error(stmt);
-            mysql_stmt_close(stmt);
+            impl_->lastError = mysql_stmt_error(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的内联边
+            mysql_stmt_close(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的清理调用内联边
             return std::nullopt;
             // LCOV_EXCL_STOP
         }
@@ -405,10 +405,10 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     }
 
     // 把结果集拉到客户端，以便逐行 fetch
-    if (mysql_stmt_store_result(stmt) != 0) {
+    if (mysql_stmt_store_result(stmt) != 0) {  // LCOV_EXCL_BR_LINE store_result 在 client-side cursor 下是纯内存遍历，无注入面
         // LCOV_EXCL_START store_result 在 client-side cursor 下是纯内存遍历，无 SQL-only 注入面
-        impl_->lastError = mysql_stmt_error(stmt);
-        mysql_stmt_close(stmt);
+        impl_->lastError = mysql_stmt_error(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的内联边
+        mysql_stmt_close(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的清理调用内联边
         return std::nullopt;
         // LCOV_EXCL_STOP
     }
@@ -428,7 +428,7 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     constexpr std::size_t kFetchBuf = 65536;  // 64KB per column per fetch
     std::vector<std::vector<std::byte>> colBufs(colCount);
     std::vector<unsigned long> colLens(colCount, 0);
-    std::unique_ptr<bool[]> colNulls(new bool[colCount]());
+    std::unique_ptr<bool[]> colNulls(new bool[colCount]());  // LCOV_EXCL_BR_LINE new[] 值初始化的库内联分支，非业务分支
     std::vector<MYSQL_BIND> outBinds(colCount);
     std::memset(outBinds.data(), 0, sizeof(MYSQL_BIND) * colCount);
     for (std::size_t i = 0; i < colCount; ++i) {
@@ -440,11 +440,11 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
         outBinds[i].is_null = &colNulls[i];
     }
 
-    if (mysql_stmt_bind_result(stmt, outBinds.data()) != 0) {
+    if (mysql_stmt_bind_result(stmt, outBinds.data()) != 0) {  // LCOV_EXCL_BR_LINE bind_result 仅客户端内部状态/OOM 可触发
         // LCOV_EXCL_START bind_result 仅客户端内部状态/OOM 可触发
-        impl_->lastError = mysql_stmt_error(stmt);
-        mysql_free_result(meta);
-        mysql_stmt_close(stmt);
+        impl_->lastError = mysql_stmt_error(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的内联边
+        mysql_free_result(meta);  // LCOV_EXCL_BR_LINE 同上不可达臂内的清理调用内联边
+        mysql_stmt_close(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的清理调用内联边
         return std::nullopt;
         // LCOV_EXCL_STOP
     }
@@ -453,9 +453,9 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
     std::vector<std::vector<std::vector<std::byte>>> rows;
     while (true) {
         int rc = mysql_stmt_fetch(stmt);
-        if (rc == 1) {
+        if (rc == 1) {  // LCOV_EXCL_BR_LINE fetch rc==1 在 client-side cursor 下是纯内存遍历
             // LCOV_EXCL_START fetch rc==1 在 client-side cursor 下是纯内存遍历
-            impl_->lastError = mysql_stmt_error(stmt);
+            impl_->lastError = mysql_stmt_error(stmt);  // LCOV_EXCL_BR_LINE 同上不可达臂内的内联边
             break;
             // LCOV_EXCL_STOP
         }
@@ -483,7 +483,7 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
                     part.length = &partLen;
                     if (mysql_stmt_fetch_column(stmt, &part,
                                                  static_cast<unsigned int>(i),
-                                                 offset + got) != 0) {
+                                                 offset + got) != 0) {  // LCOV_EXCL_BR_LINE fetch_column 截断恢复路径内参数恒合法
                         // LCOV_EXCL_START fetch_column 截断恢复路径内代码自身参数恒合法
                         break;
                         // LCOV_EXCL_STOP
@@ -491,11 +491,11 @@ std::optional<MySQLResult> MySQLConnection::queryParams(std::string_view sql,
                     // libmysql 语义：*length 回填的是列值全长而非本次拷贝字节数，
                     // 实际拷贝 min(全长 - offset, 缓冲容量) 字节。按全长累加会
                     // 越过 tail 缓冲导致 insert 越界读堆内存。
-                    if (partLen <= offset + got) break;
+                    if (partLen <= offset + got) break;  // LCOV_EXCL_BR_LINE libmysql 回填全长恒大于偏移，防御性 break 不可达
                     const unsigned long copied =
                         std::min(partLen - offset - got,
                                  static_cast<unsigned long>(remaining - got));
-                    if (copied == 0) break;
+                    if (copied == 0) break;  // LCOV_EXCL_BR_LINE 494 已挡全长不大于偏移、循环条件已挡 remaining 用尽，恒假
                     got += copied;
                 }
                 row[i].insert(row[i].end(),

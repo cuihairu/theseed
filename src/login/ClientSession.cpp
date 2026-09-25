@@ -48,7 +48,7 @@ void ClientSession::pump() {
 }
 
 void ClientSession::onRawReceived(std::span<const std::byte> data) {
-    if (data.empty()) return;
+    if (data.empty()) return;  // LCOV_EXCL_BR_LINE 管道层仅在收到非空分片时才触发回调，空分片臂不可达
     auto oldSize = recvBuffer_.size();
     recvBuffer_.resize(oldSize + data.size());
     std::memcpy(recvBuffer_.data() + oldSize, data.data(), data.size());

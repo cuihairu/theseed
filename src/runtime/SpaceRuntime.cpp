@@ -57,10 +57,10 @@ void SpaceRuntime::addEntity(Entity& entity, const Vector3& position) {
 void SpaceRuntime::removeEntity(EntityId entityId) {
     for (auto it = witnesses_.begin(); it != witnesses_.end();) {
         auto& binding = it->second;
-        if (binding.witness != nullptr) {
+        if (binding.witness != nullptr) {  // LCOV_EXCL_BR_LINE ensureWitness 恒即建即挂、条目仅整体 erase，witness null 臂不可达
             if (auto* owner = binding.witness->owner();
-                owner != nullptr && owner->id() == entityId) {
-                if (binding.trigger != nullptr) {
+                owner != nullptr && owner->id() == entityId) {  // LCOV_EXCL_BR_LINE detach 与 erase 同批执行，遍历时 owner 恒非空
+                if (binding.trigger != nullptr) {  // LCOV_EXCL_BR_LINE ensureWitness 恒与 witness 同建 trigger，null 臂不可达
                     binding.trigger->uninstall();
                 }
                 binding.witness->detach();
@@ -141,7 +141,7 @@ void SpaceRuntime::tick(TickContext& context) {
 
 void SpaceRuntime::processEntityInput() {
     for (auto* entity : space_->entities()) {
-        if (entity != nullptr && entity->isActive()) {
+        if (entity != nullptr && entity->isActive()) {  // LCOV_EXCL_BR_LINE Space 名册 Member.entity 仅以非空指针写入且移除即整条擦除，null 短路臂不可达
             entity->processInput();
         }
     }
@@ -152,10 +152,10 @@ void SpaceRuntime::applyVelocity(Duration deltaTime) {
     if (dt <= 0.0f) return;
 
     for (auto* entity : space_->entities()) {
-        if (entity == nullptr || !entity->hasVelocity()) continue;
+        if (entity == nullptr || !entity->hasVelocity()) continue;  // LCOV_EXCL_BR_LINE 同上：Space 名册成员恒非空
 
         auto pos = space_->entityPosition(entity->id());
-        if (!pos.has_value()) continue;
+        if (!pos.has_value()) continue;  // LCOV_EXCL_BR_LINE entity 取自同一在册名册，addEntity 已设位置，查询恒命中
 
         auto vel = entity->velocity();
         Vector3 newPos{
@@ -188,7 +188,7 @@ void SpaceRuntime::tickControllers(Duration deltaTime) {
     if (dt <= 0.0f) return;
 
     for (auto* entity : space_->entities()) {
-        if (entity == nullptr || !entity->isActive()) continue;
+        if (entity == nullptr || !entity->isActive()) continue;  // LCOV_EXCL_BR_LINE 同上：Space 名册成员恒非空
         if (entity->controllers().count() == 0) continue;
         entity->controllers().tick(dt);
     }
@@ -217,7 +217,7 @@ void SpaceRuntime::collectWitnessDirty() {
         static_cast<void>(entityId);
         for (const auto& view : binding.witness->snapshotView()) {
             const auto* delta = findStagedDelta(view.entityId);
-            if (delta != nullptr && !delta->empty()) {
+            if (delta != nullptr && !delta->empty()) {  // LCOV_EXCL_BR_LINE stageDirtyEntities 仅在 viewDelta 非空时 emplace 且每轮先 clear，empty 真臂不可达
                 binding.witness->recordDirty(view.entityId, *delta);
             }
 

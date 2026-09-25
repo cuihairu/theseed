@@ -5,6 +5,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -292,11 +293,136 @@ static void test_provider_scoped_construction() {
     PASS();
 }
 
+// --- Redis provider 防御臂 / 缺失键 ---
+
+static void test_redis_exists_across_kinds() {
+    TEST("test_redis_exists_string_set_lock");
+    InMemoryRedisProvider r;
+    // string 键：第一短路臂
+    r.set("s", "1");
+    if (!r.exists("s")) { FAIL("string key should exist"); return; }
+    // zset 键：第一臂 false、第二臂 true
+    r.zadd("z", "m", 1.0);
+    if (!r.exists("z")) { FAIL("zset key should exist"); return; }
+    // lock 键：前两臂 false、第三臂 true
+    if (!r.lock("l", RedisDuration(5000))) { FAIL("lock should succeed"); return; }
+    if (!r.exists("l")) { FAIL("locked key should exist"); return; }
+    // 全无：三臂全 false
+    if (r.exists("none")) { FAIL("missing key should not exist"); return; }
+    PASS();
+}
+
+static void test_redis_missing_key_ops() {
+    TEST("test_redis_missing_key_expire_zrange_zcard");
+    InMemoryRedisProvider r;
+    if (r.expire("nope", RedisDuration(1000))) { FAIL("expire missing should be false"); return; }
+    if (!r.zrange("nope", 0, 10).empty()) { FAIL("zrange missing should be empty"); return; }
+    if (r.zcard("nope") != 0) { FAIL("zcard missing should be 0"); return; }
+    r.zadd("tie", "a", 1.0);
+    r.zadd("tie", "b", 2.0);
+    if (!r.zrange("tie", 5, 9).empty()) { FAIL("zrange start out of range should be empty"); return; }
+    if (!r.zrevrange("tie", 5, 9).empty()) { FAIL("zrevrange start out of range should be empty"); return; }
+    PASS();
+}
+
+// --- SessionStore 防御臂 ---
+
+static void test_session_null_redis_throws() {
+    TEST("test_session_null_redis_throws");
+    bool threw = false;
+    try {
+        SessionStore store(nullptr);
+        static_cast<void>(store);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("null redis should throw"); return; }
+    PASS();
+}
+
+static void test_session_empty_token_rejected() {
+    TEST("test_session_empty_token_rejected");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    SessionStore store(redis);
+    StoredSession s;
+    s.accountId = "a";
+    if (store.save("", s, RedisDuration(1000))) { FAIL("save empty token"); return; }
+    if (store.load("").has_value()) { FAIL("load empty token"); return; }
+    if (store.refresh("", RedisDuration(1000))) { FAIL("refresh empty token"); return; }
+    if (store.revoke("")) { FAIL("revoke empty token"); return; }
+    PASS();
+}
+
+static void test_session_decode_truncated_fields() {
+    TEST("test_session_decode_truncated_fields");
+    // 空 blob：第一段 getline 失败
+    if (SessionStore::decode("").has_value()) { FAIL("empty blob should be rejected"); return; }
+    // 前两段完整、第三段缺失（userId 段为空 → stoll 抛异常被吞）
+    if (SessionStore::decode("acc\x1f" "realm\x1f").has_value()) {
+        FAIL("missing userId should be rejected");
+        return;
+    }
+    PASS();
+}
+
+// --- RateLimiter 防御臂 ---
+
+static void test_rate_limiter_null_redis_throws() {
+    TEST("test_rate_limiter_null_redis_throws");
+    bool threw = false;
+    try {
+        RateLimiter limiter(nullptr);
+        static_cast<void>(limiter);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    if (!threw) { FAIL("null redis should throw"); return; }
+    PASS();
+}
+
+static void test_rate_limiter_invalid_inputs_rejected() {
+    TEST("test_rate_limiter_invalid_inputs_rejected");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 3;
+    cfg.refillInterval = std::chrono::seconds(60);
+    // 空 key
+    if (limiter.tryConsume("", cfg)) { FAIL("empty key should be rejected"); return; }
+    // cost 非正
+    if (limiter.tryConsume("k", cfg, 0)) { FAIL("zero cost should be rejected"); return; }
+    if (limiter.tryConsume("k", cfg, -1)) { FAIL("negative cost should be rejected"); return; }
+    // capacity 非正
+    RateLimiter::Config bad = cfg;
+    bad.capacity = 0;
+    if (limiter.tryConsume("k", bad)) { FAIL("zero capacity should be rejected"); return; }
+    // reset 空 key
+    if (limiter.reset("")) { FAIL("reset empty key should be false"); return; }
+    PASS();
+}
+
+static void test_rate_limiter_corrupt_state_resets_bucket() {
+    TEST("test_rate_limiter_corrupt_state_resets_bucket");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 2;
+    cfg.refillInterval = std::chrono::seconds(60);
+    // 预埋损坏 blob：decode 失败 → 视作首次接触，桶满
+    redis->set("rate:corrupt", "not-a-bucket");
+    if (!limiter.tryConsume("corrupt", cfg)) { FAIL("corrupt blob should start full"); return; }
+    if (!limiter.tryConsume("corrupt", cfg)) { FAIL("second consume should succeed"); return; }
+    if (limiter.tryConsume("corrupt", cfg)) { FAIL("bucket should now be empty"); return; }
+    PASS();
+}
+
 int main() {
     test_redis_set_get();
     test_redis_ttl_expires();
     test_redis_del();
     test_redis_zadd_zrange();
+    test_redis_exists_across_kinds();
+    test_redis_missing_key_ops();
     test_redis_lock_acquire_release();
     test_redis_lock_expires();
 
@@ -306,8 +432,14 @@ int main() {
     test_session_refresh_extends_ttl();
     test_session_decode_rejects_garbage();
     test_session_decode_rejects_bad_user_id();
+    test_session_null_redis_throws();
+    test_session_empty_token_rejected();
+    test_session_decode_truncated_fields();
 
     test_rate_limiter_allows_within_capacity();
+    test_rate_limiter_null_redis_throws();
+    test_rate_limiter_invalid_inputs_rejected();
+    test_rate_limiter_corrupt_state_resets_bucket();
     test_rate_limiter_refills_over_time();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();

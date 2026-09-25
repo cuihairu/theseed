@@ -143,7 +143,7 @@ bool InMemoryRedisProvider::lock(const std::string& key, RedisDuration ttl) {
     const std::lock_guard lock(mutex_);
     reapExpired();
     auto it = locks_.find(key);
-    if (it != locks_.end() && now_ < it->second.expiresAt) {
+    if (it != locks_.end() && now_ < it->second.expiresAt) {  // LCOV_EXCL_BR_LINE 上方 reapExpired 已清除全部过期锁，未过期假臂不可达
         return false;
     }
     LockEntry entry;

@@ -179,6 +179,54 @@ int main() {
         }
     }
 
+    // 空数据 write：已连接时返回 true 且不入缓冲；重复 listen 返回 false；
+    // onReceived 回调链路。
+    {
+        TcpListener listener;
+        std::shared_ptr<TcpConnection> client;
+        std::shared_ptr<TcpConnection> server;
+        bool ok = true;
+        if (!listener.listen("127.0.0.1", 0)) {
+            CHECK(false, "setup empty-write pair");
+        } else {
+            client = TcpConnection::create();
+            ok = ok && client->connect("127.0.0.1", listener.localPort());
+            server = listener.accept();
+            ok = ok && server != nullptr;
+
+            // 已连接 + 空数据 → 返回 connected_（true），不走 send。
+            CHECK(client->write(std::span<const std::byte>{}), "empty write on connected");
+            // 未连接 + 空数据 → 返回 false。
+            auto dead = TcpConnection::create();
+            CHECK(!dead->write(std::span<const std::byte>{}), "empty write on disconnected");
+
+            // 重复 listen 同一 listener → false。
+            CHECK(!listener.listen("127.0.0.1", 0), "second listen rejected");
+
+            // onReceived 回调：client 发数据，server pump 后回调收到。
+            int received = 0;
+            std::byte lastByte{0};
+            server->setOnReceived([&](std::span<const std::byte> data) {
+                if (!data.empty()) {
+                    lastByte = data.back();
+                    ++received;
+                }
+            });
+            const std::byte sent{0x7E};
+            ok = ok && client->write(std::span<const std::byte>(&sent, 1));
+            for (int i = 0; i < 50 && received == 0; ++i) {
+                client->pump();
+                server->pump();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            ok = ok && received == 1 && lastByte == sent;
+            CHECK(ok, "onReceived callback path");
+            client->close();
+            server->close();
+        }
+        listener.close();
+    }
+
     TcpConnection::globalShutdown();
 
     if (gFailures == 0) {

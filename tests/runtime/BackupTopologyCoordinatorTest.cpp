@@ -204,6 +204,54 @@ static void test_processes_listing_and_reset() {
     PASS();
 }
 
+// 防御与状态机假臂：0 号进程注册、空表 beginRebuild、Stable 下的 ack/allAcked/promote/abort、版本相等比较。
+static void test_defensive_and_stable_arms() {
+    TEST("test_defensive_and_stable_arms");
+    BackupTopologyCoordinator c;
+
+    if (c.registerProcess(0)) { FAIL("process id 0 should be rejected"); return; }
+
+    if (c.beginRebuild(1, 7)) { FAIL("beginRebuild with no processes should fail"); return; }
+
+    // Stable 态：ack / allAcked / promote / abort 全部拒绝。
+    BackupTopologyVersion v{1, 7};
+    if (c.ackPrimed(1, v)) { FAIL("ack in Stable should fail"); return; }
+    if (c.allAcked()) { FAIL("allAcked in Stable should be false"); return; }
+    if (c.promote()) { FAIL("promote in Stable should fail"); return; }
+    if (c.abort()) { FAIL("abort in Stable should fail"); return; }
+
+    // 版本比较：version 同 epoch 异 → 不等；全同 → 相等（36 行两臂）。
+    if (!(BackupTopologyVersion{1, 2} == BackupTopologyVersion{1, 2})) {
+        FAIL("equal versions compare unequal"); return;
+    }
+    if (BackupTopologyVersion{1, 2} == BackupTopologyVersion{1, 3}) {
+        FAIL("different epoch compares equal"); return;
+    }
+    if (BackupTopologyVersion{2, 2} == BackupTopologyVersion{1, 2}) {
+        FAIL("different version compares equal"); return;
+    }
+
+    PASS();
+}
+
+// 完整 rebuild 生命周期：ack 齐后 promote 落回 Stable，再次 promote / 重复 ack 被拒。
+static void test_rebuild_lifecycle_repeat_promote() {
+    TEST("test_rebuild_lifecycle_repeat_promote");
+    BackupTopologyCoordinator c;
+    c.registerProcess(1);
+    c.registerProcess(2);
+    if (!c.beginRebuild(1, 10)) { FAIL("beginRebuild failed"); return; }
+    auto staging = c.stagingVersion();
+    if (!staging.has_value()) { FAIL("staging missing"); return; }
+    if (!c.ackPrimed(1, *staging) || !c.ackPrimed(2, *staging)) { FAIL("acks failed"); return; }
+    if (!c.promote()) { FAIL("promote failed"); return; }
+    // 落回 Stable 后：再次 promote 与旧版本 ack 均拒绝（126/108 Stable 短路真臂）。
+    if (c.promote()) { FAIL("repeat promote should fail"); return; }
+    if (c.ackPrimed(1, *staging)) { FAIL("stale ack after promote should fail"); return; }
+    if (c.allAcked()) { FAIL("allAcked after promote should be false"); return; }
+    PASS();
+}
+
 int main() {
     test_initial_state_stable();
     test_register_unregister_process();
@@ -212,6 +260,8 @@ int main() {
     test_route_distributes_across_processes();
     test_begin_rebuild_sets_priming();
     test_ack_and_promote();
+    test_defensive_and_stable_arms();
+    test_rebuild_lifecycle_repeat_promote();
     test_abort_returns_to_stable();
     test_route_uses_active_epoch();
     test_unregister_reindexes();

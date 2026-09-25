@@ -97,6 +97,12 @@ int main() {
               "insert empty blob");
         CHECK(!store.load(910002, "Avatar", out), "load rejects empty blob");
 
+        // data 列为非法 EntityData 字节：decodeEntityData 失败臂。
+        CHECK(store.executeRaw(
+                  "INSERT INTO \"tbl_Avatar\" (id, data) VALUES (910003, '\\x00deadbeef')"),
+              "insert garbage blob");
+        CHECK(!store.load(910003, "Avatar", out), "load rejects garbage blob");
+
         CHECK(!store.executeRaw("THIS IS NOT SQL"), "executeRaw rejects bad SQL");
 
         CHECK(store.executeRaw("DROP TABLE \"tbl_Avatar\""), "drop table under cache");
@@ -169,6 +175,12 @@ int main() {
         std::string pw;
         CHECK(fresh.queryAccount("covbr_u4", id, pw), "queryAccount roundtrip");
         CHECK(pw == "pw4", "password roundtrip");
+        // 不存在的用户名：查询成功但空结果集，next() 为假臂。
+        CHECK(!fresh.queryAccount("covbr_nobody", id, pw),
+              "queryAccount on missing user");
+        // 重复用户名：查重查询命中，dup && next() 为真臂。
+        CHECK(!fresh.createAccount("covbr_u4", "other", id),
+              "duplicate username rejected");
     }
 
     // 收尾：重建系统表，不留缺失表状态给后续测试。

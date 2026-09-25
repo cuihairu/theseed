@@ -206,6 +206,139 @@ static void testCascadeRelinksLongTimers() {
     PASS();
 }
 
+// null 回调：periodic 重排与 one-shot 释放路径的 cb 空臂。
+static void testNullCallbacks() {
+    TEST("null callbacks on periodic and one-shot timers");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+    wheel.addPeriodic(std::chrono::milliseconds{20}, nullptr);
+    wheel.addTimer(std::chrono::milliseconds{10}, nullptr);
+    wheel.advance(std::chrono::milliseconds{40});
+
+    bool ok = wheel.activeCount() == 1;  // periodic 还在，one-shot 已释放
+    if (ok) PASS();
+    else FAIL("expected periodic to survive, active=" + std::to_string(wheel.activeCount()));
+}
+
+// delay 小于一个 tick：max(1, ...) 钳位臂，下次 tick 即触发。
+static void testSubTickDelayClampedToOneTick() {
+    TEST("sub-tick delay clamps to a single tick");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+
+    int oneShot = 0;
+    int periodic = 0;
+    wheel.addTimer(std::chrono::milliseconds{1}, [&] { ++oneShot; });
+    wheel.addPeriodic(std::chrono::milliseconds{1}, [&] { ++periodic; });
+
+    wheel.advance(std::chrono::milliseconds{10});
+
+    bool ok = oneShot == 1;      // one-shot 只触发一次
+    ok = ok && periodic >= 1;    // periodic 每个后续 tick 重排
+    if (ok) PASS();
+    else FAIL("oneShot=" + std::to_string(oneShot) + " periodic=" + std::to_string(periodic));
+}
+
+// 已触发的 one-shot 在 entries_ 里保持 cancelled 态：再次 cancel 返回 false。
+static void testCancelAlreadyFiredTimer() {
+    TEST("cancel after fire returns false");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+
+    int fired = 0;
+    auto handle = wheel.addTimer(std::chrono::milliseconds{10}, [&] { ++fired; });
+    wheel.advance(std::chrono::milliseconds{10});
+
+    bool ok = fired == 1;
+    ok = ok && !wheel.cancel(handle);   // 已取消（fireEntry 置位）→ 遍历全部不匹配
+    ok = ok && !wheel.cancel(TimerHandle{999'999, 0});  // 未知 id 同样 false
+    if (ok) PASS();
+    else FAIL("cancel should fail on fired/unknown handles");
+}
+
+// fireTick == currentTick 的级联：level1 槽在 tick 256 落下时 diff 走 0 臂，
+// 重新分级进 level0 的 slot 0，待 512 的回绕再触发。
+static void testCascadeWithFireTickOnBoundary() {
+    TEST("timer with fireTick == cascade tick relinks via zero diff");
+
+    TimerWheel wheel(std::chrono::milliseconds{1});
+    int fired = 0;
+    wheel.addTimer(std::chrono::milliseconds{256}, [&] { ++fired; });
+
+    wheel.advance(std::chrono::milliseconds{512});
+
+    if (fired == 1) PASS();
+    else FAIL("expected 1 fire, got " + std::to_string(fired));
+}
+
+// 巨延迟直接进最高级 level3：只验证插入路径（while 循环耗尽臂），不推进。
+static void testVeryLongTimerInsertsAtTopLevel() {
+    TEST("very long timer lands in level 3 without firing");
+
+    TimerWheel wheel(std::chrono::milliseconds{1});
+    int fired = 0;
+    // 2^33 ms：diff 超过全部 kLevelMask，level 停在 3
+    wheel.addTimer(std::chrono::milliseconds{1LL << 33}, [&] { ++fired; });
+
+    bool ok = wheel.activeCount() == 1;
+    ok = ok && fired == 0;
+    wheel.clear();  // 不推进：clear 释放全部槽位
+    ok = ok && wheel.activeCount() == 0;
+
+    if (ok) PASS();
+    else FAIL("long timer should sit idle at top level");
+}
+
+// 已取消的长 timer 在级联搬移时被跳过（insertEntry 不再入队）。
+static void testCancelledLongTimerSkippedDuringCascade() {
+    TEST("cancelled long timer is skipped during cascade");
+
+    TimerWheel wheel(std::chrono::milliseconds{1});
+    int fired = 0;
+    auto handle = wheel.addTimer(std::chrono::milliseconds{1000}, [&] { ++fired; });
+    wheel.cancel(handle);
+
+    wheel.advance(std::chrono::milliseconds{65'768});  // 跨 256/65536 两级级联
+
+    bool ok = fired == 0;
+    ok = ok && wheel.activeCount() == 0;  // 级联跳过后不再活跃
+    if (ok) PASS();
+    else FAIL("cancelled timer must not fire or relink");
+}
+
+// 推进到 2^24 tick：三级级联同时落零，for 循环走满 kLevels 后条件退出。
+// 16.7M 次迭代在 -O0 下约数百毫秒，属于本套件最重的用例，放在最后。
+static void testAdvanceThroughTripleCascadeBoundary() {
+    TEST("advance through 2^24 boundary exhausts cascade loop");
+
+    TimerWheel wheel(std::chrono::milliseconds{1});
+    int fired = 0;
+    wheel.addTimer(std::chrono::milliseconds{300}, [&] { ++fired; });  // 早期就被触发
+
+    wheel.advance(std::chrono::milliseconds{1LL << 24});
+
+    bool ok = fired == 1;
+    ok = ok && wheel.activeCount() == 0;
+    if (ok) PASS();
+    else FAIL("early timer should have fired exactly once");
+}
+
+// stale generation：同 id 不同 generation 的 handle 不命中（cancel 短路链 generation 假臂）。
+static void testCancelStaleGeneration() {
+    TEST("cancel with stale generation returns false");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+    int fired = 0;
+    auto handle = wheel.addTimer(std::chrono::milliseconds{10}, [&] { ++fired; });
+
+    TimerHandle stale{handle.id, handle.generation + 1};
+    bool ok = !wheel.cancel(stale);   // gen 不匹配 → 遍历假臂 → false
+    ok = ok && wheel.cancel(handle);  // 正确 generation 仍可取消
+    ok = ok && fired == 0;
+    if (ok) PASS();
+    else FAIL("stale generation cancel should fail");
+}
+
 int main() {
     std::cout << "TimerWheel tests:\n";
 
@@ -220,6 +353,14 @@ int main() {
     testTimerHandleValidity();
     testAdvanceLargeStep();
     testCascadeRelinksLongTimers();
+    testNullCallbacks();
+    testSubTickDelayClampedToOneTick();
+    testCancelAlreadyFiredTimer();
+    testCancelStaleGeneration();
+    testCascadeWithFireTickOnBoundary();
+    testVeryLongTimerInsertsAtTopLevel();
+    testCancelledLongTimerSkippedDuringCascade();
+    testAdvanceThroughTripleCascadeBoundary();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

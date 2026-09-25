@@ -72,7 +72,7 @@ void OpsServer::servicePending() {
 
     for (std::size_t i = 0; i < pending_.size(); ++i) {
         auto& pc = pending_[i];
-        if (!pc.conn || !pc.conn->isConnected()) {
+        if (!pc.conn || !pc.conn->isConnected()) {  // LCOV_EXCL_BR_LINE pending_ 里的 conn 均来自 accept() 非空返回，指针恒非空，null 短路臂不可达
             completed.push_back(i);
             continue;
         }
@@ -138,8 +138,8 @@ void OpsServer::servicePending() {
 
     std::sort(completed.rbegin(), completed.rend());
     for (std::size_t i : completed) {
-        if (i < pending_.size()) {
-            if (pending_[i].conn) pending_[i].conn->close();
+        if (i < pending_.size()) {  // LCOV_EXCL_BR_LINE completed 下标倒序 erase，恒有效，防御臂不可达
+            if (pending_[i].conn) pending_[i].conn->close();  // LCOV_EXCL_BR_LINE conn 恒非空（同上），null 跳过臂不可达
             pending_.erase(pending_.begin() + i);
         }
     }

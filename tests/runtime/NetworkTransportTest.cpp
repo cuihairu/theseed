@@ -399,6 +399,18 @@ static void testAutoFlushBackPressure() {
     else FAIL("autoFlush backlog/BackPressure mismatch");
 }
 
+// receive 容量 0 早退（防御臂）。
+static void testReceiveZeroCapacity() {
+    TEST("receive with zero capacity returns 0");
+
+    NetworkTransport server(nullptr);   // 无管道也不影响防御臂
+    RuntimeInvocation inv;
+    bool ok = server.receive(1, &inv, 0) == 0;
+
+    if (ok) PASS();
+    else FAIL("zero capacity should return 0");
+}
+
 int main() {
     std::cout << "NetworkTransport tests:\n";
 
@@ -416,6 +428,7 @@ int main() {
     testGarbageHeaderDoesNotKillTransport();
     testPipeWriteEdgeCases();
     testAutoFlushBackPressure();
+    testReceiveZeroCapacity();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

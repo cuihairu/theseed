@@ -380,6 +380,69 @@ static void testAvailableTransitionsWithoutState() {
     else FAIL("availableTransitions mismatch");
 }
 
+// 分支覆盖：addState/addTransition/addTransitionFromAny/setState 的防御早退臂
+static void testDefensiveExits() {
+    TEST("FSM: defensive early-exit arms");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+    auto& fsm = e.fsm();
+
+    bool ok = !fsm.addState("");                      // 空状态名拒绝
+    ok = ok && !fsm.addTransition("", "Idle");        // 空 from 拒绝
+    ok = ok && !fsm.addTransition("Idle", "");        // 空 to 拒绝
+    ok = ok && !fsm.addTransition("", "");            // 双空拒绝
+    ok = ok && !fsm.addTransitionFromAny("");         // 空 wildcard 目标拒绝
+
+    // 未注册状态的转换拒绝（contains 检查两臂）
+    ok = ok && !fsm.addTransition("Ghost", "Idle");   // from 未注册
+    ok = ok && fsm.addState("Idle") && fsm.addState("Moving");
+    ok = ok && !fsm.addTransition("Ghost", "Idle");   // from 仍未注册
+    ok = ok && !fsm.addTransition("Idle", "Ghost");   // to 未注册
+    ok = ok && !fsm.addTransitionFromAny("Ghost");    // wildcard 目标未注册
+
+    // setState 防御：空名 / 未注册
+    ok = ok && !fsm.setState("");
+    ok = ok && !fsm.setState("Ghost");
+
+    if (ok) PASS();
+    else FAIL("defensive exits mismatch");
+}
+
+// 分支覆盖：availableTransitions 的 wildcard 去重与自排除臂
+static void testWildcardDedupeExits() {
+    TEST("FSM: wildcard dedupe and self-exclude arms");
+
+    auto def = makeDef();
+    Entity e(1, EntitySide::Cell, def);
+    auto& fsm = e.fsm();
+
+    fsm.addState("Idle");
+    fsm.addState("Moving");
+    fsm.addTransition("Idle", "Moving");
+    // wildcard 目标与显式 transition 重复：不得二次入列（去重臂）
+    fsm.addTransitionFromAny("Moving");
+    // wildcard 目标等于当前状态：不得入列（自排除臂）
+    fsm.addTransitionFromAny("Idle");
+
+    fsm.setState("Idle");
+    auto avail = fsm.availableTransitions();
+
+    bool ok = avail.size() == 1 && avail[0] == "Moving";
+
+    // 当前状态无显式出边、且 wildcard 目标全等于当前态时：结果为空
+    Entity e2(2, EntitySide::Cell, def);
+    auto& fsm2 = e2.fsm();
+    fsm2.addState("Only");
+    fsm2.addTransitionFromAny("Only");  // wildcard 目标 == 唯一状态
+    fsm2.setState("Only");
+    auto alone = fsm2.availableTransitions();  // 自排除后为空
+    ok = ok && alone.empty();
+
+    if (ok) PASS();
+    else FAIL("wildcard dedupe mismatch");
+}
+
 int main() {
     std::cout << "State machine tests:\n";
 
@@ -396,6 +459,8 @@ int main() {
     testCircularTransitions();
     testCallbackEntity();
     testSameStateTransition();
+    testDefensiveExits();
+    testWildcardDedupeExits();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;
