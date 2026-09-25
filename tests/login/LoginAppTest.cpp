@@ -472,6 +472,12 @@ int main() {
         std::string error2, token2;
         if (!runLogin(app, "bob", "", ok2, error2, token2)) FAIL("no response for empty pw");
         if (ok2 || !token2.empty()) FAIL("empty password should fail");
+
+        // 空 account → 限流守卫与 fallback 校验的 account 空假臂，登录失败。
+        bool ok3 = false;
+        std::string error3, token3;
+        if (!runLogin(app, "", "pw", ok3, error3, token3)) FAIL("no response for empty account");
+        if (ok3 || !token3.empty()) FAIL("empty account should fail");
     }
     PASS();
 
@@ -510,6 +516,12 @@ int main() {
         if (!runLogin(app, "carl", "pw", ok2, error2, token2)) FAIL("no response for limited");
         if (ok2) FAIL("second login should be rate limited");
         if (error2 != "rate limited") FAIL("unexpected error: " + error2);
+
+        // 空 account 在限流守卫第二段短路（203 假臂）：先于 tryConsume 返回，不查桶。
+        bool ok3 = true;
+        std::string error3, token3;
+        if (!runLogin(app, "", "pw", ok3, error3, token3)) FAIL("no response for empty acct w/ limiter");
+        if (ok3) FAIL("empty account should fail before limiter");
     }
     PASS();
 
@@ -599,6 +611,17 @@ int main() {
             bare.close();
             ok = ok && !bare.isConnected();   // 仍为假
             if (!ok) FAIL("null-pipe session misbehaved");
+        }
+
+        // 关闭后的会话：send 走 isConnected 假臂静默丢弃，重复 close 幂等。
+        {
+            MockClient client;
+            ClientSession session(client.serverPipe);
+            session.close();
+            auto payload = encodeLoginPayload("a", "b");
+            session.send(std::span<const std::byte>(payload.data(), payload.size()));
+            if (session.isConnected()) FAIL("closed session must report disconnected");
+            session.close();
         }
 
         // 不设置消息回调：完整帧被消费但不触发任何回调（76 假臂）。

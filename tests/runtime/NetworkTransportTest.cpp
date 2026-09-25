@@ -364,6 +364,86 @@ static void testPipeWriteEdgeCases() {
     else FAIL("pipe write edge cases wrong");
 }
 
+static void testBytePipePumpEdgeArms() {
+    TEST("InMemoryBytePipe pump: expired peer and missing callback");
+
+    // 对端先销毁：write 已入队，pump 时 peer.lock() 失败 → continue（不崩、静默丢弃）。
+    {
+        auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+        const std::byte payload[] = {std::byte{0x01}};
+        bool ok = pipeA->write(std::span<const std::byte>(payload, 1));
+        pipeB.reset();
+        pipeA->pump();  // peer 失效臂：循环继续不投递
+        ok = ok && pipeA->isConnected();
+        pipeA->close();
+        if (ok) PASS();
+        else FAIL("expired peer pump wrong");
+    }
+
+    // 对端存活但未设回调：pump 投递循环跳过回调调用（callback 空臂）。
+    {
+        auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+        const std::byte payload[] = {std::byte{0x02}};
+        bool ok = pipeA->write(std::span<const std::byte>(payload, 1));
+        pipeA->pump();  // 无回调臂
+        ok = ok && pipeB->isConnected();
+        if (ok) PASS();
+        else FAIL("no-callback pump wrong");
+    }
+}
+
+static void testDisconnectedTickAndFlush() {
+    TEST("disconnected transport: tick/flush are no-ops");
+
+    // 无 pipe：tick 的 pipe_ 假臂 / isConnected 假臂 / flushOutbound 的 !pipe_ 早退
+    {
+        NetworkTransport orphan(nullptr);
+        orphan.tick();
+    }
+
+    // pipe 已断开：tick 的 isConnected 假臂 + flushOutbound 的未连接早退
+    {
+        auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+        NetworkTransport client(pipeA);
+        pipeA->close();
+        client.tick();
+    }
+
+    // 已连接但 channel 空：flushOutbound 的 drain==0 臂（不写出）
+    {
+        auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+        NetworkTransport client(pipeA);
+        client.tick();  // 未 send 过任何消息 → drainAll==0
+    }
+
+    PASS();
+}
+
+static void testUnreliableFullQueueDiscards() {
+    TEST("unreliable full queue: DiscardOldest policy accepts and drops oldest");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport::Config cfg;
+    cfg.localComponent = 1;
+    cfg.autoFlush = false;  // 攒批：channel 才能积压到水位
+    NetworkTransport client(pipeA, cfg);
+
+    bool ok = true;
+    for (int i = 0; i < 256; ++i) {
+        RuntimeInvocation inv = makeInvocation(7, 2, "pos" + std::to_string(i));
+        inv.deliveryClass = DeliveryClass::UNORDERED_LOSSY;
+        ok = ok && client.send(inv) == SendResult::Accepted;
+    }
+    // 第 257 条：isBackPressured 真 && policy==DiscardOldest → 不报 BackPressure，Accept 并丢最老
+    RuntimeInvocation overflow = makeInvocation(7, 2, "overflow");
+    overflow.deliveryClass = DeliveryClass::UNORDERED_LOSSY;
+    ok = ok && client.send(overflow) == SendResult::Accepted;
+    ok = ok && client.stats().backPressureEvents == 0;
+
+    if (ok) PASS();
+    else FAIL("unreliable full queue behavior wrong");
+}
+
 static void testAutoFlushBackPressure() {
     TEST("autoFlush=false accumulates backlog and reports BackPressure");
 
@@ -427,6 +507,9 @@ int main() {
     testSendErrorPaths();
     testGarbageHeaderDoesNotKillTransport();
     testPipeWriteEdgeCases();
+    testBytePipePumpEdgeArms();
+    testDisconnectedTickAndFlush();
+    testUnreliableFullQueueDiscards();
     testAutoFlushBackPressure();
     testReceiveZeroCapacity();
 

@@ -211,6 +211,10 @@ int main() {
             != SendResult::NotConnected) {
             return fail("cellwith3_no_transport");
         }
+        if (cell.callCellWith<std::string, std::int32_t>("castSpell", "x", 1)
+            != SendResult::NotConnected) {
+            return fail("cellwith_si_no_transport");
+        }
 
         // 有 transport 但未 bindCell：NotConnected（!cellCall_ 臂）
         cell.setTransport(&transport);
@@ -224,6 +228,10 @@ int main() {
         if (cell.callCellWith<std::int32_t, float, std::string>("complex", 1, 2.0F, "x")
             != SendResult::NotConnected) {
             return fail("cellwith3_no_cellcall");
+        }
+        if (cell.callCellWith<std::string, std::int32_t>("castSpell", "x", 1)
+            != SendResult::NotConnected) {
+            return fail("cellwith_si_no_cellcall");
         }
 
         // bind 后正常发送
@@ -239,6 +247,10 @@ int main() {
             != SendResult::Accepted) {
             return fail("cellwith3_ok");
         }
+        if (cell.callCellWith<std::string, std::int32_t>("castSpell", "x", 1)
+            != SendResult::Accepted) {
+            return fail("cellwith_si_ok");
+        }
 
         // invalidate 后：NotConnected（!isValid() 臂）
         cell.cellEntityCall()->invalidate();
@@ -252,6 +264,10 @@ int main() {
         if (cell.callCellWith<std::int32_t, float, std::string>("complex", 1, 2.0F, "x")
             != SendResult::NotConnected) {
             return fail("cellwith3_invalid");
+        }
+        if (cell.callCellWith<std::string, std::int32_t>("castSpell", "x", 1)
+            != SendResult::NotConnected) {
+            return fail("cellwith_si_invalid");
         }
         cell.cellEntityCall()->updateTarget(22);  // 恢复，供 callDefMethod 用
 
@@ -290,6 +306,11 @@ int main() {
         if (cell.callDefMethod<float>("heal", 5.0F) != SendResult::Accepted) {
             return fail("defmethod_cell");
         }
+        // 两参实例的 Cell 臂（switch 跳转表 + callCellWith 内联链）
+        if (cell.callDefMethod<std::string, std::int32_t>("castSpell", "x", 1)
+            != SendResult::Accepted) {
+            return fail("defmethod_cell2");
+        }
         // Cell 实体无 baseCall：Base 侧方法走 callBaseWith 早退
         if (cell.callDefMethod<std::string, std::int32_t>("addScore", "x", 1)
             != SendResult::NotConnected) {
@@ -299,6 +320,11 @@ int main() {
         if (cell.callDefMethod<std::string>("announce", "hi")
             != SendResult::NotConnected) {
             return fail("defmethod_client_default");
+        }
+        // 两参实例的 default 臂
+        if (cell.callDefMethod<std::string, std::int32_t>("announce", "x", 1)
+            != SendResult::NotConnected) {
+            return fail("defmethod_client_default2");
         }
         // Base 实体上 Base 侧正常
         base.bindBaseEntityCall(21);

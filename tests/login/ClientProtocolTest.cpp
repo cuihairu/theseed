@@ -162,6 +162,26 @@ int main() {
     }
     PASS();
 
+    TEST("decode property sync with empty property data");
+    {
+        PropertySyncMsg msg;
+        msg.entityId = 4;
+        msg.propertyData = {};  // dataLen==0：跳过 payload 拷贝
+
+        auto data = ClientProtocol::encodePropertySync(msg);
+        ClientMessageType outType;
+        std::span<const std::byte> outPayload;
+        if (!LoginProtocol::parseFrame(
+                std::span<const std::byte>(data.data(), data.size()),
+                outType, outPayload))
+            FAIL("parse failed");
+
+        PropertySyncMsg out;
+        if (!ClientProtocol::decodePropertySync(outPayload, out)) FAIL("decode failed");
+        if (!out.propertyData.empty()) FAIL("property data should be empty");
+    }
+    PASS();
+
     TEST("decode property sync truncation branches");
     {
         PropertySyncMsg msg;

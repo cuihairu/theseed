@@ -257,6 +257,11 @@ static void testListenHostAndAcceptPaths() {
         ok = ok && silent.listenPort() == 0;
     }
     {
+        // 第一条件真臂（listenPort > 0）：bind 到不可路由地址必失败，listenPort 仍为 0。
+        NetworkNode deadPort({.localComponent = 15, .listenHost = "10.255.255.1", .listenPort = 23456});
+        ok = ok && deadPort.listenPort() == 0;
+    }
+    {
         // acceptPeer 直接接收 NetworkTransport：dynamic_pointer_cast 真臂。
         NetworkNode node({.localComponent = 14, .listenHost = "127.0.0.1", .listenPort = 0});
         node.acceptPeer(21, std::make_shared<NetworkTransport>(TcpConnection::create()));
@@ -281,6 +286,50 @@ static void testListenHostAndAcceptPaths() {
     else FAIL("listen host / accept paths wrong");
 }
 
+// acceptPeer 非 NetworkTransport 分支用的最小 IRuntimeTransport 假件。
+struct NullTransport final : theseed::runtime::IRuntimeTransport {
+    theseed::runtime::SendResult send(theseed::runtime::RuntimeInvocation) override {
+        return theseed::runtime::SendResult::NotConnected;
+    }
+    std::size_t receive(theseed::runtime::ComponentId,
+                        theseed::runtime::RuntimeInvocation*,
+                        std::size_t) override {
+        return 0;
+    }
+    std::size_t pendingCount() const override { return 0; }
+    void flush() override {}
+    theseed::runtime::TransportStats stats() const override { return {}; }
+};
+
+static void testAcceptPeerForeignTransportAndNoCallback() {
+    TEST("acceptPeer with non-NetworkTransport; inbound without callback");
+
+    bool ok = true;
+
+    // 非 NetworkTransport：dynamic_pointer_cast 假臂 → 不入 transports_，但仍 connectPeer。
+    {
+        NetworkNode node({.localComponent = 40, .listenHost = "127.0.0.1", .listenPort = 0});
+        node.acceptPeer(41, std::make_shared<NullTransport>());
+        ok = ok && node.hasPeer(41);   // hub 层已注册
+    }
+
+    // 无 onPeerConnected 回调：入站连接被接受但不路由（不崩溃、无 peer）。
+    {
+        NetworkNode server({.localComponent = 50, .listenHost = "127.0.0.1", .listenPort = 0});
+        NetworkNode client({.localComponent = 51});
+        ok = ok && client.connectToPeer(50, "127.0.0.1", server.listenPort());
+        TickContext ctx;
+        for (int i = 0; i < 20; ++i) {
+            server.tick(ctx);
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }
+        ok = ok && server.peerCount() == 0;  // 无回调 → 不 acceptPeer
+    }
+
+    if (ok) PASS();
+    else FAIL("foreign transport / no-callback accept wrong");
+}
+
 int main() {
     std::cout << "NetworkNode tests:\n";
 
@@ -291,6 +340,7 @@ int main() {
     testSchedulerLifecycleAndFailedConnect();
     testSchedulerRunLoopStops();
     testListenHostAndAcceptPaths();
+    testAcceptPeerForeignTransportAndNoCallback();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

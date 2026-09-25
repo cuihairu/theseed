@@ -203,12 +203,13 @@ static void testSimpleObjGrowthAndReset() {
 static void testOverAlignedType() {
     TEST("over-aligned type gets upgraded alignment");
 
-    ObjectPool<OverAlignedObj> pool(2);
+    int overAlignedResets = 0;
+    ObjectPool<OverAlignedObj> pool(2, [&](OverAlignedObj&) { ++overAlignedResets; });
     auto* obj = pool.acquire();
     bool ok = obj != nullptr;
     ok = ok && (reinterpret_cast<std::uintptr_t>(obj) % 64) == 0;  // 64 字节对齐
     pool.release(obj);
-    ok = ok && pool.activeCount() == 0;
+    ok = ok && pool.activeCount() == 0 && overAlignedResets == 1;
 
     if (ok) PASS(); else FAIL("over-aligned allocation misaligned");
 }
@@ -240,6 +241,15 @@ static void testAcquireForwardsLvalueAndRvalue() {
     auto* fromLvalue = pool.acquire(1, 1.0, lvalueName);
     bool ok = fromLvalue->name == "left-value";
     pool.release(fromLvalue);
+
+    // rvalue 实例的扩容+水位首发臂：blockSize=1 独立池，首次 rvalue acquire
+    // 时 freeList 为空走 addBlock，active 破零走高水位刷新。
+    ObjectPool<SimpleObj> rvPool(1);
+    auto* firstRvalue = rvPool.acquire(5, 0.5, std::string("rv-growth"));
+    ok = ok && firstRvalue->name == "rv-growth";
+    ok = ok && rvPool.totalCount() == 1 && rvPool.activeCount() == 1;
+    rvPool.release(firstRvalue);
+    ok = ok && rvPool.activeCount() == 0;
 
     auto* fromRvalue = pool.acquire(2, 2.0, std::string("right-value"));
     ok = ok && fromRvalue->name == "right-value";

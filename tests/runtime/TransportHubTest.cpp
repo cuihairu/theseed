@@ -328,6 +328,32 @@ static void testServerIdentitySelfLearning() {
     else FAIL("self learning wrong");
 }
 
+// awaitingIdentity 短路链假臂：无匹配消息（count==0）与身份缺失（sourceComponent==0）均不自学习。
+static void testAwaitingIdentitySkipArms() {
+    TEST("awaiting identity: zero-count and zero-source arms");
+
+    auto hub = TransportHub(1);
+    auto silent = std::make_shared<InMemoryRuntimeTransport>();   // 无消息 → count==0 臂
+    auto anonymous = std::make_shared<InMemoryRuntimeTransport>();
+    RuntimeInvocation inv;
+    inv.entityId = 7;
+    inv.targetComponent = 1;   // 匹配 localComponent，可被取出
+    inv.method = "anon";
+    inv.sourceComponent = 0;   // 身份缺失 → source==0 臂
+    anonymous->send(inv);
+
+    hub.attachServerTransport(silent);
+    hub.attachServerTransport(anonymous);
+
+    RuntimeInvocation out[4];
+    auto total = hub.receive(1, out, 4);
+    bool ok = total == 1 && out[0].method == "anon";
+    ok = ok && hub.peerCount() == 0;   // 两笔都未自学习
+
+    if (ok) PASS();
+    else FAIL("total=" + std::to_string(total));
+}
+
 int main() {
     std::cout << "TransportHub tests:\n";
 
@@ -342,6 +368,7 @@ int main() {
     testAwaitingIdentityLifecycle();
     testDefensiveArms();
     testReceiveCapacityBreaks();
+    testAwaitingIdentitySkipArms();
     testServerIdentitySelfLearning();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

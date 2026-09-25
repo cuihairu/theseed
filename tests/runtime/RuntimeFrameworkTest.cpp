@@ -398,6 +398,40 @@ int main() {
         }
     }
 
+    // 未 start 直接 runOnce：自动 start 成功 → scheduler 跑一拍（L70 条件假臂的 start 成功路径）
+    {
+        auto stubAuto = std::make_unique<StubServiceApp>();
+        auto* stubAutoPtr = stubAuto.get();
+        ServiceApp serviceAuto(std::move(stubAuto), std::make_unique<InMemoryIORuntime>(),
+                               std::chrono::milliseconds{0});
+        RecordingTickable probe("auto_start", events);
+        serviceAuto.scheduler().registerTickable(TickPhase::Script, probe);
+        serviceAuto.runOnce();  // 未启动 → start() 成功 → 继续执行 scheduler
+        if (!stubAutoPtr->started) {
+            return fail("run_once_should_auto_start");
+        }
+        if (events.empty() || events.back() != "auto_start:0") {
+            return fail("auto_start_should_tick");
+        }
+    }
+
+    // 重复注册：同一 tickable 二次注册不重复入册（find 命中臂）
+    {
+        TickScheduler dupSched(std::chrono::milliseconds{0});
+        RecordingTickable dup("dup", events);
+        dupSched.registerTickable(TickPhase::Timer, dup);
+        dupSched.registerTickable(TickPhase::Timer, dup);  // 重复注册：find 命中臂，不重复入册
+        events.clear();
+        dupSched.runOnce();
+        size_t dupCount = 0;
+        for (const auto& e : events) {
+            if (e.rfind("dup:", 0) == 0) ++dupCount;
+        }
+        if (dupCount != 1) {
+            return fail("dup_register_should_tick_once");
+        }
+    }
+
     // InMemoryIORuntime 边缘分支：wakeup / cancel 未知 token / drain 防御 / 空转等待
     {
         InMemoryIORuntime ioEdge;

@@ -185,6 +185,10 @@ int main() {
         if (realm3 != "aaa") FAIL("pad1 realm mismatch");
         // 非标准长度（%4==3 无 padding）：decode 走 n>=3 尾组臂，解出残缺串被拒。
         if (SessionToken::validate("bG9naW46YTp", a, r)) FAIL("non-padded residue should fail");
+        // 解码后短于 "login:" 前缀 → 长度守卫真臂。
+        if (SessionToken::validate("YQ==", a, r)) FAIL("short decoded payload should fail");
+        // 表外字符（空格）→ decodeLookup 兜底 0，解出脏明文被拒。
+        if (SessionToken::validate("bG9n aW46YQ==", a, r)) FAIL("table-outer char should fail");
     }
     PASS();
 

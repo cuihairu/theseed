@@ -91,6 +91,28 @@ int main() {
         client->close();  // 双重 close 安全
     }
 
+    // 收到数据但未设置回调：recv 正常消费并统计字节，只是不投递（onReceived_ 空臂）。
+    {
+        TcpListener listener;
+        CHECK(listener.listen("127.0.0.1", 0), "listen");
+        auto client = TcpConnection::create();
+        CHECK(client->connect("127.0.0.1", listener.localPort()), "client connect");
+        auto server = listener.accept();
+        CHECK(server != nullptr, "accept");
+
+        const std::string payload = "no-callback";
+        CHECK(client->write(std::span<const std::byte>(
+                  reinterpret_cast<const std::byte*>(payload.data()), payload.size())),
+              "write payload");
+        bool consumed = false;
+        for (int i = 0; i < 200 && !consumed; ++i) {
+            consumed = server->pumpWithResult() > 0;
+        }
+        CHECK(consumed, "recv consumed bytes without callback");
+        client->close();
+        server->close();
+    }
+
     // 写满内核发送缓冲：send 返回 EAGAIN 走 wouldBlock 分支
     {
         TcpListener listener;

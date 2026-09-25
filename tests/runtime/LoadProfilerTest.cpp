@@ -274,6 +274,38 @@ static void test_ema_alpha_accessor() {
     PASS();
 }
 
+static void test_scope_with_empty_type_keeps_first_type() {
+    TEST("test_scope_with_empty_type_keeps_first_type");
+    EntityLoadProfiler p;
+    {
+        auto s = p.scope(21, "Avatar");
+        static_cast<void>(s);
+    }
+    p.tick();
+    {
+        // 第二次 scope 传空 type：accumulate 的 !type.empty() 假臂，保留首类型。
+        auto s = p.scope(21, "");
+        static_cast<void>(s);
+    }
+    p.tick();
+    auto snap = p.snapshot(21);
+    if (snap.entityType != "Avatar") { FAIL("empty type should not overwrite"); return; }
+    if (snap.rawLoad <= 0.0F) { FAIL("raw should accumulate across both scopes"); return; }
+
+    // 全新 entry 首次就是空 type：accumulate 的 entityType 空 && type 空短路臂，
+    // entry 照常建立并累计负载，但类型保持空。
+    {
+        auto s = p.scope(31, "");
+        static_cast<void>(s);
+    }
+    p.tick();
+    auto bare = p.snapshot(31);
+    if (bare.entityId != 31) { FAIL("typeless entry should still be tracked"); return; }
+    if (!bare.entityType.empty()) { FAIL("fresh empty type should keep entry typeless"); return; }
+    if (bare.rawLoad <= 0.0F) { FAIL("typeless entry should still accumulate load"); return; }
+    PASS();
+}
+
 // 同一实体第二次 accumulate（经公开 scope() RAII 触发，accumulate 为 private）：
 // entityType 已记录，走短路假臂不再覆盖。
 static void test_accumulate_twice_keeps_type() {
@@ -306,6 +338,7 @@ int main() {
     test_multiple_scope_in_one_tick_accumulates();
     test_aggregator_all_sorted_and_reset();
     test_ema_alpha_accessor();
+    test_scope_with_empty_type_keeps_first_type();
     test_accumulate_twice_keeps_type();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";

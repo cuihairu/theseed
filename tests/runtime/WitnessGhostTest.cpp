@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <stdexcept>
 #include <iostream>
 
 using theseed::runtime::Clock;
@@ -227,6 +228,34 @@ int main() {
         // 在册实体仍在视图；未知 id 未被登记
         if (!w2.entityInView(visibleA.id())) return fail("record_position_lost_view");
         if (w2.entityInView(9999)) return fail("unknown_id_registered");
+    }
+
+    // 非法 detail bands：throw（参数校验真臂）
+    {
+        Witness bad;
+        bool threw = false;
+        try {
+            bad.setDetailDistanceBands(-1.0F, 30.0F);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) return fail("negative_near_band");
+        threw = false;
+        try {
+            bad.setDetailDistanceBands(30.0F, 10.0F);  // mid < near
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) return fail("mid_lt_near_band");
+    }
+
+    // 未 attach（owner 空）：onEnterView/onLeaveView 静默跳过事件推送
+    {
+        Witness lone;
+        lone.onEnterView(visibleA, 5.0F);
+        lone.onLeaveView(visibleA.id());
+        if (lone.entityInView(visibleA.id())) return fail("lone_should_have_no_stale_entry");
+        if (!lone.flushAoIEvents().empty()) return fail("lone_should_not_emit_events");
     }
 
     return EXIT_SUCCESS;
