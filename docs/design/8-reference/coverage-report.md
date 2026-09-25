@@ -13,24 +13,34 @@
 
 | 指标 | 值 |
 | --- | --- |
-| 行覆盖率 | **100.0%**（10440 / 10440） |
-| 函数覆盖率 | 100.0%（1588 / 1588） |
+| 行覆盖率 | **100.0%**（10555 / 10555） |
+| 函数覆盖率 | 100.0%（1606 / 1606） |
 | 豁免行 | 131（未豁免分母 10571，未豁免口径 99.1%） |
-| 分支覆盖率 | 62.7%（7530 / 12003，无既定目标，未纳入本报告口径） |
+| 分支覆盖率 | **100.0%**（7194 / 7194，剔除 throw 边与豁免边后口径，见 §8.4） |
 | 覆盖率构建树 | `build/gcc-coverage`（gcc + `--coverage`） |
 | 统计范围 | `src/` 全部源文件与头文件（不含 `tests/`） |
-| 测试规模 | gcc-coverage 树 107 个测试（含 MySQL/PG 集成段）；clang18 / gcc13 树各 103（无 libmysql，DBApp 回退 file 后端） |
+| 测试规模 | gcc-coverage 树 115 个测试（含 MySQL/PG 集成段）；clang18 / gcc13 树各 103（无 libmysql，DBApp 回退 file 后端） |
 | 工具 | gcovr 8.6，`--filter src/`，`--txt` 报告 |
 
-### 1.1 口径：行级，而不是条目级
+### 1.1 口径：gcovr 8.6 的 `--txt` 实为"条目级"判定（2026-09-25 定案）
 
-gcovr 对同一行可能记多条计数条目（同一符号的多个 ABI 变体、模板逐 TU 实例等）。
+gcovr 对同一行可能记多条计数条目（同一符号的多个 ABI 变体、模板逐 (TU, 参数组合)
+实例等）。三类输出的聚合语义**并不一致**：
 
-- **条目级**口径要求一行上所有条目都被执行——历史上的 "98.85%、122 miss" 就是这个口径。
-  它把大量结构性不可达的符号变体（如析构的 D0/D1/D2 三符号）计成 miss，数字偏低且
-  与 gcovr 官方行覆盖率定义不一致。
-- **行级**口径（本报告，也是 gcovr `--txt/--html` 的默认判定）：一行上任一条目命中即覆盖。
-  这是正确目标口径。
+- **`--lcov`**（`DA:行号,计数`）：同一行所有条目**求和**——任一条目命中行即覆盖。
+- **`--txt` / `--html` 的 Missing 列**（gcovr 8.6 实测）：逐条目判定
+  `is_uncovered = is_reportable and count == 0`——**任一条目 0 次该行即报 miss**，
+  即使同行的其他实例合计命中几十次。
+- **`--json`**：保留逐条目原始数据（含同号多条目与豁免前数据），适合逐边/逐实例
+  对账，不能直接当聚合结论。
+
+本报告的历史 100%（10440/10440）与当前 100%（10555/10555）均为 **txt 口径**，
+即事实上的条目级全驱动：每个模板实例的每一行都必须至少执行一次。这解释了
+`31cc3ed`/`1393a88` 时代"逐 TU 补调用"为何是行覆盖的必要工作；也解释了
+2026-09-25 分支冲刺后复核行口径时"json 显示 count=25、lcov 显示 DA:286,25、
+txt 却报 miss"的三口径矛盾——根因是 `callCellWith<string,int>` 等 4 个新模板
+实例从未被驱动（详见 §8.4）。**对账规则：豁免对账用 txt；行覆盖结论用 txt；
+排查单行疑点时三种输出交叉印证。**
 
 ### 1.2 gcovr 的两个坑
 
@@ -69,12 +79,16 @@ gcovr 对同一行可能记多条计数条目（同一符号的多个 ABI 变体
 | `6cfa8b7` | 覆盖率报告成文（122 miss 完整分类） | — | — |
 | 100% 冲刺 | 三批次：测试补强与死代码清理 → 98 miss（行级 99.1%）→ 显式豁免 131 行 → **行级 100.0%**（10441/10441） | **100.0%** | **0** |
 | 四批后修复 | loadEntity 在册 id 悬垂 UB 防御 + UInt32/64 defaultValue 无符号解析 + decodeDelta count 一致性闸（10451/10451） | **100.0%** | **0** |
+| 分支 100% 冲刺 | 第五/六批：豁免约 30 处伪影/不可达臂 + 补测约 24 场景 → 分支 100.0%（7194/7194，`--exclude-throw-branches` 口径） | **100.0%（分支）** | **0（分支）** |
+| 行口径回归修复 | 第六批复核发现 4 个新模板实例未被驱动（txt 条目级判定暴露）：EntityTemplateBranchTest 补 `<string,int>` 四态矩阵 + callDefMethod Cell/default 臂；ObjectPoolTest 补 rvalue 首发扩容场景 + OverAlignedObj resetFn。行 100.0%（10555/10555）+ 分支 100.0%（7194/7194） | **100.0%** | **0** |
 
 > **分母变更记录**：`efc7c55`（TickScheduler run() 停止竞态修复）删除了 run() 中的
 > `stopRequested_` 清零行——非豁免分母 10441 → 10440，覆盖率保持 100.0%。第四批后
 > 的两处缺陷修复（loadEntity 在册防御 + UInt32/64 无符号解析）及 decodeDelta
 > count 一致性闸（连带删除被蕴含的 header 截断检查）合计新增可执行行，
-> 分母 10440 → 10451，覆盖率保持 100.0%。本文其余章节的 10441 均为达成当时的
+> 分母 10440 → 10451，覆盖率保持 100.0%。第五/六批期间 dbRequest 有界等待改造、
+> autoFlush 冲刷策略等产品演进 + 新模板实例行，分母 10451 → 10555（函数
+> 1588 → 1606），覆盖率保持双 100.0%。本文其余章节的 10440/10441 均为达成当时的
 > 历史数字，以本表为当前口径。
 
 `31cc3ed` 一批消掉 31 条的手法：Entity.h 的 callCellWith/callBaseWith/callDefMethod/
@@ -287,13 +301,15 @@ createSchema 顺序执行三条 DDL（_entity_ids / _account_index / 索引）�
 
 ## 7. 结论与维持口径的守则
 
-**行级 100.0% 已达成**（10440/10440，另有 131 行显式豁免；函数级 1588/1588）。
+**行级 100.0% 已达成**（10555/10555，另有 131 行显式豁免；函数级 1606/1606；
+分支级 7194/7194，`--exclude-throw-branches` 口径）。
 这个数字的可信度建立在：
 
 1. 每一行豁免都有实验论证与随行理由（§5、§6）；
-2. 分母对账（checksum 警告不忽略、gcno 残留清理）；
+2. 分母对账（checksum 警告不忽略、gcno 残留清理、结论前清 gcda 全量重跑）；
 3. SQL 集成段带全环境变量实跑（`THESEED_PG_DATABASE` 不可漏）；
-4. 三棵树全绿后才推送。
+4. 三棵树全绿后才推送；
+5. 行口径结论一律以 `--txt` 为准（§1.1：txt 是条目级判定，json/lcov 会虚高）。
 
 **守则**：新增产品代码不允许留下无理由的 miss——要么写测试，要么按 §5 的格式
 加带理由的豁免标记并在本文档补一行定性。评审覆盖率变化时先看分母、再看豁免
@@ -303,7 +319,8 @@ createSchema 顺序执行三条 DDL（_entity_ids / _account_index / 索引）�
 
 ## 8. 分支覆盖：基线与定性（2026-09-24）
 
-分支口径**不设 100% 目标**，本节记录基线与 miss 构成定性，供后续增量冲刺参考。
+分支口径最初**不设 100% 目标**——本节 8.1-8.3 记录基线与 miss 构成定性；
+2026-09-25 第五、六批冲刺后已达 **100%**（见 §8.4）。
 
 | 口径 | 值 |
 | --- | --- |
@@ -535,3 +552,120 @@ MySQLEntityStore 41 / PGStore 54 / FileEntityStore 5 / RemoteEntityStore 4
 
 三棵树验证：gcc-coverage 114/114（SQL env）、clang18 108/108、gcc13
 108/108（后两树 SQL 后端 disabled，分支测试 target 天然不存在）。
+
+### 8.4 第五、六批：分支覆盖率 100% 达成（2026-09-25）
+
+第五批（主机崩溃前后）与第六批（收尾二轮）合计：豁免约 30 处（伪影/结构性
+不可达臂，`LCOV_EXCL_BR_LINE` 行级标注）+ 补测约 24 个场景，业务分支
+miss 从 78 清到 **0**：
+
+| 口径 | 值 |
+| --- | --- |
+| **分支覆盖率（最终）** | **100.0%**（7194 / 7194） |
+| 分母口径 | `gcovr --exclude-throw-branches` + 全部豁免边剔除后 |
+| 测试规模 | gcc-coverage 树 115/115 全绿（SQL env），全程未回退 |
+
+#### 豁免机制定案（三条铁律 + 一条补充）
+
+1. **函数尾汇合伪边归因 `}` 行**：`return x;` 的汇合伪边归因闭括号行而非
+   return 行（TimerWheel 71/84、LoginApp dbRequest 尾）。豁免必须落在
+   `}` 行。
+2. **`LCOV_EXCL_BR_START/STOP` 区域豁免对 branch 指标不生效**（gcovr 8.6
+   实测）——只有行级 `LCOV_EXCL_BR_LINE` 可用。
+3. **陈旧 gcno 假性失效**：头文件豁免要重编所有依赖 TU；改豁免后 miss 依旧
+   时先 touch 重编再下结论（SocketDetail.h、Tracing 定案）。
+4. **补充（第六批）：豁免落行 ≠ gcc 边归因行，可偏移 1 行**。典型：条件 A
+   的 false 臂归因到**下一物理行**（PropertyBlock 30 的 `!empty()` 假臂
+   实际归因 31 行 block 20——单测干净数据下逐边核对才发现）；签名行豁免
+   不覆盖 return 行的构造边（TcpConnection.h 19→20）。修正四处：TcpConnection.h
+   19→20、CellRuntime 967→968、LoginApp 50→52（+70/+154）、RealmApp 44→+42。
+
+#### json 与 txt 的第二重口径坑
+
+§8 开头说"`--json` 不应用 LCOV_EXCL"——第六批发现更细的一层：**json 的
+branches 是 per-edge 实例原始数据**（同一逻辑边可有多份克隆实例，含豁免行
+的 miss 边），**txt 按（行, branch）跨实例聚合且应用豁免**。br8 时 json 剔
+豁免后仍余 29 条 vs txt 8 条，差集全是"单实例 miss、跨实例聚合后 taken"。
+**结论：json 只能看单边方向与 block 编号，miss 计数与豁免对账一律以 txt 为
+准。**
+
+#### "已补测仍 miss"的三种真相（第六批排查法）
+
+清 gcda 全量重跑后仍 miss 的行，用**五步排查**逐边定性：
+
+1. 清全部 gcda → 单跑嫌疑测试 → 全量 gcovr（数据干净、口径一致）；
+2. 从 json 读该行**全部边**的 taken/miss（不只 miss 边）；
+3. 按 block 汇合方向推断每条边的业务语义（结合 addProperty 等上游不变式）；
+4. 必要时写独立探针程序（10 行 main 直链产品库）验证不变式；
+5. 分类处置：真缺口补测 / 伪影或不可达 EXCL。
+
+三个实例：
+
+- **PropertyBlock 30**："已补测 fixed 空默认值仍 miss"——逐边发现 miss 的
+  `21->25 nt` 是 **B 段 `desc.size > 0` 的假臂**（A false 臂归因在 31 行且
+  已 taken 7 次）。`EntityDef::addProperty` 对定长类型的 size 恒修正为
+  `fixedSizeOfType(type)`（探针实证 size=4）、变长类型不进此分支 →
+  **结构性不可达，EXCL**。
+- **LoadProfiler 104**：miss 边是"全新 entry + 空 type"组合（已有场景都是
+  先设类型再传空）——真缺口，`scope(31, "")` 一发即清。
+- **TransportHub 67**：awaitingIdentity 短路链 `count > 0 && source != 0`
+  的两个假臂从未构造——补"空 transport（count==0）+ 消息 sourceComponent==0"
+  双臂场景。
+
+#### 第六批新增伪影定性（EXCL）
+
+- **LoginApp 204**：`"login:" + account` 临时量构造的 gcc 冷块副本（两臂恒
+  0，高 block 号区）；tryConsume 真假两臂已由限流/通过场景覆盖。
+- **LoadProfiler 125**：`return EntityTypeLoadSnapshot{}` 聚合内 string 成
+  员构造内联分支（RealmApp ProcessInfo 同族）；end() 早退臂已覆盖。
+
+#### 第六批补测清单
+
+- LoginApp：限流器配置 + 空 account（203 第二段短路臂）；
+- PropertyBlock：定长空默认值（保持零）/ 定长超长默认值（拒绝写入）；
+- ClientSession：close 后 send（isConnected 假臂）+ 重复 close 幂等；
+- TcpConnection：不设回调 pump（recv 消费统计、不投递）；
+- NetworkNode：第一条件真臂 listenPort>0（绑不可路由地址稳定失败）；
+- LoadProfiler：全新 entry 空 type；TransportHub：双假臂场景。
+
+三棵树验证：gcc-coverage 115/115（SQL env）、clang18 与 gcc-sanitize 树回归
+另行执行（见 §8.3 的口径说明）。
+
+#### 分支冲刺后的行口径回归与定案（2026-09-25）
+
+分支 100% 终核后复核行口径，发现 `TOTAL 10554 10543 99%`——11 行 miss
+（Entity.h 286-288/290/308-309/312-313 + ObjectPool.h 155/165/176）。排查结论：
+
+1. **不是陈旧 gcda**：清全部 gcda 全量重跑后 11 行依旧（第三轮证实排查前必须
+   清 gcda，但同样不能默认"清了就消失"）。
+2. **不是测试调用被删**：迁移提交 `065a3e4` 的 tests 侧唯一删除行
+   `-    off += 4;` 是解码 bug 修复（readU32 内部已前移），零逻辑删除。
+3. **根因是 §1.1 定案的 txt 条目级判定**：gcovr json 逐条目 dump 显示每个 miss
+   行都恰好有一条 count=0 的**新模板实例**——
+   - `Entity::callCellWith<std::string,int>`：`(string,int)` 组合此前只经
+     `callDefMethod("noSuchMethod",...)`（未知方法早退）与 Base 臂
+     （`addScore`→callBaseWith）驱动，Cell 臂内联链与四态连接矩阵从未触达；
+   - `Entity::callDefMethod<std::string,int>`：同上，缺 Cell 臂（case 行
+     308 + 309）与 default 臂（312/313）；
+   - `ObjectPool<SimpleObj>::acquire<int,double,std::string>`：rvalue 实例
+     只在池有空位时 acquire 过一次——freeList 空真臂（155 addBlock）与
+     水位破纪录真臂（165）结构性未触发；
+   - `ObjectPool<OverAlignedObj>::release`：该场景的池没设 resetFn，
+     176 真臂对这一 T 实例恒 0。
+4. **三口径交叉印证法**：json（逐条目，0 条目即现形）→ lcov（`DA:行,求和`，
+   求和 >0 造成"已覆盖"假象）→ txt（条目级 miss）——三者矛盾本身就是
+   "新实例未全驱动"的签名。
+
+修复（全为补测，零新增豁免）：
+
+- EntityTemplateBranchTest：四态连接矩阵（无 transport / 无 cellCall / 有效 /
+  invalid）各补 `<std::string, std::int32_t>` 组合；callDefMethod 补
+  `(string,int)` 的 Cell 臂（`castSpell`→Accepted）与 default 臂
+  （`announce`→NotConnected）。
+- ObjectPoolTest：rvalue 场景前插 blockSize=1 独立池的 rvalue 首发块
+  （freeList 空 → addBlock → active 破零 → 水位刷新）；OverAlignedObj 池加
+  resetFn 并断言回调次数（顺带强化原对齐断言）。
+
+终核：行 10555/10555、分支 7194/7194、函数 1606/1606，三口径 100%，115/115 全绿。
+另：全量 ctest 并发 `-j 8` 时 MySQLEntityStoreTest 偶发失败（libmysql SET NAMES
+抢连接配额，单跑即过）——行/分支终核一律 `-j 4`。
