@@ -1,5 +1,27 @@
 # TODO
 
+## Machine 遗留事项落地：MachineAgent RPC 输出（控制面端点）（2026-09-26）
+
+1. **MachineDaemon**：把 `IMachineAgent` 的 snapshot/execute 暴露为控制面
+   TCP 端点，协议复用组件间 RuntimeInvocation 帧（与 DBApp 同族，不另起协议）：
+   - `machine.snapshot` → `machine.snapshot.ok`，payload = 快照 JSON；
+   - `machine.execute`（payload = command NUL args）→ `machine.execute.ok`，
+     payload = 1 字节成败位；
+   - 未知方法/畸形载荷/空命令 → 统一 `machine.error` + 可读原因串
+     （统一错误处理红线：不静默丢包）。
+   服务端连接由对端首条请求 sourceComponent 自报注册（attachServerTransport，
+   与 DBApp 同机制）；tick 全非阻塞，调用方泵入自身循环。
+2. **分层**：theseed_control 增 PUBLIC 依赖 theseed_runtime（控制面用运行面
+   传输，无环）。
+3. **测试**（`MachineDaemonTest`，12 项，真 TCP 回环 + 真实
+   LocalHostProbe/LocalProcessSupervisor/LocalProcessSupervisor 链）：
+   幂等 start、snapshot JSON 往返、execute start/stop 受管子进程闭环
+   （从快照 JSON 提取 pid 再 stop）、未知 pid 失败位与协议错误区分、
+   畸形载荷/空命令/未知方法错误响应、端口冲突、stop 后 tick 空转。
+
+验证口径：gcc-coverage 112/112 全绿、gcovr 100%（9849/9849）；clang 21 树
+零警告构建、112/112 全绿。
+
 ## Machine 遗留事项落地：端口占用扫描 + 二进制版本探测（2026-09-26）
 
 1. **端口占用扫描**：新增 `ProcessPortScanner`——`collectListenInodes` 解析
@@ -141,7 +163,8 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 - 非受控全局进程的策略化管理与权限边界（版本探测已限定只连受管进程端口）
 - ~~端口占用扫描与二进制版本探测~~（2026-09-26 完成，Linux；Windows/macOS 留空）
 - Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
-- `MachineAgent` 的 RPC 输出与控制面注册
+- ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon
+  TCP 端点；控制面中心注册待 Ops Control Plane 对接时一并做）
 - 与 `Ops Control Plane` 的注册、上报和审计对接
 - 与 `Telemetry` 的指标、日志、trace 联动
 - 更完整的单元测试与跨平台 CI 构建矩阵

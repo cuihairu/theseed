@@ -42,3 +42,12 @@ target_link_libraries(
     PRIVATE theseed_control theseed_ops theseed_runtime)
 
 add_test(NAME theseed_process_port_scanner_test COMMAND theseed_process_port_scanner_test)
+
+add_executable(theseed_machine_daemon_test MachineDaemonTest.cpp)
+
+target_link_libraries(
+    theseed_machine_daemon_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control theseed_runtime)
+
+add_test(NAME theseed_machine_daemon_test COMMAND theseed_machine_daemon_test)
