@@ -33,7 +33,10 @@ const ProcessSummary* selectDisplayProcess(const std::vector<ProcessSummary>& pr
     return processes.empty() ? nullptr : &processes.front();
 }
 
-std::string escapeJson(const std::string& input) {
+}  // namespace
+
+// JSON 字符串转义：快照与审计共用（远端可控字符串必须转义后再入 JSON）。
+std::string escapeJsonString(const std::string& input) {
     std::string output;
     output.reserve(input.size() + 8);
 
@@ -63,12 +66,14 @@ std::string escapeJson(const std::string& input) {
     return output;
 }
 
+namespace {
+
 void appendProcessJson(std::ostringstream& out, const ProcessSummary& process) {
     out << "{";
-    out << "\"name\":\"" << escapeJson(process.name) << "\",";
+    out << "\"name\":\"" << escapeJsonString(process.name) << "\",";
     out << "\"pid\":" << process.pid << ",";
     out << "\"port\":" << process.port << ",";
-    out << "\"version\":\"" << escapeJson(process.version) << "\",";
+    out << "\"version\":\"" << escapeJsonString(process.version) << "\",";
     out << "\"healthy\":" << (process.healthy ? "true" : "false") << ",";
     out << "\"managed\":" << (process.managed ? "true" : "false");
     out << "}";
@@ -103,8 +108,8 @@ std::string formatSnapshotJson(const NodeSummary& summary) {
     out << std::fixed << std::setprecision(2);
     out << "{";
     out << "\"host\":{";
-    out << "\"hostname\":\"" << escapeJson(summary.host.hostname) << "\",";
-    out << "\"platform\":\"" << escapeJson(summary.host.platform) << "\",";
+    out << "\"hostname\":\"" << escapeJsonString(summary.host.hostname) << "\",";
+    out << "\"platform\":\"" << escapeJsonString(summary.host.platform) << "\",";
     out << "\"cpuUsage\":" << summary.host.cpuUsage << ",";
     out << "\"memoryUsage\":" << summary.host.memoryUsage << ",";
     out << "\"diskUsage\":" << summary.host.diskUsage << ",";

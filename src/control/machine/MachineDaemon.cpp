@@ -5,7 +5,9 @@
 #include "theseed/runtime/TcpConnection.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,26 @@ std::vector<std::byte> toBytes(const std::string& text) {
         std::memcpy(bytes.data(), text.data(), text.size());
     }
     return bytes;
+}
+
+// 审计条目 → JSON 对象（字段顺序固定，时间 epoch 毫秒）。
+std::string auditEntryJson(const AuditEntry& entry) {
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            entry.timestamp.time_since_epoch())
+                            .count();
+    // 先拼字段再入流：多行 << 链会让 gcc 把覆盖计数错误归因到续行
+    const std::string commandField =
+        "\"command\":\"" + escapeJsonString(entry.command) + "\"";
+    const std::string argsField = "\"args\":\"" + escapeJsonString(entry.args) + "\"";
+    const std::string acceptedField =
+        std::string("\"accepted\":") + (entry.accepted ? "true" : "false");
+    const std::string okField = std::string("\"ok\":") + (entry.ok ? "true" : "false");
+
+    std::ostringstream out;
+    out << "{\"ts\":" << millis << ",\"source\":" << entry.source << ","
+        << commandField << "," << argsField << "," << acceptedField << ","
+        << okField << "}";
+    return out.str();
 }
 
 }  // namespace
@@ -66,6 +88,20 @@ std::uint16_t MachineDaemon::localPort() const {
     return listener_.localPort();
 }
 
+const std::vector<AuditEntry>& MachineDaemon::auditLog() const {
+    return auditLog_;
+}
+
+void MachineDaemon::appendAudit(const AuditEntry& entry) {
+    if (config_.auditCapacity == 0) {
+        return;  // 审计关闭
+    }
+    if (auditLog_.size() == config_.auditCapacity) {
+        auditLog_.erase(auditLog_.begin());  // 环形：满后丢最旧
+    }
+    auditLog_.push_back(entry);
+}
+
 void MachineDaemon::acceptConnections() {
     while (auto conn = listener_.accept()) {
         auto transport = std::make_shared<runtime::NetworkTransport>(conn);
@@ -90,12 +126,23 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    if (inv.method == MachineMethod::kAudit) {
+        handleAudit(inv);
+        return;
+    }
+
     if (inv.method == MachineMethod::kExecute) {
         // payload = command '\0' args
         const auto separator =
             std::find(inv.payload.begin(), inv.payload.end(), std::byte{0});
+        AuditEntry entry;
+        entry.timestamp = std::chrono::system_clock::now();
+        entry.source = inv.sourceComponent;
         if (separator == inv.payload.end()) {
-            const auto reason = toBytes("malformed execute payload: missing NUL separator");
+            entry.accepted = false;
+            appendAudit(entry);
+            const auto reason =
+                toBytes("malformed execute payload: missing NUL separator");
             sendResponse(inv.sourceComponent, MachineMethod::kError,
                          std::span<const std::byte>(reason));
             return;
@@ -104,28 +151,51 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         const auto* payloadBegin = inv.payload.data();
         const auto commandLength =
             static_cast<std::size_t>(separator - inv.payload.begin());
-        const std::string command(reinterpret_cast<const char*>(payloadBegin),
-                                  commandLength);
-        const std::string args(
-            reinterpret_cast<const char*>(payloadBegin + commandLength + 1),
-            inv.payload.size() - commandLength - 1);
-        if (command.empty()) {
+        entry.command.assign(reinterpret_cast<const char*>(payloadBegin),
+                             commandLength);
+        entry.args.assign(reinterpret_cast<const char*>(payloadBegin + commandLength + 1),
+                          inv.payload.size() - commandLength - 1);
+        if (entry.command.empty()) {
+            entry.accepted = false;
+            appendAudit(entry);
             const auto reason = toBytes("empty command");
             sendResponse(inv.sourceComponent, MachineMethod::kError,
                          std::span<const std::byte>(reason));
             return;
         }
 
-        const std::byte result =
-            agent_.execute(command, args) ? std::byte{0x01} : std::byte{0x00};
+        entry.accepted = true;
+        entry.ok = agent_.execute(entry.command, entry.args);
+        appendAudit(entry);
+        const std::byte result = entry.ok ? std::byte{0x01} : std::byte{0x00};
         sendResponse(inv.sourceComponent, MachineMethod::kExecuteOk,
                      std::span<const std::byte>(&result, 1));
         return;
     }
 
+    AuditEntry rejected;
+    rejected.timestamp = std::chrono::system_clock::now();
+    rejected.source = inv.sourceComponent;
+    rejected.command = inv.method;
+    appendAudit(rejected);
     const auto reason = toBytes("unknown method: " + inv.method);
     sendResponse(inv.sourceComponent, MachineMethod::kError,
                  std::span<const std::byte>(reason));
+}
+
+void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t index = 0; index < auditLog_.size(); ++index) {
+        if (index != 0) {
+            out << ',';
+        }
+        out << auditEntryJson(auditLog_[index]);
+    }
+    out << "]";
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kAuditOk,
+                 std::span<const std::byte>(json));
 }
 
 void MachineDaemon::sendResponse(runtime::ComponentId target,

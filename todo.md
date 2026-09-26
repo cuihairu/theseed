@@ -1,5 +1,26 @@
 # TODO
 
+## Ops Control Plane MVP 切片：受控命令审计（2026-09-26）
+
+对齐 docs/design/5-access-and-control-plane/04-ops-control-plane.md §8 MVP
+的“操作审计”项：
+
+1. **审计日志**：`MachineDaemon` 为每条 execute 尝试（成败）与协议层拒绝
+   （畸形载荷/空命令/未知方法）记 `AuditEntry`（时间/来源组件/命令/参数/
+   accepted/ok）；snapshot 等只读操作不记（避免噪声）。环形容量
+   `auditCapacity`（默认 128，满后丢最旧，0 = 关闭）。单线程 tick 上下文
+   写入，无锁（与 DBApp 同假设）。
+2. **machine.audit**：查询最近审计的 JSON 数组（时间升序），与本地
+   `auditLog()` 视图同源；command/args 经 `escapeJsonString` 转义——
+   该转义从 MachineSnapshotCodec 内部提升为公共工具（快照与审计共用，
+   不复制转义逻辑）。
+3. **测试**（MachineDaemonTest 增 3 项，共 15 项）：审计轨迹完整性与
+   时间序、容量 2 的环形逐出、容量 0 关闭。
+4. 途中修复 gcc 对多行 `<<` 链的覆盖归因错误（拆命名字段串）。
+
+验证口径：gcc-coverage 112/112 全绿、gcovr 100%（9900/9900）；clang 21 树
+零警告构建、112/112 全绿。
+
 ## Machine 遗留事项落地：MachineAgent RPC 输出（控制面端点）（2026-09-26）
 
 1. **MachineDaemon**：把 `IMachineAgent` 的 snapshot/execute 暴露为控制面

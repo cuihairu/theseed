@@ -261,6 +261,100 @@ int main() {
         PASS();
     }
 
+    TEST("machine.audit returns ordered trail of executes and rejects");
+    {
+        RuntimeInvocation resp;
+        if (!client.request(MachineMethod::kAudit, {}, daemonTick, resp))
+            FAIL("no response to audit");
+        if (resp.method != MachineMethod::kAuditOk) FAIL("wrong method");
+        const auto json = payloadToString(resp);
+        // 成功 execute、失败 execute（unknown pid）、协议拒绝、未知方法各记一条
+        if (json.find("\"command\":\"start\"") == std::string::npos ||
+            json.find("\"accepted\":true,\"ok\":true") == std::string::npos)
+            FAIL("successful start missing from audit: " + json.substr(0, 200));
+        if (json.find("\"accepted\":true,\"ok\":false") == std::string::npos)
+            FAIL("failed restart missing from audit");
+        if (json.find("\"accepted\":false") == std::string::npos)
+            FAIL("protocol rejects missing from audit");
+        if (json.find("\"command\":\"machine.nope\"") == std::string::npos)
+            FAIL("unknown method missing from audit");
+        // 时间升序：start（首个受控命令）先于 machine.nope（最后一条）
+        if (json.find("\"command\":\"start\"") > json.find("\"command\":\"machine.nope\""))
+            FAIL("audit must be in chronological order");
+        // 本地视图与 RPC 输出同源：start/stop（成功）、restart（失败）、
+        // 畸形载荷、空命令、未知方法 = 6 条
+        if (daemon.auditLog().size() != 6)
+            FAIL("expected 6 local audit entries, got " +
+                 std::to_string(daemon.auditLog().size()));
+        PASS();
+    }
+
+    TEST("audit ring evicts oldest beyond capacity");
+    {
+        LocalHostProbe probe;
+        MachineAgent smallAgent(
+            std::make_unique<LocalHostProbe>(std::move(probe)),
+            std::make_unique<LocalProcessSupervisor>());
+        MachineDaemon::Config smallConfig;
+        smallConfig.listenPort = 0;
+        smallConfig.auditCapacity = 2;
+        MachineDaemon smallDaemon(smallConfig, smallAgent);
+        if (!smallDaemon.start()) FAIL("small daemon start failed");
+        auto smallTick = [&smallDaemon] { smallDaemon.tick(); };
+
+        RawClient smallClient;
+        if (!smallClient.connect(smallDaemon.localPort())) FAIL("connect failed");
+        smallClient.settle(smallTick);
+
+        RuntimeInvocation resp;
+        for (int i = 1; i <= 3; ++i) {
+            if (!smallClient.request(MachineMethod::kExecute,
+                                     executePayload("restart", "400000" + std::to_string(i)),
+                                     smallTick, resp))
+                FAIL("no response to execute " + std::to_string(i));
+        }
+        if (!smallClient.request(MachineMethod::kAudit, {}, smallTick, resp))
+            FAIL("no response to small audit");
+        const auto json = payloadToString(resp);
+        if (json.find("4000001") != std::string::npos)
+            FAIL("oldest entry must be evicted at capacity 2");
+        if (json.find("4000002") == std::string::npos ||
+            json.find("4000003") == std::string::npos)
+            FAIL("newest two entries missing: " + json);
+        smallDaemon.stop();
+        PASS();
+    }
+
+    TEST("audit disabled with capacity 0");
+    {
+        LocalHostProbe probe;
+        MachineAgent silentAgent(
+            std::make_unique<LocalHostProbe>(std::move(probe)),
+            std::make_unique<LocalProcessSupervisor>());
+        MachineDaemon::Config silentConfig;
+        silentConfig.listenPort = 0;
+        silentConfig.auditCapacity = 0;
+        MachineDaemon silentDaemon(silentConfig, silentAgent);
+        if (!silentDaemon.start()) FAIL("silent daemon start failed");
+        auto silentTick = [&silentDaemon] { silentDaemon.tick(); };
+
+        RawClient silentClient;
+        if (!silentClient.connect(silentDaemon.localPort())) FAIL("connect failed");
+        silentClient.settle(silentTick);
+
+        RuntimeInvocation resp;
+        if (!silentClient.request(MachineMethod::kExecute,
+                                  executePayload("restart", "4000009"),
+                                  silentTick, resp))
+            FAIL("no response to execute");
+        if (!silentClient.request(MachineMethod::kAudit, {}, silentTick, resp))
+            FAIL("no response to audit");
+        if (payloadToString(resp) != "[]") FAIL("disabled audit must be empty");
+        if (!silentDaemon.auditLog().empty()) FAIL("local audit must stay empty");
+        silentDaemon.stop();
+        PASS();
+    }
+
     TEST("second daemon on the same port fails to start");
     {
         MachineDaemon::Config conflicting;
