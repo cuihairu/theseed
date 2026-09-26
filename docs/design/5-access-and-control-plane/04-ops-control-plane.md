@@ -435,6 +435,29 @@ Phase 3：
   - 与发布、热更、数据运维平台联动
 ```
 
+落地对照（theseed 仓库，2026-09-26 实测口径）：
+
+```
+MVP 已落地：
+  - 只读 inspect：machine.snapshot / machine.audit / 进程枚举 /
+    剖面清单与下载（agent 侧 + 中心侧），≥ReadOnly；
+  - 少量受控命令：machine.kick-session（≙ kick，吊销 SessionStore
+    会话）、machine.set-draining（≙ draining，快照与上报同源透出）
+    ——≥Operator；machine.shutdown（≙ §6.1 controlled shutdown，
+    应答出站后 tick 末优雅停机）——≥Admin；
+  - 操作审计：全部尝试（含拒绝）入 daemon 本地环形 + 中心聚合；
+    §6.2 七字段之六已对齐，requestId 仍缺（如实边界）。
+
+MVP 内未落地（如实降级）：
+  - statusCheck 未单独建：machine.snapshot 即只读探活语义；
+  - clear temporary bans：仓库无临时封禁存储，前置缺失不造
+    （§6.1 档位留档，见 todo.md 边界）。
+
+Phase 2 仍开放：
+  - 转发聚合 / entity-type diagnostics；
+  - 更完整的登录与会话运维命令（批量会话运维等）。
+```
+
 ---
 
 ## 9. 与 BigWorld / KBEngine 的对比

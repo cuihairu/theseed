@@ -4,6 +4,7 @@
 #include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/MachineAgent.h"
 #include "theseed/control/machine/ProfileRelay.h"
+#include "theseed/foundation/SessionStore.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TcpListener.h"
 #include "theseed/runtime/TickProfiler.h"
@@ -57,6 +58,22 @@ inline constexpr const char* kProfileOk = "machine.profile.ok";
 //                     （禁改四类命中 / 白名单外 / 角色不足 → kError）
 inline constexpr const char* kConfigApply = "machine.config.apply";
 inline constexpr const char* kConfigApplyOk = "machine.config.apply.ok";
+// §6.1 受控命令（clear temporary bans 仓库无封禁存储未建，见边界）：
+//   machine.kick-session → machine.kick-session.ok  payload = 1 字节
+//                     0x01（会话令牌已吊销）
+//                     请求 payload = 会话令牌原文（未知令牌 → kError；
+//                     审计只留长度指纹，令牌原文不进审计环）
+//   machine.set-draining → machine.set-draining.ok payload = 1 字节 0x01
+//                     请求 payload = 1 字节 0x01/0x00（排水开/关）
+//   machine.shutdown → machine.shutdown.ok   payload = 1 字节 0x01
+//                     （响应出站后本 tick 收尾时优雅停机：注销中心 +
+//                     关听；请求应答先于停机出站）
+inline constexpr const char* kKickSession = "machine.kick-session";
+inline constexpr const char* kKickSessionOk = "machine.kick-session.ok";
+inline constexpr const char* kSetDraining = "machine.set-draining";
+inline constexpr const char* kSetDrainingOk = "machine.set-draining.ok";
+inline constexpr const char* kShutdown = "machine.shutdown";
+inline constexpr const char* kShutdownOk = "machine.shutdown.ok";
 // 统一错误响应：payload 为短原因串（可读，供人工诊断与测试断言）。
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
@@ -101,9 +118,10 @@ inline constexpr const char* kError = "machine.error";
 // 权限分级（04 §6.1）：全部方法先过各自策略白名单（若该面有策略门），
 // 再过角色门（Config.roleBindings，见 AccessControl.h）——inspect 面
 // （snapshot/audit/清单/剖面下载）需 ReadOnly 及以上，operate 面
-// （execute/采样触发）需 Operator 及以上，administer 面（terminate/
-// config apply）需 Admin。未绑定角色的调用方无任何动作可用；角色拒绝
-// 与策略拒绝同权留痕（审计 + 计数 + kError 原因串）。
+// （execute/采样触发/kick-session/set-draining）需 Operator 及以上，
+// administer 面（terminate/config apply/shutdown）需 Admin。未绑定角色
+// 的调用方无任何动作可用；角色拒绝与策略拒绝同权留痕（审计 + 计数 +
+// kError 原因串）。
 class MachineDaemon final : private IProfileMetaSource {
 public:
     // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
@@ -136,6 +154,17 @@ public:
     // （ProfileRelay.h）：中心侧查询/下载沿用同一读位（canAccess），
     // 授权口径不复制不走样；canTrigger 写位只在 agent 侧生效。
 
+    // §6.1 节点生命周期/状态命令策略（machine.kick-session /
+    // machine.set-draining / machine.shutdown）。与 ExecPolicy（受管
+    // 进程编排）、ProcessGovernPolicy（主机非受控进程）刻意分离——
+    // 授权口径与风险等级互不牵动，不得共享白名单。本族命令沿用 execute
+    // 的双门模式：trustedComponents 来源白名单（空集 = 一律拒绝，安全
+    // 缺省）+ AccessRole 角色绑定表（drain/kick 需 Operator，shutdown
+    // 需 Admin，见 AccessControl.h）。所有尝试（含拒绝）照记审计。
+    struct NodeOpsPolicy final {
+        std::vector<runtime::ComponentId> trustedComponents;
+    };
+
     struct Config final {
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
@@ -145,6 +174,14 @@ public:
         // 主机级非受控进程治理策略（machine.processes / machine.terminate）；
         // 缺省全拒（来源与目标名单均为空集）。
         ProcessGovernPolicy processGovernPolicy;
+        // §6.1 节点生命周期/状态命令策略（kick-session / set-draining /
+        // shutdown）；缺省全拒（来源名单空集）。
+        NodeOpsPolicy nodeOpsPolicy;
+        // 会话登记真实面（foundation/SessionStore，redis 共享、跨进程
+        // 可见——LoginApp 写入，本 daemon 吊销即全集群生效）：kick 入口
+        // 的存储出口。nullptr = kick 入口关闭（machine.kick-session 视
+        // 同未知方法，与采样入口同口径）。不持有；生命周期由调用方保证。
+        foundation::SessionStore* sessionStore = nullptr;
         // 诊断采样入口策略（machine.profile.*）；缺省全拒。
         DiagnosticsPolicy diagnosticsPolicy;
         // §6.1 权限分级绑定表（来源组件 → 角色；口径见 AccessControl.h）。
@@ -201,10 +238,14 @@ private:
     void handleProfiles(runtime::RuntimeInvocation& inv);
     void handleProfileDownload(runtime::RuntimeInvocation& inv);
     void handleConfigApply(runtime::RuntimeInvocation& inv);
+    void handleKickSession(runtime::RuntimeInvocation& inv);
+    void handleSetDraining(runtime::RuntimeInvocation& inv);
+    void handleShutdown(runtime::RuntimeInvocation& inv);
     bool isTrustedSource(runtime::ComponentId source) const;
     bool isCommandAllowed(const std::string& command) const;
     bool isGovernTrustedSource(runtime::ComponentId source) const;
     bool isKillableName(const std::string& name) const;
+    bool isNodeOpsTrusted(runtime::ComponentId source) const;
     bool isTriggerAuthorized(runtime::ComponentId source) const;
     bool isDiagnosticsAccessAuthorized(runtime::ComponentId source) const;
     // §6.1 角色门：来源绑定角色达到 required 档位（未绑定 = None = 全拒）。
@@ -231,6 +272,10 @@ private:
     // 已回传中心的产品句柄账本（只留仍在产物环形里的——句柄不复用，
     // 被逐出者不会复现；上界 = 产物环形容量）。
     std::vector<std::uint64_t> relayedHandles_;
+    // §6.1 受控停机：RPC 应答出站后置位，本 tick 收尾（processMessages
+    // 之后、周期上报之前）执行优雅停机——注销中心 + 关听。延迟到 tick
+    // 末是为不悬空消息处理上下文（hub 不得在分发中途销毁）。
+    bool shutdownRequested_ = false;
 };
 
 }  // namespace theseed::control::machine

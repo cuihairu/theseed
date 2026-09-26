@@ -15,10 +15,11 @@ enum class AccessRole : std::uint8_t {
     None = 0,   // 未绑定：全拒
     ReadOnly,   // 只读面：inspect / snapshot / audit / 剖面查询与下载
     Operator,   // 操作面：受管进程编排（execute start/stop/restart）、
-                // 诊断采样触发（§6.1 的 kick session / set draining /
-                // clear temporary bans 同级，命令本身仓库未建，见边界）
+                // 诊断采样触发、kick session（machine.kick-session）、
+                // set draining（machine.set-draining）
     Admin,      // 管理面：主机进程处置（machine.terminate ≙ §6.1 的
-                // retire process）、运行时配置生效（§6.3）
+                // retire process）、运行时配置生效（§6.3）、受控停机
+                //（machine.shutdown ≙ §6.1 的 controlled shutdown）
 };
 
 // 分级判定：role 达到 required 的档位即可用该动作。

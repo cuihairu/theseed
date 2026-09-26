@@ -1,5 +1,60 @@
 # TODO
 
+## §6.1 受控命令落地：kick session / set draining / controlled shutdown（2026-09-26）
+
+把上一批（权限分级 + 配置热改）如实记录的遗留①——「角色档位已预留、
+命令本身仓库未建」的三条受控命令建起来（clear temporary bans 见边界）：
+
+1. **三条命令、三个真实面**（MachineDaemon 新增 RPC，双门模式沿用
+   execute：先 NodeOpsPolicy 来源白名单（空集全拒）再 AccessRole 角色门；
+   全部尝试含拒绝入审计环形 + 中心聚合，成对计数，args=key=value）：
+   - `machine.kick-session`（Operator，`session.kick` 审计）：载荷 =
+     会话令牌原文，吊销 foundation/SessionStore（redis 后备，跨进程
+     可见——LoginApp 写入、本 daemon 吊销即全集群生效，真实可测的
+     kick 语义）；未知令牌具名拒绝；**令牌原文不进审计环**——args 只记
+     `session(len=N)` 长度指纹（会话令牌是登录凭证）。sessionStore
+     未配置 = kick 入口关闭（视同未知方法，与采样入口同口径）。
+   - `machine.set-draining`（Operator，`node.drain` 审计）：载荷
+     1 字节 0x01/0x00（开/关排水），落
+     `IMachineAgent::setDraining`——agent 是节点状态持有方，排水位经
+     snapshot() 进快照 RPC（MachineSnapshotCodec 既有 `"draining"`
+     字段透出）与 report() 通道，中心 latest 即见（快照读侧与上报
+     聚合同源，不另设状态存储）。
+   - `machine.shutdown`（Admin，`node.shutdown` 审计，≙ §6.1
+     controlled shutdown）：**应答先出站**，置位后本 tick 收尾
+     （processMessages 之后、周期上报之前）优雅停机——注销中心 +
+     关听；延迟到 tick 末是不悬空消息分发上下文（hub 不得在分发中途
+     销毁）；停机后的最后动作是干净下线而非再报一次状态；不触碰受管
+     子进程与主机非受控进程（§6.1 controlled shutdown 是 daemon
+     生命周期，编排归 execute 族）。
+2. **策略族单列**：NodeOpsPolicy 与 ExecPolicy（受管进程编排）、
+   ProcessGovernPolicy（主机非受控进程）刻意分离——授权口径与风险
+   等级互不牵动，不得共享白名单（与既有两族同纪律）。沿用 execute 的
+   双门「模式」而非把命令塞进 machine.execute：shutdown 是 daemon
+   生命周期动作，不属 agent 可编排命令；独立方法名也让拒绝原因串与
+   审计 command 各自可辨。
+3. **§6.2 口径沿用上一批**：operatorId ≙ AuditEntry.source 组件 id、
+   result=rejected ≙ accepted=false、args=key=value、三对新增成对计数
+   （machine_{kick,drain,shutdown}_{accepted,rejected}_count）；
+   requestId 仍缺（沿既有记录，不编造）。
+4. **测试**（MachineDaemonTest 29→30）：三角色 × 三命令正反矩阵，
+   拒绝臂全覆盖（角色位/策略位/载荷畸形/未知令牌），真实效果断言
+   （kick 后 SessionStore 里令牌不复可查、排水位中心 latest 同步翻转、
+   shutdown 后 isListening=false + 中心 nodeCount==0、停机后 tick
+   空转无副作用）、计数增量配对断言、15 次尝试全留痕 + 令牌指纹
+   抽查、kick 入口关闭臂（主 daemon 未配 sessionStore → unknown
+   method）。
+
+**边界与遗留（如实记录，未编造）**：
+- **clear temporary bans 未建**：仓库没有任何临时封禁存储（全库检索
+  仅 Witness.cpp 的无关同名误配），前置缺失不造假实现；§6.1 档位
+  留档，待登录/网关侧封禁面建立后再按 Operator 档落角色门。
+- kick 的入口面是 daemon 配置直连 SessionStore（进程内指针），不是
+  独立 LoginApp 组件——仓库无 LoginApp，跨进程语义由 redis 共享存储
+  承载（同一 IRedisProvider 即同两会话视图），完整登录运维归 §8
+  Phase 2（「更完整的登录与会话运维命令」）。
+- requestId 仍缺（沿既有记录）；Gateway 限流边界沿用上一批记录。
+
 ## 权限分级 + 配置热改限制：04 §6 安全模型落地（2026-09-26）
 
 把前几批一直记录为「沿用边界、未顺手扩面」的 §6 落地成码：
@@ -50,10 +105,12 @@
    全部尝试留痕 10 条 + span 10 个）。
 
 **边界与缺字段（如实记录，未编造）**：
-- §6.1 的 kick session / set draining / clear temporary bans /
+- ~~§6.1 的 kick session / set draining / clear temporary bans /
   controlled shutdown 四命令仓库未建（无会话面/排水命令/临时禁名单/
   受控停机命令），角色档位已预留（operate/operate/operate/administer），
-  建命令时按档位落角色门即可。
+  建命令时按档位落角色门即可。~~（2026-09-26 完成三条：kick session /
+  set draining / controlled shutdown 见顶部批；clear temporary bans
+  因无封禁存储仍留边界）
 - metrics summary（/metrics HTTP 导出）与中心聚合器基础查询
   （latest/snapshotNodes/auditTrail）不在角色门内：前者是无鉴权 HTTP
   导出面（05 遥测口径），后者是 ops 宿主自身装配面——§6.1 的管控落点

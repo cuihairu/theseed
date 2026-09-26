@@ -9,6 +9,8 @@
 #include "theseed/control/machine/ProcessSupervisor.h"
 #include "theseed/control/ops/OpsControlCenter.h"
 #include "theseed/foundation/Logger.h"
+#include "theseed/foundation/RedisProvider.h"
+#include "theseed/foundation/SessionStore.h"
 #include "theseed/ops/OpsServer.h"
 #include "theseed/foundation/Metrics.h"
 #include "theseed/foundation/Tracing.h"
@@ -1845,6 +1847,263 @@ int main() {
 
         foundation::setSpanEmitter(nullptr);
         cfgDaemon.stop();
+        PASS();
+    }
+
+    TEST("node ops: draining, kick session, controlled shutdown (04 §6.1)");
+    {
+        // §6.1 三条受控命令 × 三角色矩阵，全部接真实面：kick 吊销
+        // SessionStore（redis 内存提供者，LoginApp 同款存储）里的令牌；
+        // 排水位经 agent 快照（inspect 读侧）与周期上报（中心聚合）同
+        // 源透出；受控停机应答出站后本 tick 收尾注销中心。clear
+        // temporary bans 无封禁存储前置，如实不建（见 todo.md 边界）。
+        auto redis = std::make_shared<foundation::InMemoryRedisProvider>();
+        auto sessions = std::make_shared<foundation::SessionStore>(redis);
+        foundation::StoredSession stored;
+        stored.accountId = "carl";
+        stored.realmId = "realm-1";
+        if (!sessions->save("kick-me", stored, std::chrono::minutes{5}))
+            FAIL("session save failed");
+        const std::string longToken(20, 'x');
+        if (!sessions->save(longToken, stored, std::chrono::minutes{5}))
+            FAIL("long token save failed");
+
+        OpsControlCenter nodeCenter;
+        MachineAgent nodeAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>(),
+                               &nodeCenter);
+        MachineDaemon::Config nodeConfig;
+        nodeConfig.listenPort = 0;
+        nodeConfig.auditSink = &nodeCenter;
+        nodeConfig.reportSink = &nodeCenter;
+        nodeConfig.reportInterval = std::chrono::milliseconds{30};
+        nodeConfig.nodeOpsPolicy.trustedComponents = {1, 5, 6};
+        nodeConfig.roleBindings = {{1, AccessRole::ReadOnly},
+                                   {5, AccessRole::Operator},
+                                   {6, AccessRole::Admin}};
+        nodeConfig.sessionStore = sessions.get();
+        MachineDaemon nodeDaemon(nodeConfig, nodeAgent);
+        if (!nodeDaemon.start()) FAIL("node daemon start failed");
+        auto nodeTick = [&nodeDaemon] { nodeDaemon.tick(); };
+
+        RawClient ro;
+        ro.component = 1;
+        if (!ro.connect(nodeDaemon.localPort())) FAIL("ro connect failed");
+        ro.settle(nodeTick);
+        RawClient op;
+        op.component = 5;
+        if (!op.connect(nodeDaemon.localPort())) FAIL("op connect failed");
+        op.settle(nodeTick);
+        RawClient adm;
+        adm.component = 6;
+        if (!adm.connect(nodeDaemon.localPort())) FAIL("adm connect failed");
+        adm.settle(nodeTick);
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(nodeDaemon.localPort()))
+            FAIL("stranger connect failed");
+        stranger.settle(nodeTick);
+
+        auto& drainAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_drain_accepted_count");
+        auto& drainRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_drain_rejected_count");
+        auto& kickAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_kick_accepted_count");
+        auto& kickRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_kick_rejected_count");
+        auto& shutdownAccepted =
+            foundation::MetricsRegistry::instance().counter(
+                "machine_shutdown_accepted_count");
+        auto& shutdownRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "machine_shutdown_rejected_count");
+        const auto drainAcc0 = drainAccepted.value();
+        const auto drainRej0 = drainRejected.value();
+        const auto kickAcc0 = kickAccepted.value();
+        const auto kickRej0 = kickRejected.value();
+        const auto shutdownAcc0 = shutdownAccepted.value();
+        const auto shutdownRej0 = shutdownRejected.value();
+
+        RuntimeInvocation resp;
+        // --- set draining：角色位（ReadOnly 不可）、策略位（策略外不可）、
+        // 载荷校验、Operator 生效（开与关都要真臂） ---
+        if (!ro.request(MachineMethod::kSetDraining, {std::byte{0x01}},
+                        nodeTick, resp))
+            FAIL("no response to ro drain");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly drain must be refused by role: " +
+                 payloadToString(resp));
+        if (!stranger.request(MachineMethod::kSetDraining, {std::byte{0x01}},
+                              nodeTick, resp))
+            FAIL("no response to stranger drain");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger drain must be refused by policy: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kSetDraining, {}, nodeTick, resp))
+            FAIL("no response to empty drain");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty drain payload must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kSetDraining, payloadOf("x"),
+                        nodeTick, resp))
+            FAIL("no response to wrong-byte drain");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("wrong-byte drain payload must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kSetDraining, {std::byte{0x01}},
+                        nodeTick, resp))
+            FAIL("no response to drain-on");
+        if (resp.method != MachineMethod::kSetDrainingOk ||
+            resp.payload[0] != std::byte{0x01})
+            FAIL("Operator drain-on must succeed: " + payloadToString(resp));
+        // 排水位同源透出：inspect 读侧（快照 JSON）与中心聚合（上报）
+        if (!ro.request(MachineMethod::kSnapshot, {}, nodeTick, resp))
+            FAIL("no response to draining snapshot");
+        if (payloadToString(resp).find("\"draining\":true") ==
+            std::string::npos)
+            FAIL("snapshot must expose the draining bit: " +
+                 payloadToString(resp).substr(0, 160));
+        const auto nodeHostname = LocalHostProbe{}.sample().hostname;
+        for (int i = 0; i < 40; ++i) {
+            nodeTick();
+            ::usleep(2000);
+        }
+        NodeReport drained;
+        if (!nodeCenter.latest(nodeHostname, drained) ||
+            !drained.summary.draining)
+            FAIL("report channel must carry draining=true to the center");
+        if (!op.request(MachineMethod::kSetDraining, {std::byte{0x00}},
+                        nodeTick, resp))
+            FAIL("no response to drain-off");
+        if (resp.method != MachineMethod::kSetDrainingOk)
+            FAIL("Operator drain-off must succeed: " + payloadToString(resp));
+        for (int i = 0; i < 40; ++i) {
+            nodeTick();
+            ::usleep(2000);
+        }
+        NodeReport undrained;
+        if (!nodeCenter.latest(nodeHostname, undrained) ||
+            undrained.summary.draining)
+            FAIL("drain-off must reach the center via the report channel");
+
+        // --- kick session：真实吊销（令牌不复可查）、未知令牌具名、
+        // 角色/策略/载荷三拒绝臂 ---
+        if (!op.request(MachineMethod::kKickSession, payloadOf("kick-me"),
+                        nodeTick, resp))
+            FAIL("no response to kick");
+        if (resp.method != MachineMethod::kKickSessionOk ||
+            resp.payload[0] != std::byte{0x01})
+            FAIL("Operator kick must succeed: " + payloadToString(resp));
+        if (sessions->load("kick-me").has_value())
+            FAIL("kicked token must be gone from the store");
+        if (!op.request(MachineMethod::kKickSession, payloadOf("kick-me"),
+                        nodeTick, resp))
+            FAIL("no response to re-kick");
+        if (payloadToString(resp).find("unknown session token") ==
+            std::string::npos)
+            FAIL("re-kick must name the unknown token: " +
+                 payloadToString(resp));
+        if (!ro.request(MachineMethod::kKickSession, payloadOf(longToken),
+                        nodeTick, resp))
+            FAIL("no response to ro kick");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly kick must be refused by role: " +
+                 payloadToString(resp));
+        if (!stranger.request(MachineMethod::kKickSession,
+                              payloadOf("kick-me"), nodeTick, resp))
+            FAIL("no response to stranger kick");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger kick must be refused by policy: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kKickSession, {}, nodeTick, resp))
+            FAIL("no response to empty kick");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty token must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kKickSession, payloadOf(longToken),
+                        nodeTick, resp))
+            FAIL("no response to long-token kick");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("long-token kick must succeed: " + payloadToString(resp));
+        if (sessions->load(longToken).has_value())
+            FAIL("long token must be revoked too");
+
+        // kick 入口关闭（主 daemon 未配 sessionStore）= 视同未知方法，
+        // 与采样入口同口径
+        if (!client.request(MachineMethod::kKickSession, payloadOf("kick-me"),
+                            daemonTick, resp))
+            FAIL("no response to closed-entry kick");
+        if (payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("closed kick entry must fall to unknown method: " +
+                 payloadToString(resp));
+
+        // --- controlled shutdown：Admin 级；应答出站后本 tick 收尾
+        // 优雅停机（注销中心 + 关听） ---
+        if (!ro.request(MachineMethod::kShutdown, {}, nodeTick, resp))
+            FAIL("no response to ro shutdown");
+        if (payloadToString(resp).find("requires Admin role") ==
+            std::string::npos)
+            FAIL("ReadOnly shutdown must be refused by role: " +
+                 payloadToString(resp));
+        if (!stranger.request(MachineMethod::kShutdown, {}, nodeTick, resp))
+            FAIL("no response to stranger shutdown");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger shutdown must be refused by policy: " +
+                 payloadToString(resp));
+        if (!adm.request(MachineMethod::kShutdown, {}, nodeTick, resp))
+            FAIL("no response to admin shutdown");
+        if (resp.method != MachineMethod::kShutdownOk ||
+            resp.payload[0] != std::byte{0x01})
+            FAIL("Admin shutdown must succeed: " + payloadToString(resp));
+        nodeTick();  // 收尾：本 tick 末优雅停机
+        if (nodeDaemon.isListening())
+            FAIL("daemon must stop listening after controlled shutdown");
+        if (nodeCenter.nodeCount() != 0)
+            FAIL("controlled shutdown must deregister from the center");
+        nodeTick();
+        nodeTick();  // 停机后 tick 恒空转（不崩溃、无副作用）
+
+        // 指标增量（成对口径）：排水 2/4，踢会话 2/4，停机 1/2
+        if (drainAccepted.value() != drainAcc0 + 2)
+            FAIL("drain accepted must be +2");
+        if (drainRejected.value() != drainRej0 + 4)
+            FAIL("drain rejected must be +4");
+        if (kickAccepted.value() != kickAcc0 + 2)
+            FAIL("kick accepted must be +2");
+        if (kickRejected.value() != kickRej0 + 4)
+            FAIL("kick rejected must be +4");
+        if (shutdownAccepted.value() != shutdownAcc0 + 1)
+            FAIL("shutdown accepted must be +1");
+        if (shutdownRejected.value() != shutdownRej0 + 2)
+            FAIL("shutdown rejected must be +2");
+
+        // 审计：15 次尝试全部留痕（排水 6 + 踢会话 6 + 停机 3），令牌
+        // 只留长度指纹
+        const auto& trail = nodeDaemon.auditLog();
+        if (trail.size() != 15)
+            FAIL("all fifteen node-ops attempts must be audited, got " +
+                 std::to_string(trail.size()));
+        bool sawDrainOn = false;
+        bool sawKickFingerprint = false;
+        bool sawShutdown = false;
+        for (const auto& entry : trail) {
+            if (entry.command == "node.drain" && entry.accepted &&
+                entry.args == "draining=true")
+                sawDrainOn = true;
+            if (entry.command == "session.kick" && entry.accepted &&
+                entry.args == "session(len=7)")
+                sawKickFingerprint = true;
+            if (entry.command == "node.shutdown" && entry.accepted)
+                sawShutdown = true;
+        }
+        if (!sawDrainOn) FAIL("accepted drain must record draining=true");
+        if (!sawKickFingerprint)
+            FAIL("accepted kick must record the length fingerprint only");
+        if (!sawShutdown) FAIL("accepted shutdown must be audited");
+
         PASS();
     }
 

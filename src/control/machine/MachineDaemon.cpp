@@ -94,6 +94,20 @@ constexpr const char* kConfigApplyRejectedCount =
 constexpr const char* kSnapshotCommand = "machine.snapshot";
 constexpr const char* kAuditQueryCommand = "machine.audit";
 constexpr const char* kConfigApplyCommand = "config.apply";
+// §6.1 受控命令（kick/draining/shutdown）各一对接受/拒绝计数，同族口径。
+constexpr const char* kKickAcceptedCount = "machine_kick_accepted_count";
+constexpr const char* kKickRejectedCount = "machine_kick_rejected_count";
+constexpr const char* kDrainAcceptedCount = "machine_drain_accepted_count";
+constexpr const char* kDrainRejectedCount = "machine_drain_rejected_count";
+constexpr const char* kShutdownAcceptedCount =
+    "machine_shutdown_accepted_count";
+constexpr const char* kShutdownRejectedCount =
+    "machine_shutdown_rejected_count";
+// 审计命令口径：§6.1 命令族按动作命名（与 process.kill / config.apply
+// 同风格），来源组件即 §6.2 operatorId。
+constexpr const char* kKickCommand = "session.kick";
+constexpr const char* kDrainCommand = "node.drain";
+constexpr const char* kShutdownCommand = "node.shutdown";
 
 // §6.3 禁改四类（协议定义 / 持久化 schema / entity property flags /
 // 迁移语义）：键前缀 → 类别名。命中即拒绝且指认类别——在线修改会破坏
@@ -246,6 +260,12 @@ ParsedMillis parseMillisValue(const std::string& text) {
     return {true, millis};
 }
 
+// kick 审计的令牌指纹：会话令牌是登录凭证，原文不入审计环（接受侧与
+// 拒绝侧同口径）；长度足以核对异常与滥用，不留下可复用的残迹。
+std::string redactSessionToken(const std::string& token) {
+    return "session(len=" + std::to_string(token.size()) + ")";
+}
+
 }  // namespace
 
 MachineDaemon::MachineDaemon(Config config, IMachineAgent& agent)
@@ -315,6 +335,13 @@ void MachineDaemon::tick() {
     acceptConnections();
     hub_->tick();
     processMessages();
+    // §6.1 受控停机：请求应答已在分发中出站，此处收尾优雅停机（注销
+    // 中心 + 关听）——先于周期上报，停机后的最后动作是干净下线而非
+    // 再报一次状态。
+    if (shutdownRequested_) {
+        stop();
+        return;
+    }
     reportIfDue();
     relayArtifacts();
 }
@@ -663,6 +690,25 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // kick 入口关闭（未配 sessionStore）= 视同未知方法，落统一错误臂
+    //（不进审计——入口未开，无动作发生），与采样入口同口径。
+    const bool sessionEntryOpen = config_.sessionStore != nullptr;
+
+    if (sessionEntryOpen && inv.method == MachineMethod::kKickSession) {
+        handleKickSession(inv);
+        return;
+    }
+
+    if (inv.method == MachineMethod::kSetDraining) {
+        handleSetDraining(inv);
+        return;
+    }
+
+    if (inv.method == MachineMethod::kShutdown) {
+        handleShutdown(inv);
+        return;
+    }
+
     telemetryCounter(kUnknownMethodCount).increment();
     AuditEntry rejected;
     rejected.timestamp = std::chrono::system_clock::now();
@@ -697,6 +743,11 @@ bool MachineDaemon::isGovernTrustedSource(runtime::ComponentId source) const {
 bool MachineDaemon::isKillableName(const std::string& name) const {
     const auto& killable = config_.processGovernPolicy.killableNames;
     return std::find(killable.begin(), killable.end(), name) != killable.end();
+}
+
+bool MachineDaemon::isNodeOpsTrusted(runtime::ComponentId source) const {
+    const auto& trusted = config_.nodeOpsPolicy.trustedComponents;
+    return std::find(trusted.begin(), trusted.end(), source) != trusted.end();
 }
 
 void MachineDaemon::handleProcesses(runtime::RuntimeInvocation& inv) {
@@ -1134,6 +1185,197 @@ void MachineDaemon::handleConfigApply(runtime::RuntimeInvocation& inv) {
                         {sourceAttr, keyAttr, valueAttr});
     const std::byte result = std::byte{0x01};
     sendResponse(inv.sourceComponent, MachineMethod::kConfigApplyOk,
+                 std::span<const std::byte>(&result, 1));
+}
+
+// §6.1 kick session（Operator 级）：吊销 SessionStore 里的会话令牌——
+// 令牌是 redis 共享存储的真实会话面（LoginApp 写入，吊销后 load 不
+// 复命中，全集群生效）。令牌原文不进审计（只留长度指纹）。
+void MachineDaemon::handleKickSession(runtime::RuntimeInvocation& inv) {
+    foundation::SpanScope span("machine.kick-session");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kKickCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kKickRejectedCount,
+                            "machine.session.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    // 空载荷的 data() 可能为空指针，先护栏再取字节（与 pid/句柄解析同纪律）。
+    std::string token;
+    if (!inv.payload.empty()) {
+        token.assign(reinterpret_cast<const char*>(inv.payload.data()),
+                     inv.payload.size());
+    }
+    entry.args = redactSessionToken(token);
+    if (token.empty()) {
+        reject("kick session rejected: malformed token payload");
+        return;
+    }
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("kick session rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门（叠加在来源白名单之上）：会话处置是 operate 面。
+    if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+        reject("kick session rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires Operator role");
+        return;
+    }
+
+    // 吊销即生效：SessionStore::revoke 对未知令牌返回 false——与治理
+    // 的未知 pid 同口径，拒绝并具名（不泄漏令牌空间信息，指纹同留）。
+    if (!config_.sessionStore->revoke(token)) {
+        reject("kick session rejected: unknown session token");
+        return;
+    }
+
+    entry.accepted = true;
+    entry.ok = true;
+    appendAudit(entry);
+    telemetryCounter(kKickAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute sessionAttr = {"session", entry.args};
+    foundation::logInfo("machine.kick-session", {sourceAttr, sessionAttr});
+    const std::byte result = std::byte{0x01};
+    sendResponse(inv.sourceComponent, MachineMethod::kKickSessionOk,
+                 std::span<const std::byte>(&result, 1));
+}
+
+// §6.1 set draining（Operator 级）：翻转节点排水位。agent 是节点状态
+// 持有方——置位后快照 RPC（inspect 读侧）与周期上报（中心聚合）同一
+// 数据源透出，中心侧 latest/snapshotNodes 即见。
+void MachineDaemon::handleSetDraining(runtime::RuntimeInvocation& inv) {
+    foundation::SpanScope span("machine.set-draining");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kDrainCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kDrainRejectedCount,
+                            "machine.node.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    // 载荷 = 1 字节 0x01/0x00（与 execute/terminate 应答字节同约定）。
+    const bool parsed =
+        inv.payload.size() == 1 &&
+        (inv.payload[0] == std::byte{0x01} || inv.payload[0] == std::byte{0x00});
+    const bool draining = parsed && inv.payload[0] == std::byte{0x01};
+    entry.args = parsed ? (std::string("draining=") + (draining ? "true" : "false"))
+                        : "";
+    if (!parsed) {
+        reject("set draining rejected: malformed payload "
+               "(expected 1 byte 0x01/0x00)");
+        return;
+    }
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("set draining rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门（叠加在来源白名单之上）：排水决策是 operate 面。
+    if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+        reject("set draining rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires Operator role");
+        return;
+    }
+
+    agent_.setDraining(draining);
+    entry.accepted = true;
+    entry.ok = true;
+    appendAudit(entry);
+    telemetryCounter(kDrainAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("draining", draining);
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute drainingAttr = {"draining", draining};
+    foundation::logInfo("machine.set-draining", {sourceAttr, drainingAttr});
+    const std::byte result = std::byte{0x01};
+    sendResponse(inv.sourceComponent, MachineMethod::kSetDrainingOk,
+                 std::span<const std::byte>(&result, 1));
+}
+
+// §6.1 controlled shutdown（Admin 级）：优雅停机——应答出站后置位，
+// 本 tick 收尾时 stop()（注销中心 + 关听，见 tick()）。延迟到 tick 末
+// 是因为 hub 不得在消息分发中途销毁；排队中的既有消息照常应答。停机
+// 不波及受管子进程（编排仍走 execute stop 显式下达）也不触及主机上的
+// 其他进程（那是治理面的守卫领域）——"受控"的边界就是本 daemon 的
+// 生命周期自身。
+void MachineDaemon::handleShutdown(runtime::RuntimeInvocation& inv) {
+    foundation::SpanScope span("machine.shutdown");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kShutdownCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kShutdownRejectedCount,
+                            "machine.node.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("shutdown rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门：受控停机是 administer 面，需 Admin。
+    if (!hasRole(inv.sourceComponent, AccessRole::Admin)) {
+        reject("shutdown rejected: source component " +
+               std::to_string(inv.sourceComponent) + " requires Admin role");
+        return;
+    }
+
+    shutdownRequested_ = true;
+    entry.accepted = true;
+    entry.ok = true;
+    appendAudit(entry);
+    telemetryCounter(kShutdownAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    // 单行具名语句：多行调用表达式的行计数会被 gcc 归因到首行（与
+    // kick/set-draining 同款写法）。
+    const foundation::LogAttribute sourceAttr = {
+        "source", static_cast<std::int64_t>(entry.source)};
+    foundation::logInfo("machine.shutdown", {sourceAttr});
+    const std::byte result = std::byte{0x01};
+    sendResponse(inv.sourceComponent, MachineMethod::kShutdownOk,
                  std::span<const std::byte>(&result, 1));
 }
 

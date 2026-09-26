@@ -31,6 +31,11 @@ public:
     // 无出口（未注册）时为空操作——上报是能力而非义务。
     virtual void report() = 0;
 
+    // §6.1 set draining：翻转节点排水位（不再承接新工作，存量照常）。
+    // agent 是节点状态的持有方——置位后 snapshot()（快照 RPC 与节点
+    // 上报共用形状）即带该位，经既有 report() 通道汇聚到中心。
+    virtual void setDraining(bool draining) = 0;
+
     // 绑定剖面元数据来源（04 §7 中心侧维度视图的汇聚通道）：report()
     // 组装 NodeReport 时拉取本机当前剖面清单；nullptr = 无剖面（报告照
     // 发，profiles 留空）。不持有（调用方保证生命周期覆盖 agent）。
@@ -52,6 +57,7 @@ public:
     std::vector<ProcessSummary> enumerateHostProcesses() override;
     bool terminateHostProcess(std::uint32_t pid) override;
     void report() override;
+    void setDraining(bool draining) override;
     void setProfileMetaSource(
         IProfileMetaSource* profileMetaSource) override;
 
@@ -63,6 +69,8 @@ private:
     std::unique_ptr<IProcessSupervisor> processSupervisor_;
     INodeReportSink* reportSink_ = nullptr;
     IProfileMetaSource* profileMetaSource_ = nullptr;
+    // §6.1 排水位（agent 持有的节点状态：snapshot()/report() 即透出）。
+    bool draining_ = false;
 };
 
 }  // namespace theseed::control::machine

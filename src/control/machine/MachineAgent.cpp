@@ -23,6 +23,7 @@ NodeSummary MachineAgent::snapshot() {
     NodeSummary summary;
     summary.host = hostProbe_->sample();
     summary.processes = processSupervisor_->listProcesses();
+    summary.draining = draining_;  // §6.1 排水位：快照 RPC 与上报同源透出
     return summary;
 }
 
@@ -59,6 +60,10 @@ void MachineAgent::report() {
 void MachineAgent::setProfileMetaSource(
     IProfileMetaSource* profileMetaSource) {
     profileMetaSource_ = profileMetaSource;
+}
+
+void MachineAgent::setDraining(bool draining) {
+    draining_ = draining;
 }
 
 bool MachineAgent::execute(const std::string& command, const std::string& args) {
