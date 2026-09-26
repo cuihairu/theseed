@@ -1,5 +1,66 @@
 # TODO
 
+## Phase 2 余项：会话续期策略 + 踢人联动通知 + requestId（04 §8，2026-09-26）
+
+沿上一批的会话运维命令面继续，把简报 Phase 2 余项中前置已备的三件
+（requestId 判断本轮可补，一并做了）：
+
+1. **machine.extend-sessions（≥Operator，≙ 会话续期策略）**：
+   - 作用域选择器与应答口径同 kick-sessions（all | account=<id> |
+     realm=<id>，extended/missing 分列、指纹脱敏、入口关闭 = TTL 为 0
+     或未配 sessionStore 视同未知方法）；
+   - **续期 TTL 是策略值不是调用方参数**：refresh 到
+     Config.sessionRenewalTtl（扩策略须改配置评审，与 §6.3 白名单同
+     纪律）；用途 = 维护窗口前批量滑动过期，防无关批量掉线；
+   - 部分失败臂（枚举后续期前会话被并发摘除/过期）用 FlakyDelProvider
+     的 armFailExpire（expire 按后缀失败一次）确定性复现；
+   - 计数 machine_extend_sessions_{accepted,rejected}_count 成对，
+     审计 args = `scope=<sel> extended=N missing=M`。
+2. **踢人联动通知（machine.session.revoked，best-effort 推送）**：
+   - daemon 侧 notifySessionRevoked：单踢（load-before-revoke 先取
+     account/realm，"unknown session token" 与 "session vanished before
+     revocation" 具名区分）与批量踢吊销成功后，向
+     Config.sessionNotifyComponent 推 JSON 载荷
+     `{account, realm, session=长度指纹, reason=operator.kick |
+     operator.kick.batch}`；无重试/无确认——目标未在 hub 注册即丢弃并
+     logWarn（吊销事实以存储为准，重连后可经 list-sessions 对账），
+     送达计数 machine_session_notify_count（只计送达，无接受/拒绝语义）；
+   - LoginApp 侧落点 handleSessionRevoked（公开方法）：按
+     account+realm 关闭匹配的活跃登录连接，返回关闭数，计数
+     login_session_revoked_count；定位面 = 新增 bindings_ 注册表
+     （登录成功登记 account，SelectRealm 成功补 realm——只在已登录
+     连接上补，不给陌生键开洞；realm 空串 = 未选领域，与存储行同形），
+     cleanupDisconnected 与连接同步出表（真实 TCP 生命周期在 E2E
+     测试覆盖，不留悬垂键）。
+3. **requestId（§6.2 审计关联 id 缺口闭合）**：
+   - RuntimeInvocation 帧 +u64 requestId（0 = 未携带，进程内默认调用方
+     不铸 id），InvocationCodec 编解码透传，无版本协商（同仓同版本
+     对端共同演进）；AuditEntry +requestId，14 个 handler + 未知方法
+     拒绝臂统一盖戳，machine.audit JSON 出 request_id 字段——§6.2
+     七字段全对齐，此前的「六已对齐」边界关闭。
+4. **测试**：MachineDaemonTest（续期策略 TTL 真实生效：短 TTL 会话
+   越过原 1s 仍活、越过策略 30s 才没；advanceClock 模拟）、续期部分
+   失败分列、三角色 × extend 正反矩阵、通知三臂（未注册丢弃不计
+   数 / 单踢送达 reason=operator.kick / 批量送达 reason=
+   operator.kick.batch）、通知载荷零令牌原文、requestId 透传入审计
+   与 machine.audit、单踢竞争臂（armFailDel 后重试成功）；LoginAppTest
+   桩面：carl@default / amy@空领域 精确命中、已关/领域不匹配/无匹配
+   不计数、计数增量；LoginAppE2ETest 场景 E：真实 TCP 登录 → 吊销关
+   连接 → tick 清扫摘绑定。InvocationCodecTest 补 requestId 往返。
+5. **口径沿用不改**：clear temporary bans 不做（无封禁存储前置）、
+   长度指纹同长歧义不改、枚举顺序不承诺时序。
+
+**边界与遗留（如实记录）**：
+- 通知通道的 LoginApp 生产接线未建：client 面是 ClientProtocol（非
+  RuntimeInvocation 分发面），LoginApp 的 hub 入站分发面建好后推送即
+  接 handleSessionRevoked（落点已备，本轮测试直接驱动该落点）。
+- 通知 best-effort 无重试/确认（设计如此：吊销以存储为准）。
+- 会话续期策略值与 LoginApp 会话 TTL（config_.sessionTtl）是两处
+  策略：前者是运维续期上限（daemon 侧），后者是登录签发时的会话寿命
+  （LoginApp 侧）——统一为单一策略源属扩面，未做。
+- requestId 由发起方铸造，daemon 侧只透传不校验唯一性（逐请求唯一是
+  运维控制台的纪律责任，跨进程无仲裁者）。
+
 ## 会话运维命令面：list-sessions + kick-sessions（04 §8 Phase 2 切片，2026-09-26）
 
 Phase 2「更完整的登录与会话运维命令」里前置已真实存在的一块（SessionStore
@@ -51,8 +112,10 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
   （score 只跨进程可辨先后）。
 - 长度指纹有同长歧义：同账号多会话且令牌等长时指纹不可区分——运维
   以账号/领域行为粒度核对；引入哈希指纹属扩面，未做。
-- requestId 仍缺（沿既有记录）；kick 入口是进程内 SessionStore 指针
-  而非独立 LoginApp 组件（沿上一批记录）。
+- requestId 缺口已由上批（Phase 2 余项）闭合：RuntimeInvocation 帧
+  透传 u64 → 审计条目 → machine.audit JSON；
+- kick 入口是进程内 SessionStore 指针而非独立 LoginApp 组件（沿上批
+  记录）。
 
 ## §6.1 受控命令落地：kick session / set draining / controlled shutdown（2026-09-26）
 

@@ -103,6 +103,7 @@ struct RawClient {
         RuntimeInvocation inv;
         inv.sourceComponent = component;
         inv.targetComponent = kMachineComponent;
+        inv.requestId = this->requestId;
         inv.method = method;
         inv.payload = std::move(payload);
         if (transport->send(std::move(inv)) != SendResult::Accepted) return false;
@@ -121,6 +122,7 @@ struct RawClient {
     }
 
     ComponentId component = kClientComponent;
+    std::uint64_t requestId = 0;  // §6.2 关联 id（缺省不携带）
 };
 
 std::string payloadToString(const RuntimeInvocation& inv) {
@@ -190,10 +192,10 @@ public:
     }
 };
 
-// 批量 kick 部分失败臂的竞争模拟件：包一层内存提供者，armed 时对后缀
-// 匹配的键把一次 del 报成失败——确定性复现"枚举之后、吊销之前会话被
-// 并发摘除"的跨进程窗口（单线程测试里时钟/提供者都无法中途插手）。
-// 每个后缀只失败一次，可同时布多个（造出 missing 分列 ≥2 的应答）。
+// 会话命令部分失败臂的竞争模拟件：包一层内存提供者，armed 时对后缀
+// 匹配的键把一次 del / expire 报成失败——确定性复现"枚举/读取之后、
+// 动作之前会话被并发摘除或过期"的跨进程窗口（单线程测试里时钟/提供者
+// 都无法中途插手）。每个后缀只失败一次，可同时布多个。
 class FlakyDelProvider final : public foundation::IRedisProvider {
 public:
     explicit FlakyDelProvider(
@@ -201,19 +203,21 @@ public:
         : inner_(std::move(inner)) {}
 
     void armFailDel(const std::string& keySuffix) {
-        armedSuffixes_.push_back(keySuffix);
+        delSuffixes_.push_back(keySuffix);
+    }
+
+    void armFailExpire(const std::string& keySuffix) {
+        expireSuffixes_.push_back(keySuffix);
     }
 
     bool del(const std::string& key) override {
-        for (auto it = armedSuffixes_.begin(); it != armedSuffixes_.end();
-             ++it) {
-            if (key.size() >= it->size() &&
-                key.compare(key.size() - it->size(), it->size(), *it) == 0) {
-                armedSuffixes_.erase(it);  // 每个后缀只失败一次
-                return false;
-            }
-        }
-        return inner_->del(key);
+        return failOnce(delSuffixes_, key) ? false : inner_->del(key);
+    }
+
+    bool expire(const std::string& key,
+                foundation::RedisDuration ttl) override {
+        return failOnce(expireSuffixes_, key) ? false
+                                              : inner_->expire(key, ttl);
     }
 
     // 其余原语全部透传（会话面用到 get/set/expire/del/zadd/zrange/zrem）
@@ -227,10 +231,6 @@ public:
     }
     bool exists(const std::string& key) override {
         return inner_->exists(key);
-    }
-    bool expire(const std::string& key,
-                foundation::RedisDuration ttl) override {
-        return inner_->expire(key, ttl);
     }
     bool zadd(const std::string& key, const std::string& member,
               double score) override {
@@ -257,8 +257,22 @@ public:
     void unlock(const std::string& key) override { inner_->unlock(key); }
 
 private:
+    // 后缀命中即失败一次（消费掉）：模拟并发窗口里单个键的一次动作失败。
+    static bool failOnce(std::vector<std::string>& suffixes,
+                         const std::string& key) {
+        for (auto it = suffixes.begin(); it != suffixes.end(); ++it) {
+            if (key.size() >= it->size() &&
+                key.compare(key.size() - it->size(), it->size(), *it) == 0) {
+                suffixes.erase(it);
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::shared_ptr<foundation::IRedisProvider> inner_;
-    std::vector<std::string> armedSuffixes_;
+    std::vector<std::string> delSuffixes_;
+    std::vector<std::string> expireSuffixes_;
 };
 
 }  // namespace
@@ -2460,6 +2474,335 @@ int main() {
             FAIL("accepted batch kick must record scope + counts");
 
         sessDaemon.stop();
+        PASS();
+    }
+
+    TEST("session ops: extend-sessions + revocation notify + requestId (04 §8 Phase 2)");
+    {
+        // Phase 2 余项三条线合一验证：续期策略（短 TTL 会话被续到策略
+        // TTL、expire 失败一次的分列）、踢人联动通知（目标组件未注册 =
+        // 丢弃告警不计数；注册后单踢/批量踢推送 reason 与指纹脱敏）、
+        // requestId 全链透传（帧 → 审计条目 → machine.audit JSON）。
+        OpsControlCenter extCenter;
+        auto innerRedis =
+            std::make_shared<foundation::InMemoryRedisProvider>();
+        auto flaky = std::make_shared<FlakyDelProvider>(innerRedis);
+        foundation::SessionStore extStore(flaky);
+
+        foundation::StoredSession session;
+        session.accountId = "ann";
+        session.realmId = "";
+        session.userId = 1;
+        if (!extStore.save("kick-a", session, std::chrono::minutes{5}))
+            FAIL("save ann failed");
+        session.accountId = "carl";
+        session.realmId = "realm-1";
+        session.userId = 2;
+        // 短 TTL（1 秒）：续期成功的判据 = 时钟走过原 TTL 后仍在。
+        if (!extStore.save("ext-1", session, std::chrono::milliseconds{1000}))
+            FAIL("save carl short-ttl failed");
+        session.accountId = "amy";
+        session.realmId = "";
+        session.userId = 3;
+        if (!extStore.save("ext-y1", session, std::chrono::minutes{5}))
+            FAIL("save amy#1 failed");
+        if (!extStore.save("ext-y2", session, std::chrono::minutes{5}))
+            FAIL("save amy#2 failed");
+        if (!extStore.save("exp-q", session, std::chrono::minutes{5}))
+            FAIL("save amy#3 failed");
+        if (!extStore.save("exp-r", session, std::chrono::minutes{5}))
+            FAIL("save amy#4 failed");
+
+        MachineAgent extAgent(std::make_unique<LocalHostProbe>(),
+                              std::make_unique<LocalProcessSupervisor>(),
+                              nullptr);
+        MachineDaemon::Config extConfig;
+        extConfig.listenPort = 0;
+        extConfig.auditSink = &extCenter;
+        extConfig.nodeOpsPolicy.trustedComponents = {1, 5, 20};
+        extConfig.roleBindings = {{1, AccessRole::ReadOnly},
+                                  {5, AccessRole::Operator},
+                                  {20, AccessRole::ReadOnly}};
+        extConfig.sessionStore = &extStore;
+        extConfig.sessionRenewalTtl = std::chrono::milliseconds{30000};
+        extConfig.sessionNotifyComponent = 20;
+        MachineDaemon extDaemon(extConfig, extAgent);
+        if (!extDaemon.start()) FAIL("ext daemon start failed");
+        auto extTick = [&extDaemon] { extDaemon.tick(); };
+
+        RawClient ro;
+        ro.component = 1;
+        if (!ro.connect(extDaemon.localPort())) FAIL("ro connect failed");
+        ro.settle(extTick);
+        RawClient op;
+        op.component = 5;
+        if (!op.connect(extDaemon.localPort())) FAIL("op connect failed");
+        op.settle(extTick);
+        RawClient extStranger;
+        extStranger.component = 2;
+        if (!extStranger.connect(extDaemon.localPort()))
+            FAIL("stranger connect failed");
+        extStranger.settle(extTick);
+
+        auto& extendAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_extend_sessions_accepted_count");
+        auto& extendRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_extend_sessions_rejected_count");
+        auto& notifyCount = foundation::MetricsRegistry::instance().counter(
+            "machine_session_notify_count");
+        const auto extAcc0 = extendAccepted.value();
+        const auto extRej0 = extendRejected.value();
+        const auto notify0 = notifyCount.value();
+
+        RuntimeInvocation resp;
+        // --- requestId 透传 + 通知丢弃臂：目标组件（20）尚未在 hub 注册，
+        //     推送即丢弃——best-effort 不计送达计数 ---
+        op.requestId = 4242;
+        if (!op.request(MachineMethod::kKickSession, payloadOf("kick-a"),
+                        extTick, resp))
+            FAIL("no response to requestId kick");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("requestId kick must succeed: " + payloadToString(resp));
+        op.requestId = 0;
+        if (extStore.load("kick-a").has_value())
+            FAIL("kick-a must be revoked for real");
+        if (notifyCount.value() != notify0)
+            FAIL("dropped notification must not count as delivered");
+
+        // --- requestId 入审计条目并从 machine.audit 面透出 ---
+        const auto& extTrail = extDaemon.auditLog();
+        if (extTrail.empty() || extTrail.front().command != "session.kick" ||
+            !extTrail.front().accepted || extTrail.front().requestId != 4242)
+            FAIL("kick audit entry must carry the correlation id");
+        if (!ro.request(MachineMethod::kAudit, {}, extTick, resp))
+            FAIL("no response to audit query");
+        if (resp.method != MachineMethod::kAuditOk ||
+            payloadToString(resp).find("\"request_id\":4242") ==
+                std::string::npos)
+            FAIL("audit JSON must expose request_id: " + payloadToString(resp));
+
+        // --- 续期：短 TTL 会话被刷到策略 TTL（30s），越过原 1s 仍活，
+        //     越过 30s 才没。用领域圈选（realm 选择臂与 amy 的空领域
+        //     行不走同一比较）——只命中 carl 的一条 ---
+        if (!op.request(MachineMethod::kExtendSessions,
+                        payloadOf("realm=realm-1"), extTick, resp))
+            FAIL("no response to carl extend");
+        if (resp.method != MachineMethod::kExtendSessionsOk ||
+            payloadToString(resp).find("\"requested\":1") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"extended\":[\"session(len=5)\"]") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"missing\":[]") == std::string::npos)
+            FAIL("carl extend must renew the single session: " +
+                 payloadToString(resp));
+        innerRedis->advanceClock(std::chrono::milliseconds{1500});
+        if (!extStore.load("ext-1").has_value())
+            FAIL("renewed session must outlive its original 1s ttl");
+        innerRedis->advanceClock(std::chrono::milliseconds{31000});
+        if (extStore.load("ext-1").has_value())
+            FAIL("renewed session must still respect the policy ttl");
+
+        // --- 续期部分失败臂：expire 失败一次的两个目标分列 missing，
+        //     幸存两个续期成功（两列各 ≥2 项）---
+        flaky->armFailExpire("exp-q");
+        flaky->armFailExpire("exp-r");
+        if (!op.request(MachineMethod::kExtendSessions,
+                        payloadOf("account=amy"), extTick, resp))
+            FAIL("no response to amy extend");
+        if (resp.method != MachineMethod::kExtendSessionsOk ||
+            payloadToString(resp).find("\"requested\":4") ==
+                std::string::npos ||
+            payloadToString(resp).find(
+                "\"extended\":[\"session(len=6)\",\"session(len=6)\"]") ==
+                std::string::npos ||
+            payloadToString(resp).find(
+                "\"missing\":[\"session(len=5)\",\"session(len=5)\"]") ==
+                std::string::npos)
+            FAIL("amy extend must split extended/missing: " +
+                 payloadToString(resp));
+        if (!extStore.load("ext-y1").has_value() ||
+            !extStore.load("exp-q").has_value())
+            FAIL("extend outcomes must leave every session in place");
+
+        // --- 拒绝臂：策略外 / 角色不足 / 畸形选择器（空、未知前缀）---
+        if (!extStranger.request(MachineMethod::kExtendSessions,
+                                 payloadOf("all"), extTick, resp))
+            FAIL("no response to stranger extend");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger extend must be refused by policy: " +
+                 payloadToString(resp));
+        if (!ro.request(MachineMethod::kExtendSessions, payloadOf("all"),
+                        extTick, resp))
+            FAIL("no response to ro extend");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly extend must be refused by role: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kExtendSessions, {}, extTick, resp))
+            FAIL("no response to empty-scope extend");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty selector must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kExtendSessions, payloadOf("bogus"),
+                        extTick, resp))
+            FAIL("no response to bogus-scope extend");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("bogus selector must be named malformed: " +
+                 payloadToString(resp));
+
+        // 入口关闭（主 daemon 未配续期策略）= 视同未知方法
+        if (!client.request(MachineMethod::kExtendSessions, payloadOf("all"),
+                            daemonTick, resp))
+            FAIL("no response to closed extend entry");
+        if (payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("closed extend entry must fall to unknown method: " +
+                 payloadToString(resp));
+
+        // --- 联动通知送达臂：目标组件先发一条请求自报注册，随后单踢
+        //     推送 machine.session.revoked（指纹脱敏、reason=operator.kick）---
+        RawClient notifyPeer;
+        notifyPeer.component = 20;
+        if (!notifyPeer.connect(extDaemon.localPort()))
+            FAIL("notify peer connect failed");
+        notifyPeer.settle(extTick);
+        if (!notifyPeer.request(MachineMethod::kListSessions, {}, extTick,
+                                resp))
+            FAIL("no response to notify peer registration listing");
+        if (resp.method != MachineMethod::kListSessionsOk)
+            FAIL("notify peer listing must succeed: " + payloadToString(resp));
+
+        auto pumpPush = [&extTick, &notifyPeer](RuntimeInvocation& out) {
+            for (int i = 0; i < 4000; ++i) {
+                extTick();
+                notifyPeer.transport->tick();
+                ::usleep(500);
+                if (notifyPeer.transport->receive(20, &out, 1) > 0) return true;
+            }
+            return false;
+        };
+
+        session.accountId = "carl";
+        session.realmId = "realm-1";
+        session.userId = 4;
+        if (!extStore.save("notify-me", session, std::chrono::minutes{5}))
+            FAIL("save notify-me failed");
+        if (!op.request(MachineMethod::kKickSession, payloadOf("notify-me"),
+                        extTick, resp))
+            FAIL("no response to notify-me kick");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("notify-me kick must succeed: " + payloadToString(resp));
+        RuntimeInvocation push;
+        if (!pumpPush(push))
+            FAIL("revocation push never arrived for single kick");
+        if (push.method != MachineMethod::kSessionRevoked ||
+            push.targetComponent != 20)
+            FAIL("push must target the notify component: " + push.method);
+        const std::string notice = payloadToString(push);
+        if (notice.find("\"account\":\"carl\"") == std::string::npos ||
+            notice.find("\"realm\":\"realm-1\"") == std::string::npos ||
+            notice.find("\"session\":\"session(len=9)\"") ==
+                std::string::npos ||
+            notice.find("\"reason\":\"operator.kick\"") == std::string::npos)
+            FAIL("push payload must carry account/realm/fingerprint/reason: " +
+                 notice);
+        if (notice.find("notify-me") != std::string::npos)
+            FAIL("push payload leaked the raw token: " + notice);
+
+        // --- 批量踢的推送 reason=operator.kick.batch（两个令牌各一条）---
+        session.accountId = "zed";
+        session.realmId = "";
+        session.userId = 5;
+        if (!extStore.save("b1", session, std::chrono::minutes{5}))
+            FAIL("save zed#1 failed");
+        if (!extStore.save("b2", session, std::chrono::minutes{5}))
+            FAIL("save zed#2 failed");
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("account=zed"),
+                        extTick, resp))
+            FAIL("no response to zed batch kick");
+        if (resp.method != MachineMethod::kKickSessionsOk ||
+            payloadToString(resp).find("\"revoked\":[\"session(len=2)\","
+                                       "\"session(len=2)\"]") ==
+                std::string::npos)
+            FAIL("zed batch kick must revoke both: " + payloadToString(resp));
+        bool sawBatchReason = false;
+        for (int i = 0; i < 2; ++i) {
+            if (!pumpPush(push))
+                FAIL("batch revocation push " + std::to_string(i) +
+                     " never arrived");
+            const std::string batchNotice = payloadToString(push);
+            if (batchNotice.find("\"account\":\"zed\"") == std::string::npos)
+                FAIL("batch push must carry the account: " + batchNotice);
+            if (batchNotice.find("b1") != std::string::npos ||
+                batchNotice.find("b2") != std::string::npos)
+                FAIL("batch push leaked a raw token: " + batchNotice);
+            if (batchNotice.find("\"reason\":\"operator.kick.batch\"") !=
+                std::string::npos)
+                sawBatchReason = true;
+        }
+        if (!sawBatchReason)
+            FAIL("batch pushes must carry the batch reason");
+
+        // --- 单踢竞争臂：load 之后、del 之前被"并发进程"摘除 → 具名拒绝，
+        //     重试（del 恢复）成功 ---
+        session.accountId = "bob";
+        session.userId = 6;
+        if (!extStore.save("race-t", session, std::chrono::minutes{5}))
+            FAIL("save bob failed");
+        flaky->armFailDel("race-t");
+        if (!op.request(MachineMethod::kKickSession, payloadOf("race-t"),
+                        extTick, resp))
+            FAIL("no response to racing kick");
+        if (resp.method != MachineMethod::kError ||
+            payloadToString(resp).find("vanished") == std::string::npos)
+            FAIL("racing kick must name the vanish window: " +
+                 payloadToString(resp));
+        if (!extStore.load("race-t").has_value())
+            FAIL("lost race must leave the session untouched");
+        if (!op.request(MachineMethod::kKickSession, payloadOf("race-t"),
+                        extTick, resp))
+            FAIL("no response to kick retry");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("kick retry must succeed after the race: " +
+                 payloadToString(resp));
+
+        // 计数增量（成对口径）：续期 2/4；通知送达 = 单踢 1 + 批量 2 +
+        // 竞争重试 1（kick-a 的丢弃不计）
+        if (extendAccepted.value() != extAcc0 + 2)
+            FAIL("extend accepted must be +2");
+        if (extendRejected.value() != extRej0 + 4)
+            FAIL("extend rejected must be +4");
+        if (notifyCount.value() != notify0 + 4)
+            FAIL("session notify delivered must be +4");
+
+        // 审计：12 次尝试全留痕（单踢 3 + 续期 2 + 续期拒绝 4 + 枚举 1 +
+        // 批量踢 1 + 竞争拒绝 1），requestId 只在携带的那条上非零，令牌
+        // 原文零泄露（逐条 args 扫描）
+        if (extTrail.size() != 12)
+            FAIL("all twelve attempts must be audited, got " +
+                 std::to_string(extTrail.size()));
+        bool sawCarlExtend = false;
+        bool sawAmyExtend = false;
+        for (const auto& entry : extTrail) {
+            if (entry.command == "sessions.extend" && entry.accepted &&
+                entry.args == "scope=realm=realm-1 extended=1 missing=0")
+                sawCarlExtend = true;
+            if (entry.command == "sessions.extend" && entry.accepted &&
+                entry.args == "scope=account=amy extended=2 missing=2")
+                sawAmyExtend = true;
+            if (&entry != &extTrail.front() && entry.requestId != 0)
+                FAIL("only the correlated request may carry a request id");
+            if (entry.args.find("kick-a") != std::string::npos ||
+                entry.args.find("ext-1") != std::string::npos ||
+                entry.args.find("ext-y1") != std::string::npos ||
+                entry.args.find("exp-q") != std::string::npos ||
+                entry.args.find("notify-me") != std::string::npos ||
+                entry.args.find("race-t") != std::string::npos)
+                FAIL("audit trail leaked a raw token: " + entry.args);
+        }
+        if (!sawCarlExtend || !sawAmyExtend)
+            FAIL("accepted extends must record scope + split counts");
+
+        extDaemon.stop();
         PASS();
     }
 

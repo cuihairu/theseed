@@ -19,6 +19,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace theseed::login {
@@ -80,6 +81,15 @@ public:
                              ClientMessageType type,
                              std::span<const std::byte> payload);
 
+    // 踢人联动处理面（§8 Phase 2）：按账号+领域关闭匹配的活跃登录连接
+    //（MachineDaemon 吊销会话后推送 machine.session.revoked，载荷即
+    // account/realm——本进程据本地绑定表定位连接）。返回关闭数。
+    // 注意：client 面是 ClientProtocol（非 RuntimeInvocation 分发面），
+    // 控制面通知通道接入 LoginApp 的接线（hub 入站分发）留待后续——
+    // 本方法即该通道的落点，通道建好即调。
+    std::size_t handleSessionRevoked(const std::string& accountId,
+                                     const std::string& realmId);
+
 private:
     void acceptConnections();
     void onClientMessage(ClientSession* session,
@@ -102,6 +112,15 @@ private:
     runtime::TcpListener listener_;
     std::shared_ptr<runtime::TransportHub> hub_;
     std::vector<std::unique_ptr<ClientSession>> sessions_;
+    // 已认证连接的本地绑定（账号/领域）：踢人联动的定位面。键为
+    // sessions_ 内连接的指针——cleanupDisconnected 与其同步摘除，存活
+    // 期与 sessions_ 元素一致（单线程假设与 ClientSession 同）。键非
+    // const：命中即 close()（通知联动只关连接，不碰会话其余状态）。
+    struct LoginBinding final {
+        std::string account;
+        std::string realm;  // 登录时为空，SelectRealm 成功后补
+    };
+    std::unordered_map<ClientSession*, LoginBinding> bindings_;
     runtime::TransportStatsCollector transportStatsCollector_;
 
     std::unique_ptr<ops::OpsInspector> opsInspector_;

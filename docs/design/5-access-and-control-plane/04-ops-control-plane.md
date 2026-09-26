@@ -446,7 +446,9 @@ MVP 已落地：
     ——≥Operator；machine.shutdown（≙ §6.1 controlled shutdown，
     应答出站后 tick 末优雅停机）——≥Admin；
   - 操作审计：全部尝试（含拒绝）入 daemon 本地环形 + 中心聚合；
-    §6.2 七字段之六已对齐，requestId 仍缺（如实边界）。
+    §6.2 七字段全对齐——requestId 由 RuntimeInvocation 帧携带
+    （u64，0 = 未携带），逐请求透传入审计条目与 machine.audit JSON
+    的 request_id 字段。
 
 MVP 内未落地（如实降级）：
   - statusCheck 未单独建：machine.snapshot 即只读探活语义；
@@ -459,12 +461,26 @@ Phase 2 已落地切片（会话运维命令面，2026-09-26）：
     供运维圈选；
   - machine.kick-sessions（≥Operator，≙ 批量 kick）：作用域选择器
     all | account=<id> | realm=<id>（指纹不可逆，不按令牌列表批量），
-    逐个吊销，revoked/missing 分列回给调用方；部分失败仍入审计。
+    逐个吊销，revoked/missing 分列回给调用方；部分失败仍入审计；
+  - machine.extend-sessions（≥Operator，≙ 会话续期策略）：同款作用域
+    选择器，把选中会话 refresh 到策略 TTL（Config.sessionRenewalTtl，
+    策略值非调用方临时指定，扩策略须改配置评审——与 §6.3 白名单同
+    纪律；0 = 入口关闭视同未知方法）；extended/missing 分列；
+  - 踢人联动通知（≙ kick 联动）：单踢与批量踢吊销成功后向
+    Config.sessionNotifyComponent 推送 machine.session.revoked（载荷
+    {account, realm, session=指纹, reason=operator.kick |
+    operator.kick.batch}）；best-effort——无重试/无确认，目标未注册
+    即丢弃告警（吊销事实以存储为准，重连后可经 list-sessions 对账）；
+    令牌原文不出进程。LoginApp 侧落点 handleSessionRevoked（按
+    account+realm 关闭匹配的活跃登录连接，绑定表随断连清扫同步出表）。
 
 Phase 2 仍开放：
   - 转发聚合 / entity-type diagnostics；
-  - 更完整的登录与会话运维命令（其余部分：会话续期策略、踢人联动
-    通知等）。
+  - 通知通道的 LoginApp 生产接线：client 面是 ClientProtocol（非
+    RuntimeInvocation 分发面），LoginApp 的 hub 入站分发面建好后
+    notifySessionRevoked 的推送即接 handleSessionRevoked（落点已备）；
+  - 更完整的登录与会话运维命令其余部分（clear temporary bans 仍因
+    无封禁存储前置不做，沿既有边界）。
 ```
 
 ---

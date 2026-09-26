@@ -3,6 +3,7 @@
 #include "theseed/runtime/RuntimeTypes.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -14,6 +15,10 @@ struct RuntimeInvocation final {
     EntityId entityId = 0;
     ComponentId sourceComponent = 0;
     ComponentId targetComponent = 0;
+    // §6.2 审计关联 id：由发起方（运维控制台）铸造，逐请求唯一；0 =
+    // 请求未携带（进程内默认调用方不铸 id）。跨组件透传，接收侧入审计
+    // 条目用于请求↔动作对账。无版本协商——同仓同版本对端共同演进。
+    std::uint64_t requestId = 0;
     std::string entityType;
     std::string method;
     DeliveryClass deliveryClass = DeliveryClass::ORDERED_RELIABLE;

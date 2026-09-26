@@ -40,11 +40,13 @@ std::string auditEntryJson(const AuditEntry& entry) {
     const std::string acceptedField =
         std::string("\"accepted\":") + (entry.accepted ? "true" : "false");
     const std::string okField = std::string("\"ok\":") + (entry.ok ? "true" : "false");
+    const std::string requestField =
+        "\"request_id\":" + std::to_string(entry.requestId);
 
     std::ostringstream out;
     out << "{\"ts\":" << millis << ",\"source\":" << entry.source << ","
-        << commandField << "," << argsField << "," << acceptedField << ","
-        << okField << "}";
+        << requestField << "," << commandField << "," << argsField << ","
+        << acceptedField << "," << okField << "}";
     return out.str();
 }
 
@@ -122,6 +124,14 @@ constexpr const char* kKickSessionsRejectedCount =
     "machine_kick_sessions_rejected_count";
 constexpr const char* kListSessionsCommand = "sessions.list";
 constexpr const char* kKickSessionsCommand = "sessions.kick";
+// §8 Phase 2 续期（extend-sessions）一对计数 + 联动通知送达计数
+//（通知无接受/拒绝语义——best-effort，只计送达）。
+constexpr const char* kExtendSessionsAcceptedCount =
+    "machine_extend_sessions_accepted_count";
+constexpr const char* kExtendSessionsRejectedCount =
+    "machine_extend_sessions_rejected_count";
+constexpr const char* kSessionNotifyCount = "machine_session_notify_count";
+constexpr const char* kExtendSessionsCommand = "sessions.extend";
 
 // §6.3 禁改四类（协议定义 / 持久化 schema / entity property flags /
 // 迁移语义）：键前缀 → 类别名。命中即拒绝且指认类别——在线修改会破坏
@@ -548,6 +558,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
             AuditEntry entry;
             entry.timestamp = std::chrono::system_clock::now();
             entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
             entry.command = kSnapshotCommand;
             entry.accepted = false;
             appendAudit(entry);
@@ -573,6 +584,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
             AuditEntry entry;
             entry.timestamp = std::chrono::system_clock::now();
             entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
             entry.command = kAuditQueryCommand;
             entry.accepted = false;
             appendAudit(entry);
@@ -602,6 +614,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         AuditEntry entry;
         entry.timestamp = std::chrono::system_clock::now();
         entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
         if (separator == inv.payload.end()) {
             entry.accepted = false;
             appendAudit(entry);
@@ -762,6 +775,14 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // 续期入口关闭（未配 sessionStore 或续期策略 TTL 为 0）= 视同未知
+    // 方法——无策略即无命令（缺省安全）。
+    if (sessionEntryOpen && config_.sessionRenewalTtl.count() > 0 &&
+        inv.method == MachineMethod::kExtendSessions) {
+        handleExtendSessions(inv);
+        return;
+    }
+
     if (inv.method == MachineMethod::kSetDraining) {
         handleSetDraining(inv);
         return;
@@ -776,6 +797,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
     AuditEntry rejected;
     rejected.timestamp = std::chrono::system_clock::now();
     rejected.source = inv.sourceComponent;
+    rejected.requestId = inv.requestId;
     rejected.command = inv.method;
     appendAudit(rejected);
     foundation::logWarn("machine.unknown_method", {{"method", inv.method}});
@@ -784,7 +806,8 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
                  std::span<const std::byte>(reason));
 }
 
-void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {    std::ostringstream out;
+void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {
+    std::ostringstream out;
     out << "[";
     for (std::size_t index = 0; index < auditLog_.size(); ++index) {
         if (index != 0) {
@@ -817,6 +840,7 @@ void MachineDaemon::handleProcesses(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kGovernListCommand;
 
     if (!isGovernTrustedSource(inv.sourceComponent)) {
@@ -890,6 +914,7 @@ void MachineDaemon::handleTerminate(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kGovernKillCommand;
 
     // 拒绝臂共用出口：审计先行（与 execute 时序一致），再计数/span/日志
@@ -998,6 +1023,7 @@ void MachineDaemon::handleProfileTrigger(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kProfileTriggerCommand;
 
     // 拒绝臂共用出口：审计先行，再计数/span/日志与错误响应。
@@ -1054,6 +1080,7 @@ void MachineDaemon::handleProfiles(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kProfileListCommand;
 
     if (!isDiagnosticsAccessAuthorized(inv.sourceComponent)) {
@@ -1117,6 +1144,7 @@ void MachineDaemon::handleProfileDownload(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kProfileDownloadCommand;
 
     const auto parsed = parseHandlePayload(inv.payload);
@@ -1179,6 +1207,7 @@ void MachineDaemon::handleConfigApply(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kConfigApplyCommand;
 
     // 拒绝臂共用出口：审计先行，再计数/span/日志与错误响应。
@@ -1262,6 +1291,7 @@ void MachineDaemon::handleKickSession(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kKickCommand;
 
     const auto reject = [&](const std::string& reason) {
@@ -1300,10 +1330,18 @@ void MachineDaemon::handleKickSession(runtime::RuntimeInvocation& inv) {
         return;
     }
 
-    // 吊销即生效：SessionStore::revoke 对未知令牌返回 false——与治理
-    // 的未知 pid 同口径，拒绝并具名（不泄漏令牌空间信息，指纹同留）。
-    if (!config_.sessionStore->revoke(token)) {
+    // 吊销前先取会话行：联动通知需要 account/realm（指纹已有）。行取
+    // 不到 = 未知令牌，与吊销失败同口径具名拒绝。
+    const auto session = config_.sessionStore->load(token);
+    if (!session) {
         reject("kick session rejected: unknown session token");
+        return;
+    }
+
+    // 吊销即生效：revoke 对未知令牌返回 false（读取后、吊销前被并发
+    // 摘除的窗口）——具名区分于"从未存在"，两臂都如实入审计。
+    if (!config_.sessionStore->revoke(token)) {
+        reject("kick session rejected: session vanished before revocation");
         return;
     }
 
@@ -1319,6 +1357,8 @@ void MachineDaemon::handleKickSession(runtime::RuntimeInvocation& inv) {
     const std::byte result = std::byte{0x01};
     sendResponse(inv.sourceComponent, MachineMethod::kKickSessionOk,
                  std::span<const std::byte>(&result, 1));
+    notifySessionRevoked(session->accountId, session->realmId, entry.args,
+                         "operator.kick");
 }
 
 // §8 Phase 2 会话枚举（inspect 面，≥ReadOnly）：经 SessionStore 二级
@@ -1330,6 +1370,7 @@ void MachineDaemon::handleListSessions(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kListSessionsCommand;
 
     const auto reject = [&](const std::string& reason) {
@@ -1402,6 +1443,7 @@ void MachineDaemon::handleKickSessions(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kKickSessionsCommand;
 
     const auto reject = [&](const std::string& reason) {
@@ -1458,7 +1500,12 @@ void MachineDaemon::handleKickSessions(runtime::RuntimeInvocation& inv) {
         }
         ++requested;
         if (config_.sessionStore->revoke(view.token)) {
-            revoked.push_back(redactSessionToken(view.token));
+            const std::string fingerprint = redactSessionToken(view.token);
+            revoked.push_back(fingerprint);
+            // 联动通知：批量臂逐令牌推送（各行自带 account/realm，接收方
+            // 按行定位本地会话；best-effort，不因送达失败回滚吊销）。
+            notifySessionRevoked(view.accountId, view.realmId, fingerprint,
+                                 "operator.kick.batch");
         } else {
             // 枚举与吊销之间被并发摘除：按失败列报，指纹同款脱敏。
             missing.push_back(redactSessionToken(view.token));
@@ -1502,6 +1549,120 @@ void MachineDaemon::handleKickSessions(runtime::RuntimeInvocation& inv) {
                  std::span<const std::byte>(json));
 }
 
+// §8 Phase 2 会话续期（operate 面，≥Operator，≙ 续期策略）：把选中
+// 会话 refresh 到续期策略 TTL（Config.sessionRenewalTtl——策略值非
+// 调用方临时指定，扩策略须改配置评审，与 §6.3 白名单同纪律）。用途：
+// 维护窗口前批量滑动过期，防无关批量掉线。选择器与应答口径同
+// kick-sessions（extended/missing 分列，指纹脱敏）。
+void MachineDaemon::handleExtendSessions(runtime::RuntimeInvocation& inv) {
+    foundation::SpanScope span("machine.extend-sessions");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
+    entry.command = kExtendSessionsCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kExtendSessionsRejectedCount,
+                            "machine.session.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    // 空载荷的 data() 可能为空指针，先护栏再取字节（与 kick 族同纪律）。
+    std::string selector;
+    if (!inv.payload.empty()) {
+        selector.assign(reinterpret_cast<const char*>(inv.payload.data()),
+                        inv.payload.size());
+    }
+    const SessionScope scope = parseSessionScope(selector);
+    if (scope.valid) {
+        // args 走 key=value 原文（序列化时由 auditEntryJson 统一转义）
+        entry.args = "scope=" + selector;
+    }
+    if (!scope.valid) {
+        reject("extend sessions rejected: malformed scope selector "
+               "(expected all | account=<id> | realm=<id>)");
+        return;
+    }
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("extend sessions rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门（叠加在来源白名单之上）：会话续期是 operate 面。
+    if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+        reject("extend sessions rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires Operator role");
+        return;
+    }
+
+    const auto views = config_.sessionStore->listSessions();
+    std::vector<std::string> extended;
+    std::vector<std::string> missing;
+    std::size_t requested = 0;
+    for (const auto& view : views) {
+        const bool matches = scope.all ||
+                             (scope.byAccount ? view.accountId == scope.value
+                                              : view.realmId == scope.value);
+        if (!matches) {
+            continue;
+        }
+        ++requested;
+        if (config_.sessionStore->refresh(view.token,
+                                          config_.sessionRenewalTtl)) {
+            extended.push_back(redactSessionToken(view.token));
+        } else {
+            // 枚举与续期之间被并发摘除/过期：按失败列报，指纹同款脱敏。
+            missing.push_back(redactSessionToken(view.token));
+        }
+    }
+
+    // 应答 JSON：与 kick-sessions 同形（extended 列替换 revoked 列）。
+    std::ostringstream out;
+    out << "{\"requested\":" << requested << ",\"extended\":[";
+    for (std::size_t i = 0; i < extended.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << '"' << extended[i] << '"';
+    }
+    out << "],\"missing\":[";
+    for (std::size_t i = 0; i < missing.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << '"' << missing[i] << '"';
+    }
+    out << "]}";
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = "scope=" + selector +
+                 " extended=" + std::to_string(extended.size()) +
+                 " missing=" + std::to_string(missing.size());
+    appendAudit(entry);
+    telemetryCounter(kExtendSessionsAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("requested", static_cast<std::int64_t>(requested));
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute scopeAttr = {"scope", selector};
+    foundation::logInfo("machine.extend-sessions", {sourceAttr, scopeAttr});
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kExtendSessionsOk,
+                 std::span<const std::byte>(json));
+}
+
 // §6.1 set draining（Operator 级）：翻转节点排水位。agent 是节点状态
 // 持有方——置位后快照 RPC（inspect 读侧）与周期上报（中心聚合）同一
 // 数据源透出，中心侧 latest/snapshotNodes 即见。
@@ -1513,6 +1674,7 @@ void MachineDaemon::handleSetDraining(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kDrainCommand;
 
     const auto reject = [&](const std::string& reason) {
@@ -1582,6 +1744,7 @@ void MachineDaemon::handleShutdown(runtime::RuntimeInvocation& inv) {
     AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = inv.sourceComponent;
+    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
     entry.command = kShutdownCommand;
 
     const auto reject = [&](const std::string& reason) {
@@ -1621,6 +1784,46 @@ void MachineDaemon::handleShutdown(runtime::RuntimeInvocation& inv) {
     const std::byte result = std::byte{0x01};
     sendResponse(inv.sourceComponent, MachineMethod::kShutdownOk,
                  std::span<const std::byte>(&result, 1));
+}
+
+// 踢人联动通知（§8 Phase 2）：吊销成功后推给 sessionNotifyComponent。
+// best-effort——目标未连接即丢弃并告警（无重试/确认：吊销事实以存储为
+// 准，通知只是联动提示；重连后接收方可经 machine.list-sessions 对账）。
+void MachineDaemon::notifySessionRevoked(const std::string& accountId,
+                                         const std::string& realmId,
+                                         const std::string& tokenFingerprint,
+                                         const char* reason) {
+    if (config_.sessionNotifyComponent == 0) {
+        return;  // 未配置通知目标：推送关闭（不是错误，不告警）
+    }
+    // 先拼字段再入流：多行 << 链会让 gcc 把覆盖计数错误归因到续行
+    const std::string accountField =
+        "\"account\":\"" + escapeJsonString(accountId) + "\"";
+    const std::string realmField =
+        "\"realm\":\"" + escapeJsonString(realmId) + "\"";
+    const std::string sessionField =
+        "\"session\":\"" + escapeJsonString(tokenFingerprint) + "\"";
+    const std::string reasonField =
+        std::string("\"reason\":\"") + reason + "\"";
+    std::ostringstream out;
+    out << "{" << accountField << "," << realmField << "," << sessionField
+        << "," << reasonField << "}";
+
+    runtime::RuntimeInvocation notice;
+    notice.sourceComponent = config_.componentId;
+    notice.targetComponent = config_.sessionNotifyComponent;
+    notice.entityId = 0;
+    notice.method = MachineMethod::kSessionRevoked;
+    notice.payload = toBytes(out.str());
+    if (hub_->send(std::move(notice)) == runtime::SendResult::Accepted) {
+        hub_->flush();
+        telemetryCounter(kSessionNotifyCount).increment();
+        return;
+    }
+    const auto targetValue =
+        static_cast<std::int64_t>(config_.sessionNotifyComponent);
+    const foundation::LogAttribute targetAttr = {"target", targetValue};
+    foundation::logWarn("machine.session.notify.dropped", {targetAttr});
 }
 
 void MachineDaemon::sendResponse(runtime::ComponentId target,

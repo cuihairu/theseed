@@ -8,15 +8,17 @@
 
 namespace theseed::control::machine {
 
-// 受控命令审计条目（Ops Control Plane MVP 的"操作审计"；04 §6.2 的 MVP
-// 映射：operatorId ≙ source 组件 id，target ≙ 聚合侧 nodeId，result ≙
-// accepted+ok；requestId 待 RuntimeInvocation 协议层支持后补）。
+// 受控命令审计条目（Ops Control Plane MVP 的"操作审计"；04 §6.2 的映射：
+// operatorId ≙ source 组件 id，target ≙ 聚合侧 nodeId，result ≙
+// accepted+ok，requestId ≙ RuntimeInvocation.requestId 透传——0 = 请求
+// 未携带（调用方未铸 id，进程内默认调用常态））。
 // execute 尝试与协议层/策略层拒绝各记一条；snapshot 只读不记（避免噪声）。
 // 自 MachineDaemon.h 上提（与 NodeReport.h 同法）：daemon 生产与中心聚合
 // 共用同一数据形状。
 struct AuditEntry {
     std::chrono::system_clock::time_point timestamp{};
     runtime::ComponentId source = 0;
+    std::uint64_t requestId = 0;  // §6.2 关联 id（见上；0 = 未携带）
     std::string command;   // 未知方法请求记 method 名
     std::string args;
     bool accepted = false;  // false = 拒绝（畸形载荷/空命令/策略门/未知方法）

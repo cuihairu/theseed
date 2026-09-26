@@ -40,6 +40,7 @@ static void testRoundTripBasic() {
     RuntimeInvocation original;
     original.entityId = 12345;
     original.targetComponent = 42;
+    original.requestId = 0x123456789ABCDEF0;
     original.entityType = "Avatar";
     original.method = "onDamage";
     original.deliveryClass = DeliveryClass::ORDERED_RELIABLE;
@@ -50,6 +51,7 @@ static void testRoundTripBasic() {
 
     bool ok = decoded.entityId == original.entityId
            && decoded.targetComponent == original.targetComponent
+           && decoded.requestId == original.requestId
            && decoded.entityType == original.entityType
            && decoded.method == original.method
            && decoded.deliveryClass == original.deliveryClass
@@ -74,6 +76,7 @@ static void testRoundTripEmptyPayload() {
 
     bool ok = decoded.entityId == 1
            && decoded.targetComponent == 2
+           && decoded.requestId == 0  // 未铸 id：默认值经编解码不漂移
            && decoded.entityType == "Item"
            && decoded.method == "tick"
            && decoded.deliveryClass == DeliveryClass::UNORDERED_LOSSY

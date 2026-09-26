@@ -653,6 +653,108 @@ int main() {
     }
     PASS();
 
+    // --- §8 Phase 2 踢人联动：吊销通知（account+realm）关本地登录连接 ---
+    TEST("session revocation linkage closes matching live logins");
+    {
+        LoginAppConfig config;
+        config.authType = "null";
+        RealmInfo r;
+        r.realmId = "default";
+        r.name = "Default";
+        r.status = "smooth";
+        r.host = "127.0.0.1";
+        r.port = 20000;
+        config.realms.push_back(r);
+        LoginApp app(std::move(config));
+
+        // 单字符串载荷（SelectRealm 的 realmId，长度前缀小端——与
+        // encodeLoginPayload 的 appendStr 同格式）。
+        auto stringPayload = [](const std::string& s) {
+            std::vector<std::byte> out;
+            const auto len = static_cast<std::uint32_t>(s.size());
+            out.push_back(std::byte(len & 0xFF));
+            out.push_back(std::byte((len >> 8) & 0xFF));
+            out.push_back(std::byte((len >> 16) & 0xFF));
+            out.push_back(std::byte((len >> 24) & 0xFF));
+            for (const char c : s) out.push_back(static_cast<std::byte>(c));
+            return out;
+        };
+        auto driveLogin = [&app](MockClient& client, ClientSession& session,
+                                 const std::string& account) {
+            session.setMessageCallback(
+                [&app, &session](ClientMessageType type,
+                                 std::span<const std::byte> payload) {
+                    app.handleClientMessage(&session, type, payload);
+                });
+            auto payload = encodeLoginPayload(account, "pw");
+            client.clearReceived();
+            client.sendToServer(
+                ClientMessageType::Login,
+                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+            ClientMessageType type{};
+            std::span<const std::byte> body;
+            return client.parseResponse(type, body) &&
+                   type == ClientMessageType::LoginResponse &&
+                   !body.empty() && std::to_integer<std::uint8_t>(body[0]) != 0;
+        };
+
+        // 块级存活的两个登录连接（绑定表键的生命周期与块一致）
+        MockClient carlClient;
+        ClientSession carlSession(carlClient.serverPipe);
+        if (!driveLogin(carlClient, carlSession, "carl"))
+            FAIL("carl login failed");
+        MockClient amyClient;
+        ClientSession amySession(amyClient.serverPipe);
+        if (!driveLogin(amyClient, amySession, "amy"))
+            FAIL("amy login failed");
+
+        // carl 选领域 → 绑定领域补齐；amy 不选（绑定领域保持空串）
+        auto realmPayload = stringPayload("default");
+        carlClient.clearReceived();
+        carlClient.sendToServer(
+            ClientMessageType::SelectRealm,
+            std::span<const std::byte>(realmPayload.data(),
+                                       realmPayload.size()));
+        carlClient.pump();
+        carlSession.pump();
+        carlClient.pump();
+        ClientMessageType realmType{};
+        std::span<const std::byte> realmBody;
+        if (!carlClient.parseResponse(realmType, realmBody) ||
+            realmType != ClientMessageType::SelectRealmResponse)
+            FAIL("carl select realm failed");
+
+        auto& revokedCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_session_revoked_count");
+        const auto revoked0 = revokedCounter.value();
+
+        // 账号+领域精确命中：carl@default 关一条
+        if (app.handleSessionRevoked("carl", "default") != 1)
+            FAIL("carl@default must close exactly one live login");
+        if (carlSession.isConnected()) FAIL("carl session must be closed");
+        if (!amySession.isConnected()) FAIL("amy must stay connected");
+        // 空领域命中未选领域的 amy
+        if (app.handleSessionRevoked("amy", "") != 1)
+            FAIL("amy with empty realm must close");
+        // 已断/无匹配不再计数
+        if (app.handleSessionRevoked("carl", "default") != 0)
+            FAIL("already-closed login must not recount");
+        if (app.handleSessionRevoked("nobody", "") != 0)
+            FAIL("no-match must close nothing");
+        // 领域不匹配不应命中
+        if (app.handleSessionRevoked("carl", "other") != 0)
+            FAIL("realm mismatch must not close");
+
+        if (revokedCounter.value() != revoked0 + 2)
+            FAIL("revocation counter must be +2");
+        // 绑定随连接清扫出表的真臂在 E2E 测试（真实 TCP 生命周期）覆盖：
+        // 本桩测试的会话不经 acceptConnections 进 sessions_。
+    }
+    PASS();
+
     std::cout << "\nAll LoginApp tests passed!" << std::endl;
     return 0;
 }

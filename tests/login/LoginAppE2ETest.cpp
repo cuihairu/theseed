@@ -499,6 +499,57 @@ int main() {
         dbApp.stop();
     }
 
+    // ------------------------------------------------------------------
+    // 场景 E：踢人联动（04 §8 Phase 2）——真实 TCP 生命周期：吊销关掉
+    // 活登录，tick 清扫把连接与绑定一起出表（不留悬垂绑定键）
+    // ------------------------------------------------------------------
+    {
+        const std::uint16_t listenPort = freePort();
+        if (listenPort == 0) FAIL("cannot find a free port");
+
+        LoginAppConfig cfg;
+        cfg.listenHost = "127.0.0.1";
+        cfg.listenPort = listenPort;
+        cfg.authType = "null";
+
+        LoginApp app(std::move(cfg));
+        TEST("init (revocation linkage)");
+        app.init();
+        PASS();
+
+        FrameClient client;
+        if (!client.connect(listenPort)) FAIL("client connect failed");
+        auto appTick = [&app] { app.tick(); };
+        for (int i = 0; i < 40; ++i) {
+            appTick();
+            client.conn->pump();
+            usleep(2000);
+        }
+
+        ClientMessageType type;
+        std::vector<std::byte> payload;
+        TEST("linkage setup: real-tcp login");
+        if (!client.request(appTick, ClientMessageType::Login,
+                            encodeLoginRequest("link", "x"), type, payload))
+            FAIL("no response to Login");
+        ParsedLoginResponse lr;
+        if (!decodeLoginResponse(payload, lr) || !lr.success)
+            FAIL("linkage login failed: " + lr.error);
+        PASS();
+
+        TEST("revocation closes the live login and cleanup drops the binding");
+        if (app.handleSessionRevoked("link", "") != 1)
+            FAIL("revocation must close the live login");
+        for (int i = 0; i < 40; ++i) {  // 等 close 传播 + 清扫收敛
+            appTick();
+            client.conn->pump();
+            usleep(2000);
+        }
+        if (app.handleSessionRevoked("link", "") != 0)
+            FAIL("cleaned-up binding must not match again");
+        PASS();
+    }
+
     std::cout << "\nAll LoginApp E2E tests passed!" << std::endl;
     return 0;
 }

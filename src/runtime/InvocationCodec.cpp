@@ -14,6 +14,9 @@ std::vector<std::byte> InvocationCodec::encode(const RuntimeInvocation& invocati
     stream.writeUint64(invocation.entityId);
     stream.writeUint32(invocation.sourceComponent);
     stream.writeUint32(invocation.targetComponent);
+    // requestId：紧跟组件三元组（关联字段聚在一起；同仓对端共同演进，
+    // 无兼容负担——见 RuntimeInvocation::requestId 注释）。
+    stream.writeUint64(invocation.requestId);
     stream.writeString(invocation.entityType);
     stream.writeString(invocation.method);
     stream.writeUint8(static_cast<std::uint8_t>(invocation.deliveryClass));
@@ -37,6 +40,7 @@ RuntimeInvocation InvocationCodec::decode(std::span<const std::byte> data) {
     invocation.entityId = stream.readUint64();
     invocation.sourceComponent = stream.readUint32();
     invocation.targetComponent = stream.readUint32();
+    invocation.requestId = stream.readUint64();
     invocation.entityType = stream.readString();
     invocation.method = stream.readString();
     invocation.deliveryClass = static_cast<DeliveryClass>(stream.readUint8());

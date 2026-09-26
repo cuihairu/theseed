@@ -308,6 +308,14 @@ void LoginApp::handleLogin(ClientSession* session,
         }
     }
 
+    if (resp.success) {
+        // 联动绑定：登录成功即登记（领域为空——SelectRealm 成功后补）。
+        // 登录阶段 realm 为空与会话存储行同口径（persistSession 亦存空
+        // 领域），踢人通知按 account+realm 精确对上。
+        LoginBinding binding;
+        binding.account = account;
+        bindings_[session] = std::move(binding);
+    }
     auto data = LoginProtocol::encodeLoginResponse(resp);
     session->send(std::span<const std::byte>(data.data(), data.size()));
 }
@@ -333,6 +341,12 @@ void LoginApp::handleSelectRealm(ClientSession* session, const std::string& real
         resp.host = found->host;
         resp.port = found->port;
         resp.token = SessionToken::issue("", found->realmId);
+        // 联动绑定补领域：只在已登录连接上更新（未登录的选领域不建绑定
+        //——绑定以登录为准，防 operator[] 给陌生键开洞）。
+        const auto bound = bindings_.find(session);
+        if (bound != bindings_.end()) {
+            bound->second.realm = realmId;
+        }
     } else {
         resp.success = false;
         resp.error = "realm not found";
@@ -345,10 +359,38 @@ void LoginApp::handleSelectRealm(ClientSession* session, const std::string& real
 void LoginApp::cleanupDisconnected() {
     sessions_.erase(
         std::remove_if(sessions_.begin(), sessions_.end(),
-                       [](const std::unique_ptr<ClientSession>& s) {
-                           return !s->isConnected();
+                       [this](const std::unique_ptr<ClientSession>& s) {
+                           if (!s->isConnected()) {
+                               // 绑定表与连接同寿：摘除连接即摘除绑定，
+                               // 不留悬垂键（后续 handleSessionRevoked
+                               // 不会再碰它）。
+                               bindings_.erase(s.get());
+                               return true;
+                           }
+                           return false;
                        }),
         sessions_.end());
+}
+
+std::size_t LoginApp::handleSessionRevoked(const std::string& accountId,
+                                            const std::string& realmId) {
+    std::size_t closed = 0;
+    for (auto& [session, binding] : bindings_) {
+        // 只关活跃连接（已断开的留待 cleanupDisconnected 收敛）；领域
+        // 精确匹配——空领域 = 登录后未选领域，与存储行同形。
+        if (session->isConnected() && binding.account == accountId &&
+            binding.realm == realmId) {
+            session->close();
+            ++closed;
+        }
+    }
+    if (closed > 0) {
+        theseed::foundation::MetricsRegistry::instance()
+            .counter("login_session_revoked_count",
+                     "live logins closed by session revocation linkage")
+            .increment(static_cast<std::uint64_t>(closed));
+    }
+    return closed;
 }
 
 }  // namespace theseed::login

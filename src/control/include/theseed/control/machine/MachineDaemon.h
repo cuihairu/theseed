@@ -92,6 +92,24 @@ inline constexpr const char* kListSessions = "machine.list-sessions";
 inline constexpr const char* kListSessionsOk = "machine.list-sessions.ok";
 inline constexpr const char* kKickSessions = "machine.kick-sessions";
 inline constexpr const char* kKickSessionsOk = "machine.kick-sessions.ok";
+// §8 Phase 2 会话续期（维护窗口防批量掉线）：
+//   machine.extend-sessions → machine.extend-sessions.ok
+//                     请求 payload = 作用域选择器（同 kick-sessions：
+//                     all | account=<id> | realm=<id>）
+//                     payload = {"requested":N,"extended":[指纹…],
+//                     "missing":[指纹…]}——逐个 refresh 到续期策略 TTL
+//                     （Config.sessionRenewalTtl；0 = 入口关闭）
+// 踢人联动通知（§8 Phase 2，daemon 主动推送，best-effort）：
+//   machine.session.revoked（无应答，非请求-应答）：吊销成功后推给
+//                     Config.sessionNotifyComponent（0 = 不推送）。
+//                     payload = {"account":…,"realm":…,"session":
+//                     "session(len=N)","reason":"operator.kick" |
+//                     "operator.kick.batch"}——令牌原文不出进程，
+//                     account+realm 供接收方定位本地会话；送达不保证
+//                     （无重试/确认——吊销事实以存储为准，通知是联动提示）
+inline constexpr const char* kExtendSessions = "machine.extend-sessions";
+inline constexpr const char* kExtendSessionsOk = "machine.extend-sessions.ok";
+inline constexpr const char* kSessionRevoked = "machine.session.revoked";
 // 统一错误响应：payload 为短原因串（可读，供人工诊断与测试断言）。
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
@@ -136,10 +154,10 @@ inline constexpr const char* kError = "machine.error";
 // 权限分级（04 §6.1）：全部方法先过各自策略白名单（若该面有策略门），
 // 再过角色门（Config.roleBindings，见 AccessControl.h）——inspect 面
 // （snapshot/audit/清单/剖面下载/会话枚举）需 ReadOnly 及以上，operate
-// 面（execute/采样触发/kick-session/kick-sessions/set-draining）需
-// Operator 及以上，administer 面（terminate/config apply/shutdown）需
-// Admin。未绑定角色的调用方无任何动作可用；角色拒绝与策略拒绝同权
-// 留痕（审计 + 计数 + kError 原因串）。
+// 面（execute/采样触发/kick-session/kick-sessions/extend-sessions/
+// set-draining）需 Operator 及以上，administer 面（terminate/config
+// apply/shutdown）需 Admin。未绑定角色的调用方无任何动作可用；角色
+// 拒绝与策略拒绝同权留痕（审计 + 计数 + kError 原因串）。
 class MachineDaemon final : private IProfileMetaSource {
 public:
     // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
@@ -197,10 +215,20 @@ public:
         NodeOpsPolicy nodeOpsPolicy;
         // 会话登记真实面（foundation/SessionStore，redis 共享、跨进程
         // 可见——LoginApp 写入，本 daemon 吊销即全集群生效）：会话运维
-        // 入口（kick-session / list-sessions / kick-sessions）的存储
-        // 出口。nullptr = 会话入口全部关闭（三个方法视同未知方法，与
-        // 采样入口同口径）。不持有；生命周期由调用方保证。
+        // 入口（kick-session / list-sessions / kick-sessions /
+        // extend-sessions）的存储出口。nullptr = 会话入口全部关闭
+        //（诸方法视同未知方法，与采样入口同口径）。不持有；生命周期由
+        // 调用方保证。
         foundation::SessionStore* sessionStore = nullptr;
+        // 会话续期策略（§8 Phase 2）：machine.extend-sessions 把选中
+        // 会话 refresh 到该 TTL。0 = 续期入口关闭（缺省安全：无策略
+        // 即无续期命令——视同未知方法）。
+        std::chrono::milliseconds sessionRenewalTtl{0};
+        // 踢人联动通知目标（§8 Phase 2）：吊销成功后向该组件推送
+        // machine.session.revoked（best-effort，见方法常量注释）。
+        // 0 = 不推送。目标组件须已连到本 daemon（hub 按来源自报注册，
+        // 即目标须先发过至少一条请求）。
+        runtime::ComponentId sessionNotifyComponent = 0;
         // 诊断采样入口策略（machine.profile.*）；缺省全拒。
         DiagnosticsPolicy diagnosticsPolicy;
         // §6.1 权限分级绑定表（来源组件 → 角色；口径见 AccessControl.h）。
@@ -260,8 +288,15 @@ private:
     void handleKickSession(runtime::RuntimeInvocation& inv);
     void handleListSessions(runtime::RuntimeInvocation& inv);
     void handleKickSessions(runtime::RuntimeInvocation& inv);
+    void handleExtendSessions(runtime::RuntimeInvocation& inv);
     void handleSetDraining(runtime::RuntimeInvocation& inv);
     void handleShutdown(runtime::RuntimeInvocation& inv);
+    // 踢人联动通知（best-effort 推送，见 kSessionRevoked 注释）：指纹由
+    // 调用方备好（原文不出本函数）。
+    void notifySessionRevoked(const std::string& accountId,
+                              const std::string& realmId,
+                              const std::string& tokenFingerprint,
+                              const char* reason);
     bool isTrustedSource(runtime::ComponentId source) const;
     bool isCommandAllowed(const std::string& command) const;
     bool isGovernTrustedSource(runtime::ComponentId source) const;
