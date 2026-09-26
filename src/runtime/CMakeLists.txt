@@ -33,6 +33,7 @@ add_library(
     TransportStatsCollector.cpp
     Witness.cpp
     TickDiagnostics.cpp
+    TickProfiler.cpp
     TickScheduler.cpp)
 
 target_link_libraries(

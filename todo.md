@@ -1,5 +1,57 @@
 # TODO
 
+## 诊断采样触发/下载入口：04 §7 控制面 MVP 切片（2026-09-26）
+
+对齐 04-ops-control-plane §7 的职责拆分（采样/导出语义归 05，谁可以
+触发采样、谁可以下载结果归 04）——上一批 TickDiagnostics 把采样触发权
+显式留空，本批补上「按需触发一次采样 + 诊断产物查询/下载」：
+
+1. **采样能力面（runtime 侧）**：`ITickProfiler` 能力接缝（daemon 只依赖
+   接口）+ `TickProfiler` 实现——作为 `ITickObserver` 挂到 TickScheduler，
+   `trigger()` 开固定 tick 数窗口（句柄触发时即占号，自 1 单调递增；
+   0 = 拒绝），窗口内逐 tick 记实测耗时，收满固化产物（JSON 快照：
+   samples + min/max/avg + 超阈值样本数 + 窗口墙钟跨度）。窗口进行中
+   重复触发被拒（限流口径：同一时刻只允许一个窗口）；产物进环形存储
+   （满后丢最旧，与审计环形同一容量纪律）。不做 flamegraph 全量采样、
+   不做 EntityProfiler→负载反馈链（归 03 谱系）。
+2. **RPC 面（control 侧）**：machine.profile.trigger → .ok（句柄十进制
+   串）；machine.profiles → .ok（产物元数据清单 JSON 数组）；machine.profile
+   → .ok（按句柄下载产物字节）。`DiagnosticsPolicy` 独立策略（与
+   ExecPolicy/ProcessGovernPolicy 分离，授权口径互不牵动）：canTrigger
+   （写侧，消耗主机性能预算）/ canAccess（读侧，产物明细外泄面）；
+   缺省全拒。守卫顺序：载荷解析 → 鉴权 → 句柄存在性（鉴权先于存在性，
+   下载不向未授权方泄漏句柄空间信息）。`tickProfiler = nullptr` = 入口
+   关闭：machine.profile.* 视同未知方法，落统一 unknown-method 错误臂
+   照记审计（语义决策：入口未开无"诊断动作"发生，不计入诊断拒绝指标）。
+3. **遥测/审计面**：触发/访问各一对接受/拒绝计数（machine_profile_*，
+   snake_case 同族）；触发全程 `SpanScope("machine.profile.trigger")`
+   （拒绝也入 span：accepted/reason/handle；查询/下载只读不进 trace）；
+   触发、查询、下载及全部拒绝逐条入审计（command = profiler.trigger /
+   profiler.list / profiler.download）并推中心审计环形。
+4. **测试**（TickProfilerTest 3 用例新增 + MachineDaemonTest 24→25）：
+   采样全生命周期（触发占号/空闲 tick 忽略/统计逐字段/恰等于阈值不算
+   慢）、限流与无效配置、环形逐出与句柄增长；E2E 走真实 TCP + 真实
+   TickScheduler 驱窗——入口关闭视同未知方法、stranger 三连拒（鉴权先
+   于存在性）、授权触发→限流重触发→双窗口产物→清单/下载→未知句柄/
+   畸形/空载荷拒绝、指标四路增量（2/2/4/5）、3 个触发 span 属性、审计
+   13 条按发生序落账（中心 + 本地环形镜像）。
+
+**边界与缺字段（如实记录，未编造）**：
+- 04 把限流与超时归 Gateway 层——本切片的"限流"只有 agent 侧口径
+  （单窗口进行中 + 产物环形容量）；Gateway 限流/超时未做。
+- §6.1 权限分级（ReadOnly/Operator/Admin）简化为 canTrigger/canAccess
+  两个独立授权位，角色模型未引入（触发⊇访问的组合角色用并集表达）。
+- §6.2 审计字段的 requestId（请求关联 id）协议层仍缺，审计条目暂无
+  请求级唯一标识。
+- 阈值/窗口为构造期配置；04「采样、阈值、限流」的在线配置热改未做。
+- 产物仅存 agent 本地，跨机器回传中心的通道未做（当前下载即控制面
+  RPC 直读 agent）。
+- slow_threshold 只进产物统计字段（slow_samples），全局慢告警仍归
+  TickDiagnostics，两处口径刻意分开。
+
+验证口径：gcc-coverage 115/115 全绿、gcovr 100%（10534/10534 行 +
+1576/1576 函数）；clang 树零警告、115/115 全绿。
+
 ## 慢 tick 诊断：只读诊断采样切片（2026-09-26）
 
 对齐 05-telemetry §6 Diagnostics Profiling 的 MVP 最小切片（"慢 tick 诊断"

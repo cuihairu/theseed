@@ -14,6 +14,8 @@
 #include "theseed/foundation/Tracing.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
+#include "theseed/runtime/TickProfiler.h"
+#include "theseed/runtime/TickScheduler.h"
 
 #include <arpa/inet.h>
 #include <chrono>
@@ -47,6 +49,8 @@ using theseed::runtime::NetworkTransport;
 using theseed::runtime::RuntimeInvocation;
 using theseed::runtime::SendResult;
 using theseed::runtime::TcpConnection;
+using theseed::runtime::TickProfiler;
+using theseed::runtime::TickScheduler;
 
 #define TEST(name)                            \
     do {                                      \
@@ -904,6 +908,274 @@ int main() {
 
         foundation::setSpanEmitter(nullptr);
         killDaemon.stop();
+        PASS();
+    }
+
+    TEST("diagnostics profiling: trigger, produce, download, audit, rejections");
+    {
+        // 入口关闭（tickProfiler == nullptr，主 daemon 未配采样出口）：
+        // machine.profile.* 视同未知方法——统一错误臂照记审计并作答。
+        const auto closedAudits0 = daemon.auditLog().size();
+        RuntimeInvocation resp;
+        if (!client.request(MachineMethod::kProfileTrigger, {}, daemonTick, resp))
+            FAIL("no response to closed-entry trigger");
+        if (resp.method != MachineMethod::kError)
+            FAIL("closed entry must answer the unified error");
+        if (payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("closed entry must fall to unknown method: " +
+                 payloadToString(resp));
+        if (daemon.auditLog().size() != closedAudits0 + 1)
+            FAIL("closed-entry attempt must still be audited");
+        if (daemon.auditLog().back().command != "machine.profile.trigger")
+            FAIL("closed-entry audit must name the method");
+
+        // 入口打开的独立 daemon：窗口 4 tick 的 TickProfiler 挂到真实
+        // TickScheduler（宿主接线形态），策略授权本测试客户端（组件 1）。
+        OpsControlCenter profileCenter;
+        MachineAgent profileAgent(std::make_unique<LocalHostProbe>(),
+                                  std::make_unique<LocalProcessSupervisor>(),
+                                  &profileCenter);
+        TickScheduler profileScheduler(std::chrono::milliseconds{0});
+        TickProfiler::Config profilerConfig;
+        profilerConfig.windowTicks = 4;
+        profilerConfig.maxArtifacts = 4;
+        TickProfiler profiler(profilerConfig);
+        profileScheduler.setObserver(&profiler);
+
+        MachineDaemon::Config profileConfig;
+        profileConfig.listenPort = 0;
+        profileConfig.auditSink = &profileCenter;
+        profileConfig.diagnosticsPolicy.canTrigger = {kClientComponent};
+        profileConfig.diagnosticsPolicy.canAccess = {kClientComponent};
+        profileConfig.tickProfiler = &profiler;
+        MachineDaemon profileDaemon(profileConfig, profileAgent);
+        if (!profileDaemon.start()) FAIL("profile daemon start failed");
+        auto profileTick = [&profileDaemon] { profileDaemon.tick(); };
+
+        RawClient profileClient;
+        if (!profileClient.connect(profileDaemon.localPort()))
+            FAIL("profile connect failed");
+        profileClient.settle(profileTick);
+
+        // stranger 身份（组件 2）：两条名单都不含它
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(profileDaemon.localPort()))
+            FAIL("stranger connect failed");
+        stranger.settle(profileTick);
+
+        auto& triggerAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_trigger_accepted_count");
+        auto& triggerRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_trigger_rejected_count");
+        auto& accessAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_access_accepted_count");
+        auto& accessRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_access_rejected_count");
+        const auto trigAcc0 = triggerAccepted.value();
+        const auto trigRej0 = triggerRejected.value();
+        const auto accAcc0 = accessAccepted.value();
+        const auto accRej0 = accessRejected.value();
+
+        const auto audits0 = profileCenter.auditTrail().size();
+
+        // 未授权三连：触发（写侧）与清单/下载（读侧）各自被拒，且
+        // 鉴权先于句柄存在性（下载不泄漏句柄空间信息）。
+        if (!stranger.request(MachineMethod::kProfileTrigger, {}, profileTick,
+                              resp))
+            FAIL("no response to stranger trigger");
+        if (resp.method != MachineMethod::kError)
+            FAIL("stranger trigger must be refused");
+        if (payloadToString(resp).find("not authorized") == std::string::npos)
+            FAIL("unauthorized trigger must say why: " + payloadToString(resp));
+        if (!stranger.request(MachineMethod::kProfiles, {}, profileTick, resp))
+            FAIL("no response to stranger listing");
+        if (payloadToString(resp).find("not authorized") == std::string::npos)
+            FAIL("unauthorized listing must say why: " + payloadToString(resp));
+        if (!stranger.request(MachineMethod::kProfile, payloadOf("1"),
+                              profileTick, resp))
+            FAIL("no response to stranger download");
+        if (payloadToString(resp).find("not authorized") == std::string::npos)
+            FAIL("unauthorized download must say why: " +
+                 payloadToString(resp));
+
+        // 捕获 span：触发是关键受控动作（写侧性能预算），查询/下载不进
+        // trace。置于 stranger 三连之后，只观察已授权侧的两次触发。
+        const auto spans = std::make_shared<std::vector<foundation::Span>>();
+        foundation::setSpanEmitter(
+            [spans](const foundation::Span& span) { spans->push_back(span); });
+
+        // 授权触发：句柄立即占号（窗口未收满也可被引用）
+        if (!profileClient.request(MachineMethod::kProfileTrigger, {},
+                                   profileTick, resp))
+            FAIL("no response to authorized trigger");
+        if (resp.method != MachineMethod::kProfileTriggerOk)
+            FAIL("authorized trigger must succeed: " + payloadToString(resp));
+        const auto handle = payloadToString(resp);
+        if (handle.empty() || handle == "0") FAIL("handle must be nonzero");
+        if (!profiler.sampling()) FAIL("window must be sampling after trigger");
+
+        // 窗口进行中重复触发：限流拒绝
+        if (!profileClient.request(MachineMethod::kProfileTrigger, {},
+                                   profileTick, resp))
+            FAIL("no response to retrigger");
+        if (resp.method != MachineMethod::kError)
+            FAIL("retrigger must be rate limited");
+        if (payloadToString(resp).find("active window") == std::string::npos)
+            FAIL("retrigger must name the reason: " + payloadToString(resp));
+
+        // 真实调度器驱满窗口：4 次 runOnce 后固化产物
+        for (int i = 0; i < 4; ++i) profileScheduler.runOnce();
+        if (profiler.sampling()) FAIL("window must close after 4 ticks");
+
+        if (!profileClient.request(MachineMethod::kProfiles, {}, profileTick,
+                                   resp))
+            FAIL("no response to artifact listing");
+        if (resp.method != MachineMethod::kProfilesOk)
+            FAIL("authorized listing must succeed: " + payloadToString(resp));
+        const auto listing = payloadToString(resp);
+        if (listing.find("\"handle\":" + handle) == std::string::npos ||
+            listing.find("\"tick_count\":4") == std::string::npos)
+            FAIL("listing must expose the completed artifact: " + listing);
+
+        // 按句柄下载：只读产物字节（JSON 快照）
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf(handle),
+                                   profileTick, resp))
+            FAIL("no response to artifact download");
+        if (resp.method != MachineMethod::kProfileOk)
+            FAIL("authorized download must succeed: " + payloadToString(resp));
+        const auto artifact = payloadToString(resp);
+        if (artifact.find("\"handle\":" + handle) == std::string::npos ||
+            artifact.find("\"window_ticks\":4") == std::string::npos ||
+            artifact.find("\"samples\":[") == std::string::npos)
+            FAIL("download must return the snapshot JSON: " + artifact);
+
+        // 第二个窗口：句柄继续增长，清单多元素化（覆盖分隔符分支），
+        // 旧产物不被顶掉（环形容量 4）
+        if (!profileClient.request(MachineMethod::kProfileTrigger, {},
+                                   profileTick, resp))
+            FAIL("no response to second trigger");
+        if (resp.method != MachineMethod::kProfileTriggerOk)
+            FAIL("second window must open after the first closed: " +
+                 payloadToString(resp));
+        const auto handle2 = payloadToString(resp);
+        if (handle2 == handle || handle2 == "0")
+            FAIL("handles must grow: " + handle2);
+        for (int i = 0; i < 4; ++i) profileScheduler.runOnce();
+        if (!profileClient.request(MachineMethod::kProfiles, {}, profileTick,
+                                   resp))
+            FAIL("no response to second listing");
+        const auto listing2 = payloadToString(resp);
+        if (listing2.find("\"handle\":" + handle) == std::string::npos ||
+            listing2.find("\"handle\":" + handle2) == std::string::npos)
+            FAIL("second listing must keep both artifacts: " + listing2);
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf(handle2),
+                                   profileTick, resp))
+            FAIL("no response to second download");
+        if (resp.method != MachineMethod::kProfileOk)
+            FAIL("second download must succeed: " + payloadToString(resp));
+        if (payloadToString(resp).find("\"handle\":" + handle2) ==
+            std::string::npos)
+            FAIL("second download must return its own artifact");
+
+        // 未知句柄与畸形载荷：拒绝并具名
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf("99999"),
+                                   profileTick, resp))
+            FAIL("no response to unknown-handle download");
+        if (payloadToString(resp).find("unknown handle") == std::string::npos)
+            FAIL("unknown handle must be named: " + payloadToString(resp));
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf("abc"),
+                                   profileTick, resp))
+            FAIL("no response to malformed download");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("malformed handle must be named: " + payloadToString(resp));
+        if (!profileClient.request(MachineMethod::kProfile, {}, profileTick,
+                                   resp))
+            FAIL("no response to empty download");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty payload must be malformed too: " +
+                 payloadToString(resp));
+
+        // 指标四路增量：触发受/拒 2/2，访问受/拒 4/5
+        if (triggerAccepted.value() != trigAcc0 + 2)
+            FAIL("trigger accepted must be +2");
+        if (triggerRejected.value() != trigRej0 + 2)
+            FAIL("trigger rejected must be +2");
+        if (accessAccepted.value() != accAcc0 + 4)
+            FAIL("access accepted must be +4");
+        if (accessRejected.value() != accRej0 + 5)
+            FAIL("access rejected must be +5");
+
+        // 只有关键受控动作（触发）进 trace：接受一次 + 限流拒绝一次
+        // （真实调度器 runOnce 的 tick span 也走全局出口，按名字过滤）
+        std::vector<const foundation::Span*> triggerSpans;
+        for (const auto& span : *spans) {
+            if (span.name == "machine.profile.trigger") {
+                triggerSpans.push_back(&span);
+            }
+        }
+        if (triggerSpans.size() != 3)
+            FAIL("only trigger attempts trace, got " +
+                 std::to_string(triggerSpans.size()));
+        bool sawAccepted = false;
+        bool sawHandle = false;
+        for (const auto& attr : triggerSpans[0]->attrs) {
+            if (attr.key == "accepted" && std::get<bool>(attr.value))
+                sawAccepted = true;
+            if (attr.key == "handle" &&
+                std::get<std::int64_t>(attr.value) ==
+                    static_cast<std::int64_t>(std::stoll(handle)))
+                sawHandle = true;
+        }
+        if (!sawAccepted || !sawHandle)
+            FAIL("accepted span must carry accepted/handle");
+        bool sawRejectedSpan = false;
+        for (const auto& attr : triggerSpans[1]->attrs) {
+            if (attr.key == "accepted" && !std::get<bool>(attr.value))
+                sawRejectedSpan = true;
+        }
+        if (!sawRejectedSpan) FAIL("retrigger span must mark rejection");
+        bool sawSecondAccept = false;
+        for (const auto& attr : triggerSpans[2]->attrs) {
+            if (attr.key == "accepted" && std::get<bool>(attr.value))
+                sawSecondAccept = true;
+        }
+        if (!sawSecondAccept)
+            FAIL("second trigger span must mark acceptance");
+
+        // 审计入环（中心聚合 + 本地环形镜像）：13 条动作按发生序落账
+        const auto& trail = profileCenter.auditTrail();
+        if (trail.size() != audits0 + 13)
+            FAIL("thirteen profile actions must be audited, got " +
+                 std::to_string(trail.size() - audits0));
+        struct Expect {
+            const char* command;
+            bool accepted;
+        };
+        const Expect expected[13] = {
+            {"profiler.trigger", false},  {"profiler.list", false},
+            {"profiler.download", false}, {"profiler.trigger", true},
+            {"profiler.trigger", false},  {"profiler.list", true},
+            {"profiler.download", true},  {"profiler.trigger", true},
+            {"profiler.list", true},      {"profiler.download", true},
+            {"profiler.download", false}, {"profiler.download", false},
+            {"profiler.download", false}};
+        for (std::size_t i = 0; i < 13; ++i) {
+            const auto& entry = trail[audits0 + i].entry;
+            if (entry.command != expected[i].command ||
+                entry.accepted != expected[i].accepted)
+                FAIL(std::string("audit slot ") + std::to_string(i) +
+                     " mismatch: " + entry.command);
+        }
+        if (trail[audits0 + 3].entry.args != handle)
+            FAIL("accepted trigger must record the handle");
+        if (trail[audits0 + 7].entry.args != handle2)
+            FAIL("second trigger must record its own handle");
+        if (profileDaemon.auditLog().size() != 13)
+            FAIL("local ring must mirror the same actions");
+
+        foundation::setSpanEmitter(nullptr);
+        profileDaemon.stop();
         PASS();
     }
 

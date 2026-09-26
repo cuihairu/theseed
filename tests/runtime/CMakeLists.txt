@@ -405,3 +405,13 @@ target_link_libraries(
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_tick_diagnostics_test COMMAND theseed_tick_diagnostics_test)
+
+add_executable(theseed_tick_profiler_test TickProfilerTest.cpp)
+
+target_link_libraries(
+    theseed_tick_profiler_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_runtime
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_tick_profiler_test COMMAND theseed_tick_profiler_test)

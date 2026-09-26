@@ -67,6 +67,20 @@ constexpr const char* kTerminateRejectedCount =
 // 中心侧按命令名可辨动作类型）。
 constexpr const char* kGovernListCommand = "process.list";
 constexpr const char* kGovernKillCommand = "process.kill";
+// 诊断采样入口（04 §7）：触发（写侧，消耗性能预算）与访问（读侧，
+// 明细外泄面）各一对接受/拒绝计数。
+constexpr const char* kProfileTriggerAcceptedCount =
+    "machine_profile_trigger_accepted_count";
+constexpr const char* kProfileTriggerRejectedCount =
+    "machine_profile_trigger_rejected_count";
+constexpr const char* kProfileAccessAcceptedCount =
+    "machine_profile_access_accepted_count";
+constexpr const char* kProfileAccessRejectedCount =
+    "machine_profile_access_rejected_count";
+// 审计命令口径同治理：触发/清单/下载三命令名入审计条目。
+constexpr const char* kProfileTriggerCommand = "profiler.trigger";
+constexpr const char* kProfileListCommand = "profiler.list";
+constexpr const char* kProfileDownloadCommand = "profiler.download";
 
 foundation::Counter& telemetryCounter(const char* name) {
     return foundation::MetricsRegistry::instance().counter(name);
@@ -90,12 +104,13 @@ void logExecuteRejected(const AuditEntry& entry, const std::string& reason) {
                         {sourceAttr, commandAttr, reasonAttr});
 }
 
-// 治理动作拒绝（枚举/处置共用）：计数 + span 标记 + 结构化日志。span 可空
-// （枚举是只读动作，不进 trace）；审计与错误响应由调用方处理。
-void rejectGovernAction(const AuditEntry& entry,
-                        foundation::SpanScope* span,
-                        const char* counterName,
-                        const std::string& reason) {
+// 控制面动作拒绝（治理/诊断采样共用）：计数 + span 标记 + 结构化日志。
+// span 可空（只读动作不进 trace）；审计与错误响应由调用方处理。
+void rejectControlAction(const AuditEntry& entry,
+                         foundation::SpanScope* span,
+                         const char* counterName,
+                         const std::string& logMessage,
+                         const std::string& reason) {
     telemetryCounter(counterName).increment();
     if (span != nullptr) {
         span->setAttribute("accepted", false);
@@ -105,8 +120,7 @@ void rejectGovernAction(const AuditEntry& entry,
     const foundation::LogAttribute sourceAttr = {"source", sourceValue};
     const foundation::LogAttribute commandAttr = {"command", entry.command};
     const foundation::LogAttribute reasonAttr = {"reason", reason};
-    foundation::logWarn("machine.process.govern.rejected",
-                        {sourceAttr, commandAttr, reasonAttr});
+    foundation::logWarn(logMessage, {sourceAttr, commandAttr, reasonAttr});
 }
 
 // machine.terminate 请求载荷 = pid 十进制串；pid 0 无意义（不是合法治理
@@ -130,6 +144,29 @@ ParsedPid parsePidPayload(const std::vector<std::byte>& payload) {
         return {};
     }
     return {true, pid};
+}
+
+// 诊断产物句柄载荷解析：与 pid 同为十进制整串，但句柄是 uint64——
+// 单独成解析体，不复用不硬转。0 是"无产物"哨兵，不作为查询目标。
+struct ParsedHandle {
+    bool ok = false;
+    std::uint64_t value = 0;
+};
+
+ParsedHandle parseHandlePayload(const std::vector<std::byte>& payload) {
+    if (payload.empty()) {
+        return {};
+    }
+    const std::string text(reinterpret_cast<const char*>(payload.data()),
+                           payload.size());
+    std::uint64_t handle = 0;
+    const auto* begin = text.data();
+    const auto* end = begin + text.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, handle);
+    if (ec != std::errc{} || ptr != end || handle == 0) {
+        return {};
+    }
+    return {true, handle};
 }
 
 }  // namespace
@@ -383,6 +420,25 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // 采样能力出口为空 = 诊断入口关闭：machine.profile.* 视同未知方法，
+    // 落到统一 unknown-method 错误臂（不进审计——入口未开，无动作发生）。
+    const bool profileEntryOpen = config_.tickProfiler != nullptr;
+
+    if (profileEntryOpen && inv.method == MachineMethod::kProfileTrigger) {
+        handleProfileTrigger(inv);
+        return;
+    }
+
+    if (profileEntryOpen && inv.method == MachineMethod::kProfiles) {
+        handleProfiles(inv);
+        return;
+    }
+
+    if (profileEntryOpen && inv.method == MachineMethod::kProfile) {
+        handleProfileDownload(inv);
+        return;
+    }
+
     if (inv.method == MachineMethod::kProcesses) {
         handleProcesses(inv);
         return;
@@ -441,7 +497,8 @@ void MachineDaemon::handleProcesses(runtime::RuntimeInvocation& inv) {
             std::to_string(inv.sourceComponent) + " is not trusted";
         entry.accepted = false;
         appendAudit(entry);
-        rejectGovernAction(entry, nullptr, kProcessListRejectedCount, reason);
+        rejectControlAction(entry, nullptr, kProcessListRejectedCount,
+                            "machine.process.govern.rejected", reason);
         const auto payload = toBytes(reason);
         sendResponse(inv.sourceComponent, MachineMethod::kError,
                      std::span<const std::byte>(payload));
@@ -496,7 +553,8 @@ void MachineDaemon::handleTerminate(runtime::RuntimeInvocation& inv) {
     const auto reject = [&](const std::string& reason) {
         entry.accepted = false;
         appendAudit(entry);
-        rejectGovernAction(entry, &span, kTerminateRejectedCount, reason);
+        rejectControlAction(entry, &span, kTerminateRejectedCount,
+                            "machine.process.govern.rejected", reason);
         const auto payload = toBytes(reason);
         sendResponse(inv.sourceComponent, MachineMethod::kError,
                      std::span<const std::byte>(payload));
@@ -561,6 +619,163 @@ void MachineDaemon::handleTerminate(runtime::RuntimeInvocation& inv) {
     const std::byte result = ok ? std::byte{0x01} : std::byte{0x00};
     sendResponse(inv.sourceComponent, MachineMethod::kTerminateOk,
                  std::span<const std::byte>(&result, 1));
+}
+
+bool MachineDaemon::isTriggerAuthorized(runtime::ComponentId source) const {
+    const auto& allowed = config_.diagnosticsPolicy.canTrigger;
+    return std::find(allowed.begin(), allowed.end(), source) != allowed.end();
+}
+
+bool MachineDaemon::isDiagnosticsAccessAuthorized(
+    runtime::ComponentId source) const {
+    const auto& allowed = config_.diagnosticsPolicy.canAccess;
+    return std::find(allowed.begin(), allowed.end(), source) != allowed.end();
+}
+
+void MachineDaemon::handleProfileTrigger(runtime::RuntimeInvocation& inv) {
+    // 触发是关键受控动作：消耗主机性能预算，全程 span（05 §3.1），
+    // 限流拒绝也入 span。
+    foundation::SpanScope span("machine.profile.trigger");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kProfileTriggerCommand;
+
+    // 拒绝臂共用出口：审计先行，再计数/span/日志与错误响应。
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kProfileTriggerRejectedCount,
+                            "machine.profile.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    if (!isTriggerAuthorized(inv.sourceComponent)) {
+        reject("profile trigger rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not authorized");
+        return;
+    }
+
+    const auto handle = config_.tickProfiler->trigger();
+    if (handle == 0) {
+        reject("profile trigger rejected: sampling window unavailable "
+               "(active window or invalid window config)");
+        return;
+    }
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = std::to_string(handle);
+    appendAudit(entry);
+    telemetryCounter(kProfileTriggerAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("handle", static_cast<std::int64_t>(handle));
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const auto handleValue = static_cast<std::int64_t>(handle);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute handleAttr = {"handle", handleValue};
+    foundation::logInfo("machine.profile.trigger", {sourceAttr, handleAttr});
+    const auto payload = toBytes(std::to_string(handle));
+    sendResponse(inv.sourceComponent, MachineMethod::kProfileTriggerOk,
+                 std::span<const std::byte>(payload));
+}
+
+void MachineDaemon::handleProfiles(runtime::RuntimeInvocation& inv) {
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kProfileListCommand;
+
+    if (!isDiagnosticsAccessAuthorized(inv.sourceComponent)) {
+        const std::string reason =
+            "profile listing rejected: source component " +
+            std::to_string(inv.sourceComponent) + " is not authorized";
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, nullptr, kProfileAccessRejectedCount,
+                            "machine.profile.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+        return;
+    }
+
+    const auto artifacts = config_.tickProfiler->listArtifacts();
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t i = 0; i < artifacts.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        const std::string handleField =
+            "\"handle\":" + std::to_string(artifacts[i].handle);
+        const std::string tickField =
+            "\"tick_count\":" + std::to_string(artifacts[i].tickCount);
+        const std::string windowField =
+            "\"window_ms\":" + std::to_string(artifacts[i].windowMs);
+        out << "{" << handleField << "," << tickField << "," << windowField
+            << "}";
+    }
+    out << "]";
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = std::to_string(artifacts.size());
+    appendAudit(entry);
+    telemetryCounter(kProfileAccessAcceptedCount).increment();
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kProfilesOk,
+                 std::span<const std::byte>(json));
+}
+
+void MachineDaemon::handleProfileDownload(runtime::RuntimeInvocation& inv) {
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kProfileDownloadCommand;
+
+    const auto parsed = parseHandlePayload(inv.payload);
+    entry.args = parsed.ok ? std::to_string(parsed.value) : "";
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, nullptr, kProfileAccessRejectedCount,
+                            "machine.profile.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    if (!parsed.ok) {
+        reject("profile download rejected: malformed handle payload");
+        return;
+    }
+    if (!isDiagnosticsAccessAuthorized(inv.sourceComponent)) {
+        reject("profile download rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not authorized");
+        return;
+    }
+
+    std::string payloadText;
+    if (!config_.tickProfiler->artifactPayload(parsed.value, payloadText)) {
+        reject("profile download rejected: unknown handle " +
+               std::to_string(parsed.value));
+        return;
+    }
+
+    entry.accepted = true;
+    entry.ok = true;
+    appendAudit(entry);
+    telemetryCounter(kProfileAccessAcceptedCount).increment();
+    const auto payload = toBytes(payloadText);
+    sendResponse(inv.sourceComponent, MachineMethod::kProfileOk,
+                 std::span<const std::byte>(payload));
 }
 
 void MachineDaemon::sendResponse(runtime::ComponentId target,

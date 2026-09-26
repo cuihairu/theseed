@@ -4,6 +4,7 @@
 #include "theseed/control/machine/MachineAgent.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TcpListener.h"
+#include "theseed/runtime/TickProfiler.h"
 #include "theseed/runtime/TransportHub.h"
 
 #include <chrono>
@@ -34,6 +35,20 @@ inline constexpr const char* kProcesses = "machine.processes";
 inline constexpr const char* kProcessesOk = "machine.processes.ok";
 inline constexpr const char* kTerminate = "machine.terminate";
 inline constexpr const char* kTerminateOk = "machine.terminate.ok";
+// 诊断采样入口（04 §7：触发/下载鉴权归 Ops Control Plane，见
+// DiagnosticsPolicy）：
+//   machine.profile.trigger → machine.profile.trigger.ok
+//                       payload = 窗口句柄十进制串（限流拒绝 → kError）
+//   machine.profiles     → machine.profiles.ok   payload = 产物清单 JSON
+//                       数组（[{"handle":N,"tick_count":N,"window_ms":X}]）
+//   machine.profile      → machine.profile.ok    payload = 产物 JSON 快照
+//                       请求 payload = 句柄十进制串（未知句柄 → kError）
+inline constexpr const char* kProfileTrigger = "machine.profile.trigger";
+inline constexpr const char* kProfileTriggerOk = "machine.profile.trigger.ok";
+inline constexpr const char* kProfiles = "machine.profiles";
+inline constexpr const char* kProfilesOk = "machine.profiles.ok";
+inline constexpr const char* kProfile = "machine.profile";
+inline constexpr const char* kProfileOk = "machine.profile.ok";
 // 统一错误响应：payload 为短原因串（可读，供人工诊断与测试断言）。
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
@@ -96,6 +111,18 @@ public:
         std::vector<std::string> killableNames;
     };
 
+    // 诊断采样入口策略（04 §7：触发/下载鉴权归 Ops Control Plane；§6.1
+    // 权限分级）。与 ExecPolicy/ProcessGovernPolicy 分离——采样消耗主机
+    // 性能预算（写侧），产物含运行时明细（读侧外泄面），授权口径独立：
+    // - canTrigger：允许触发采样窗口（写侧）；
+    // - canAccess：允许查询产物清单与按 handle 下载（读侧）。
+    // 读写分开：只读观测角色可取既有产物但开不了新窗口。触发、查询、
+    // 下载及全部拒绝逐条入审计（profiler.trigger/list/download）。
+    struct DiagnosticsPolicy final {
+        std::vector<runtime::ComponentId> canTrigger;
+        std::vector<runtime::ComponentId> canAccess;
+    };
+
     struct Config final {
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
@@ -105,6 +132,13 @@ public:
         // 主机级非受控进程治理策略（machine.processes / machine.terminate）；
         // 缺省全拒（来源与目标名单均为空集）。
         ProcessGovernPolicy processGovernPolicy;
+        // 诊断采样入口策略（machine.profile.*）；缺省全拒。
+        DiagnosticsPolicy diagnosticsPolicy;
+        // 采样能力出口（ITickProfiler，runtime 侧 TickProfiler 实现，
+        // 由宿主把它挂到本进程 TickScheduler）：nullptr = 采样入口关闭
+        // （machine.profile.* 视同未知方法）。不持有；生命周期由调用方
+        // 保证。
+        runtime::ITickProfiler* tickProfiler = nullptr;
         // 节点摘要上报周期；0 = 关闭周期上报。到期即采一次快照推给
         // reportSink（首个 tick 立即上报，保证中心侧新鲜度）。
         std::chrono::milliseconds reportInterval{0};
@@ -140,10 +174,15 @@ private:
     void handleAudit(runtime::RuntimeInvocation& inv);
     void handleProcesses(runtime::RuntimeInvocation& inv);
     void handleTerminate(runtime::RuntimeInvocation& inv);
+    void handleProfileTrigger(runtime::RuntimeInvocation& inv);
+    void handleProfiles(runtime::RuntimeInvocation& inv);
+    void handleProfileDownload(runtime::RuntimeInvocation& inv);
     bool isTrustedSource(runtime::ComponentId source) const;
     bool isCommandAllowed(const std::string& command) const;
     bool isGovernTrustedSource(runtime::ComponentId source) const;
     bool isKillableName(const std::string& name) const;
+    bool isTriggerAuthorized(runtime::ComponentId source) const;
+    bool isDiagnosticsAccessAuthorized(runtime::ComponentId source) const;
     void appendAudit(const AuditEntry& entry);
     void reportIfDue();
     void sendResponse(runtime::ComponentId target,
