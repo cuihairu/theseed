@@ -164,17 +164,8 @@ static void testVelocityPositionSync() {
     c.cellApp->runtime().spaceRuntime().sync(ctx);
 
     auto deltas = c.cellApp->runtime().spaceRuntime().collectWitnessDeltas();
-    // After sync, position deltas should be present for target
-    bool foundPosition = false;
-    for (auto& od : deltas) {
-        for (auto& d : od.deltas) {
-            if (d.entityId == targetId && d.position.has_value()) {
-                foundPosition = true;
-            }
-        }
-    }
-    // Note: position was already consumed by the ticks above, but the last sync should have it
-    // if velocity is still active. Let's just check the pipeline didn't crash.
+    static_cast<void>(deltas);  // 排空增量队列即可：位置增量已被上面的 tick 消费，
+                                // 此处只验证 sync/collect 管线不崩
     ok = ok && true;  // Pipeline ran without crash
 
     std::filesystem::remove_all(dir);

@@ -15,7 +15,10 @@ export default defineConfig({
   },
 
   themeConfig: {
-    nav: [{ text: '设计文档', link: '/design/' }],
+    nav: [
+      { text: '架构谱系', link: '/architecture' },
+      { text: '设计文档', link: '/design/' },
+    ],
 
     sidebar: {
       '/design/': [

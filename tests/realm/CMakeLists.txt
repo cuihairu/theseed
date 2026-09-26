@@ -2,7 +2,7 @@ add_executable(theseed_realm_app_test RealmAppTest.cpp)
 
 target_link_libraries(
     theseed_realm_app_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_realm
     PRIVATE theseed_runtime)
 
@@ -16,7 +16,7 @@ if(NOT WIN32)
 
     target_link_libraries(
         theseed_realm_app_e2e_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_realm)
 
     add_test(NAME RealmAppE2ETest COMMAND theseed_realm_app_e2e_test)

@@ -127,7 +127,7 @@ int main() {
         ClientSession session(client.serverPipe);
 
         session.setMessageCallback([&app, &session](ClientMessageType type,
-                                                      std::span<const std::byte> payload) {
+                                                      std::span<const std::byte>) {
             if (type == ClientMessageType::QueryRealms) {
                 auto data = LoginProtocol::encodeRealmList(app.realms());
                 session.send(std::span<const std::byte>(data.data(), data.size()));

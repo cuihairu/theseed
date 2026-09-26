@@ -37,7 +37,6 @@ public:
     void tick() override;
 
 private:
-    ComponentId localComponent_;
     mutable std::mutex mutex_;
     std::unordered_map<ComponentId, std::shared_ptr<IRuntimeTransport>> peers_;
     // 服务端连接：等待首条入站消息完成身份注册，注册后从列表移除。

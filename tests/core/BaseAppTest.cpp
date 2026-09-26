@@ -238,14 +238,13 @@ static void testRuntimeAccess() {
     auto app = makeBaseApp(dir);
     app->init();
 
-    bool ok = &app->runtime() != nullptr;
-    ok = ok && &app->registry() != nullptr;
-    ok = ok && app->registry().hasDef("Avatar");
+    bool ok = app->registry().hasDef("Avatar");
+    ok = ok && app->runtime().entityCount() == 0;  // init 未建实体
 
     const auto& constApp = *app;
-    ok = ok && &constApp.registry() != nullptr;
-    ok = ok && &constApp.runtime() != nullptr;
-    ok = ok && constApp.runtime().entityCount() == 0;  // init 未建实体
+    ok = ok && &constApp.runtime() == &app->runtime();  // const/non-const 访问同一对象
+    ok = ok && constApp.registry().hasDef("Avatar");
+    ok = ok && constApp.runtime().entityCount() == 0;
 
     if (ok) PASS(); else FAIL("runtime access failed");
     std::filesystem::remove_all(dir);
@@ -454,7 +453,6 @@ static void testClientEnterGameFailures() {
 
     // 场景三：decode 失败与未知消息类型（onClientMessage 的 default / else 分支）
     {
-        auto tick = [&] { app->tick(); };
         client.sendFrame(ClientMessageType::EnterGame, {std::byte{0xFF}, std::byte{0xFF}});
         client.sendFrame(ClientMessageType::Action, {std::byte{0x01}});
         client.sendFrame(ClientMessageType::QueryRealms, {});

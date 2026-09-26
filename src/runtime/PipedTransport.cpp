@@ -6,8 +6,11 @@
 
 namespace theseed::runtime {
 
-PipedTransport::PipedTransport(ComponentId localComponent)
-    : localComponent_(localComponent) {}
+PipedTransport::PipedTransport(ComponentId localComponent) {
+    // 构造参数保留自明语义（本端组件号）；发送路径由 RuntimeInvocation
+    // 自带 sourceComponent，无需在此存储。
+    static_cast<void>(localComponent);
+}
 
 SendResult PipedTransport::send(RuntimeInvocation invocation) {
     if (peer_ == nullptr) {

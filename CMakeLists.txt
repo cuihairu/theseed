@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(THESEED_BUILD_TESTS "Build theseed tests" ON)
+option(THESEED_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 
 add_library(theseed_project_options INTERFACE)
 target_compile_features(theseed_project_options INTERFACE cxx_std_23)
@@ -24,6 +25,14 @@ else()
         -Wall
         -Wextra
         -Wpedantic)
+endif()
+
+if(THESEED_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        target_compile_options(theseed_project_options INTERFACE /WX)
+    else()
+        target_compile_options(theseed_project_options INTERFACE -Werror)
+    endif()
 endif()
 
 add_subdirectory(src)

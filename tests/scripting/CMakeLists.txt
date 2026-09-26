@@ -2,7 +2,7 @@ add_executable(theseed_scripting_hotupdate_test HotUpdateTest.cpp)
 
 target_link_libraries(
     theseed_scripting_hotupdate_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_scripting)
 
 # Windows Defender 在某些构建产物上会触发临时锁定（permission denied）。

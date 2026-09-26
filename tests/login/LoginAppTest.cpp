@@ -93,17 +93,6 @@ static std::vector<std::byte> encodeLoginPayload(const std::string& account,
     return out;
 }
 
-static std::vector<std::byte> encodeRealmId(const std::string& realmId) {
-    std::vector<std::byte> out;
-    auto len = static_cast<uint32_t>(realmId.size());
-    out.push_back(std::byte(len & 0xFF));
-    out.push_back(std::byte((len >> 8) & 0xFF));
-    out.push_back(std::byte((len >> 16) & 0xFF));
-    out.push_back(std::byte((len >> 24) & 0xFF));
-    for (char c : realmId) out.push_back(static_cast<std::byte>(c));
-    return out;
-}
-
 // 模拟 DBApp 的 IRuntimeTransport：send 时按请求 method 同步入队应答，
 // 让 dbRequest 的等待循环在单线程内立即拿到结果；Silent 模式吞掉请求
 // 以触发超时，Closed 模式让 send 直接 NotConnected。

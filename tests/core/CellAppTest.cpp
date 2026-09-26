@@ -336,8 +336,8 @@ static void testEdgeBranches() {
 
     // const 访问器
     const auto& constApp = app;
-    ok = ok && &constApp.runtime() != nullptr;
-    ok = ok && &constApp.registry() != nullptr;
+    ok = ok && &constApp.runtime() == &app.runtime();  // const/non-const 访问同一对象
+    ok = ok && constApp.registry().hasDef("Avatar");
 
     // 未知类型 createEntity → nullptr
     ok = ok && app.createEntity("NoSuchType", Vector3{0, 0, 0}) == nullptr;

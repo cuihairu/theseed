@@ -11,7 +11,6 @@ namespace theseed::foundation {
 namespace {
 
 constexpr std::string_view kFieldSeparator = "\x1f";  // unit separator
-constexpr std::string_view kLineSeparator = "\n";
 
 }  // namespace
 

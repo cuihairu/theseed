@@ -200,8 +200,6 @@ static void testCellSpawnUnknownType() {
         return baseEntity->cellEntityCall() && baseEntity->cellEntityCall()->isValid();
     });
 
-    auto countBefore = c.baseApp->runtime().entityCount();
-
     // Request spawn of unknown type — callBase sends but base fails to create
     c.cellApp->runtime().requestSpawnEntity("NonExistent", Vector3{0, 0, 0}, creatorId);
 
@@ -228,8 +226,7 @@ static void testCellSpawnNoBaseCall() {
     c.connect();
     c.tickUntil([&] { return c.baseNode->hasPeer(2); });
 
-    auto* baseEntity = c.baseApp->createEntity("Avatar");
-    auto creatorId = baseEntity->id();
+    c.baseApp->createEntity("Avatar");  // 只需 base 侧存在实体，cell 侧走独立创建
 
     // Create cell but don't wait for connection — test with entity that has no base call
     // Actually, CellApp::createEntity creates an entity directly without base call

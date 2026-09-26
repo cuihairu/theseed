@@ -34,6 +34,13 @@ std::string_view skipWs(std::string_view sv) {
     return sv;
 }
 
+std::string_view trimWs(std::string_view sv) {
+    while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\n' || sv.back() == '\r')) {
+        sv.remove_suffix(1);
+    }
+    return skipWs(sv);
+}
+
 std::string_view parseAttrs(std::string_view sv, std::vector<XmlAttr>& attrs) {
     while (!sv.empty()) {
         sv = skipWs(sv);
@@ -80,9 +87,11 @@ std::string_view parseChildren(std::string_view sv, const std::string& parentTag
         if (sv.starts_with("</")) {
             auto closeEnd = sv.find('>');
             if (closeEnd == std::string_view::npos) break;
-            // Verify it matches parent tag
-            auto closingTag = sv.substr(2, closeEnd - 2);
-            auto trimmed = skipWs(closingTag);
+            // Verify it matches parent tag; root parses with no parent
+            // constraint. Mismatch unwinds to the ancestor level whose tag
+            // matches instead of silently accepting the wrong close.
+            auto closingTag = trimWs(sv.substr(2, closeEnd - 2));
+            if (!parentTag.empty() && closingTag != parentTag) break;
             // Return past the closing tag
             return sv.substr(closeEnd + 1);
         }

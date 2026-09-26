@@ -234,9 +234,9 @@ static void testAwaitingIdentityLifecycle() {
     inv.method = "hello";
     if (hub.send(inv) != SendResult::NotConnected) { FAIL("awaiting peer should not route"); return; }
 
-    bool ok = hub.pendingCount() >= 0;   // 覆盖 awaitingIdentity_ 的 pendingCount 汇总
-    hub.flush();                          // 覆盖 awaitingIdentity_ 的 flush
-    ok = ok && !hub.hasPeer(30);
+    static_cast<void>(hub.pendingCount());  // 覆盖 awaitingIdentity_ 的 pendingCount 汇总
+    hub.flush();                            // 覆盖 awaitingIdentity_ 的 flush
+    bool ok = !hub.hasPeer(30);
 
     if (ok) PASS();
     else FAIL("awaiting identity lifecycle wrong");

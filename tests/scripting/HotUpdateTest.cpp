@@ -350,6 +350,7 @@ int main() {
     test_rollback_unknown_version();
     test_apply_mixed_l1_l2();
     test_applied_versions_history();
+    test_apply_reports_warning_count();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

@@ -6,8 +6,11 @@
 
 namespace theseed::runtime {
 
-TransportHub::TransportHub(ComponentId localComponent)
-    : localComponent_(localComponent) {}
+TransportHub::TransportHub(ComponentId localComponent) {
+    // 构造参数保留自明语义（本端组件号）；路由按消息内的 target/source
+    // 组件号进行，无需在此存储。
+    static_cast<void>(localComponent);
+}
 
 void TransportHub::connectPeer(ComponentId peerId,
                                 std::shared_ptr<IRuntimeTransport> transport) {

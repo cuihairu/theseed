@@ -100,6 +100,8 @@ void RealmApp::acceptConnections() {
 void RealmApp::onClientMessage(login::ClientSession* session,
                                login::ClientMessageType type,
                                std::span<const std::byte> payload) {
+    static_cast<void>(payload);  // 回调签名与会话层统一，当前仅 QueryRealms 无载荷
+
     switch (type) {
         case login::ClientMessageType::QueryRealms:
             handleQueryRealms(session);

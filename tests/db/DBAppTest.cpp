@@ -33,13 +33,6 @@ using namespace theseed::runtime;
         return 1;                           \
     } while (0)
 
-static bool writeFile(const std::string& path, const std::string& content) {
-    std::ofstream f(path);
-    if (!f.is_open()) return false;
-    f << content;
-    return true;
-}
-
 int main() {
     std::cout << "DBApp tests:" << std::endl;
 

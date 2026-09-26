@@ -137,7 +137,7 @@ int main() {
             success = ok;
         });
 
-        auto cid = e.moveTo(Vector3{5.0F, 0.0F, 5.0F}, 10.0F, 1.0F);
+        e.moveTo(Vector3{5.0F, 0.0F, 5.0F}, 10.0F, 1.0F);
         // Should complete immediately in start() since distance < threshold
         if (completions != 1) return fail("at_target_no_complete");
         if (!success) return fail("at_target_not_success");

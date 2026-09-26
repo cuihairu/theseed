@@ -2,7 +2,7 @@ add_executable(theseed_memory_stream_test MemoryStreamTest.cpp)
 
 target_link_libraries(
     theseed_memory_stream_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_memory_stream_test COMMAND theseed_memory_stream_test)
@@ -11,7 +11,7 @@ add_executable(theseed_timer_wheel_test TimerWheelTest.cpp)
 
 target_link_libraries(
     theseed_timer_wheel_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_timer_wheel_test COMMAND theseed_timer_wheel_test)
@@ -20,7 +20,7 @@ add_executable(theseed_object_pool_test ObjectPoolTest.cpp)
 
 target_link_libraries(
     theseed_object_pool_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_object_pool_test COMMAND theseed_object_pool_test)
@@ -29,7 +29,7 @@ add_executable(theseed_bundle_test BundleTest.cpp)
 
 target_link_libraries(
     theseed_bundle_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_bundle_test COMMAND theseed_bundle_test)
@@ -38,7 +38,7 @@ add_executable(theseed_channel_test ChannelTest.cpp)
 
 target_link_libraries(
     theseed_channel_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_channel_test COMMAND theseed_channel_test)
@@ -47,7 +47,7 @@ add_executable(theseed_channel_router_test ChannelRouterTest.cpp)
 
 target_link_libraries(
     theseed_channel_router_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_channel_router_test COMMAND theseed_channel_router_test)
@@ -56,7 +56,7 @@ add_executable(theseed_metrics_test MetricsTest.cpp)
 
 target_link_libraries(
     theseed_metrics_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_metrics_test COMMAND theseed_metrics_test)
@@ -65,7 +65,7 @@ add_executable(theseed_logger_test LoggerTest.cpp)
 
 target_link_libraries(
     theseed_logger_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_logger_test COMMAND theseed_logger_test)
@@ -74,7 +74,7 @@ add_executable(theseed_tracing_test TracingTest.cpp)
 
 target_link_libraries(
     theseed_tracing_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_tracing_test COMMAND theseed_tracing_test)
@@ -83,7 +83,7 @@ add_executable(theseed_redis_provider_test RedisProviderTest.cpp)
 
 target_link_libraries(
     theseed_redis_provider_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_redis_provider_test COMMAND theseed_redis_provider_test)

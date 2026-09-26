@@ -2,7 +2,7 @@ add_executable(theseed_db_app_test DBAppTest.cpp)
 
 target_link_libraries(
     theseed_db_app_test
-    PRIVATE theseed_project_options
+    PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_db)
 
 add_test(NAME DBAppTest COMMAND theseed_db_app_test)
@@ -16,7 +16,7 @@ if(NOT WIN32)
 
     target_link_libraries(
         theseed_dbapp_e2e_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME DBAppE2ETest COMMAND theseed_dbapp_e2e_test)
@@ -32,7 +32,7 @@ if(THESEED_MYSQL_ENABLED)
 
     target_link_libraries(
         theseed_mysql_store_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME MySQLEntityStoreTest COMMAND theseed_mysql_store_test)
@@ -42,7 +42,7 @@ if(THESEED_MYSQL_ENABLED)
 
     target_link_libraries(
         theseed_mysql_connection_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME MySQLConnectionTest COMMAND theseed_mysql_connection_test)
@@ -53,7 +53,7 @@ if(THESEED_MYSQL_ENABLED)
 
     target_link_libraries(
         theseed_mysql_branch_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME MySqlBranchTest COMMAND theseed_mysql_branch_test)
@@ -67,7 +67,7 @@ if(THESEED_POSTGRESQL_ENABLED)
 
     target_link_libraries(
         theseed_pg_store_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME PostgreSQLEntityStoreTest COMMAND theseed_pg_store_test)
@@ -77,7 +77,7 @@ if(THESEED_POSTGRESQL_ENABLED)
 
     target_link_libraries(
         theseed_pg_connection_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME PostgreSQLConnectionTest COMMAND theseed_pg_connection_test)
@@ -88,7 +88,7 @@ if(THESEED_POSTGRESQL_ENABLED)
 
     target_link_libraries(
         theseed_pg_branch_test
-        PRIVATE theseed_project_options
+        PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_db)
 
     add_test(NAME PgBranchTest COMMAND theseed_pg_branch_test)

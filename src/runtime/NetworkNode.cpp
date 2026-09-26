@@ -104,7 +104,6 @@ void NetworkNode::acceptIncoming() {
         if (!conn) break;
 
         auto transport = std::make_shared<NetworkTransport>(conn);
-        auto rawPtr = conn.get();
 
         // Notify callback; caller assigns peerId via acceptPeer()
         if (onPeerConnected_) {

@@ -189,10 +189,7 @@ static void testNetworkTeleport() {
     c.cellApp->runtime().createSpace(20, "battle_arena");
 
     // Track space change callback on base side
-    theseed::runtime::SpaceId receivedSpaceId = 0;
-    theseed::runtime::Vector3 receivedPos{};
-    bool spaceChanged = false;
-    base->setOnEnterSpace([&](Entity&, theseed::runtime::SpaceId sid) {
+    base->setOnEnterSpace([&](Entity&, theseed::runtime::SpaceId) {
         // This fires on cell entity, not base - skip
     });
 

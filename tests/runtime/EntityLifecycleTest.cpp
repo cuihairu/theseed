@@ -77,7 +77,7 @@ static void testOnCreate() {
     rt->registerEntityFactory("Avatar",
         [def, &triggered](EntityId id, auto side) -> std::unique_ptr<Entity> {
             auto e = std::make_unique<Entity>(id, side, *def);
-            e->setOnCreate([&triggered](Entity& entity) {
+            e->setOnCreate([&triggered](Entity&) {
                 triggered = true;
             });
             return e;
@@ -122,7 +122,7 @@ static void testOnEnterSpace() {
     SpaceId enteredSpace = 0;
 
     auto entity = std::make_unique<Entity>(100, EntitySide::Cell, *def);
-    entity->setOnEnterSpace([&triggered, &enteredSpace](Entity& e, SpaceId sid) {
+    entity->setOnEnterSpace([&triggered, &enteredSpace](Entity&, SpaceId sid) {
         triggered = true;
         enteredSpace = sid;
     });
@@ -142,7 +142,7 @@ static void testOnLeaveSpace() {
     SpaceId leftSpace = 0;
 
     auto entity = std::make_unique<Entity>(200, EntitySide::Cell, *def);
-    entity->setOnLeaveSpace([&triggered, &leftSpace](Entity& e, SpaceId sid) {
+    entity->setOnLeaveSpace([&triggered, &leftSpace](Entity&, SpaceId sid) {
         triggered = true;
         leftSpace = sid;
     });
@@ -202,10 +202,10 @@ static void testLoadEntityTriggersRestore() {
     rt.registerEntityFactory("Avatar",
         [def, &createTriggered, &restoreTriggered](EntityId id, auto side) -> std::unique_ptr<Entity> {
             auto e = std::make_unique<Entity>(id, side, *def);
-            e->setOnCreate([&createTriggered](Entity& entity) {
+            e->setOnCreate([&createTriggered](Entity&) {
                 createTriggered = true;
             });
-            e->setOnRestore([&restoreTriggered](Entity& entity) {
+            e->setOnRestore([&restoreTriggered](Entity&) {
                 restoreTriggered = true;
             });
             return e;

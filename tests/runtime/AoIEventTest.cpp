@@ -62,7 +62,7 @@ static void testEnterAoI() {
 
     auto observer = std::make_unique<Entity>(100, EntitySide::Cell, *def);
     EntityId enteredId = 0;
-    observer->setOnEnterAoI([&enteredId](Entity& self, EntityId other) {
+    observer->setOnEnterAoI([&enteredId](Entity&, EntityId other) {
         enteredId = other;
     });
 
@@ -94,7 +94,7 @@ static void testLeaveAoI() {
 
     auto observer = std::make_unique<Entity>(100, EntitySide::Cell, *def);
     EntityId leftId = 0;
-    observer->setOnLeaveAoI([&leftId](Entity& self, EntityId other) {
+    observer->setOnLeaveAoI([&leftId](Entity&, EntityId other) {
         leftId = other;
     });
 

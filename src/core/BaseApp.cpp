@@ -464,6 +464,8 @@ void BaseApp::onSpaceChanged(runtime::EntityId entityId, runtime::SpaceId spaceI
 }
 
 void BaseApp::onEntityDestroyed(runtime::EntityId entityId, const std::string& entityType) {
+    static_cast<void>(entityType);  // 回调签名由 BaseRuntime 统一约定，本处理只关心 id
+
     // Notify client
     auto* session = findSessionByEntity(entityId);
     if (session && session->isConnected()) {

@@ -1,5 +1,36 @@
 # TODO
 
+## 质量红线落地：-Werror 固化 + 零警告清零 + 架构谱系文档（2026-09-25）
+
+1. **`-Werror` 固化**：根 CMakeLists 新增 `THESEED_WARNINGS_AS_ERRORS`（默认 ON）。
+   测试侧聚合初始化豁免经 `theseed_test_options` 接口库（`-Wno-missing-field-initializers`
+   族，含 clang 18+ 的 `-Wmissing-designated-field-initializers`），测试目标按序链接
+   `theseed_project_options theseed_test_options`——顺序保证豁免在 -Wextra 之后生效
+   （CMake 接口库选项是直接依赖自身在前，串接式写法会把豁免排到 -Wextra 前面失效）。
+   gcc 15 / clang 21 双树 `-Wall -Wextra -Wpedantic -Werror` 零警告。
+2. **-Werror 拦下的真实问题（产品码 5 处）**：
+   - `EntityDefLoader` 闭合标签校验从未实现——注释声称 "Verify it matches parent tag"
+     但只算了不用（`trimmed` 死变量、`parentTag` 死参数）。已实现：错配闭合标签上卷到
+     祖先层而非静默吞掉，`trimWs` 双向去空白；补 2 个解析器测试（错配上卷契约、
+     `</Tag >` 带空白收尾）
+   - `NetworkNode` 未用变量 `rawPtr`、`SessionStore` 死常量 `kLineSeparator`、
+     `PipedTransport`/`TransportHub` 只写不读的 `localComponent_` 字段（clang
+     `-Wunused-private-field` 独有警告，gcc 不报）——删除，公共构造签名保留
+   - `BaseApp::onEntityDestroyed`/`RealmApp::onClientMessage` 未用回调参数——
+     `static_cast<void>` + 注释（与 NetworkNode 既有惯例一致）
+3. **测试侧清理（-Werror 拦下的 19 处）**：死测试 `test_apply_reports_warning_count`
+   写了从未注册进 main（这正是 BigWorld 式"测试缺失"坑——测试存在≠测试运行）；
+   2 个死辅助函数（DBAppTest `writeFile`、LoginAppTest `encodeRealmId`）；
+   未用变量/lambda 参数/恒真比较（`pendingCount() >= 0` 对 unsigned 恒真、
+   `&ref != nullptr` 引用取址恒真）逐处改为有意义的断言或删除。
+4. **架构谱系文档**：新增 `docs/architecture.md`（BigWorld/KBEngine 借鉴矩阵、
+   theseed 改动与理由、对照 BigWorld 历史坑的规避表、当前实现状态、质量红线），
+   VitePress 导航挂"架构谱系"入口。
+5. **裸 new/delete 审计**：src/ 全量 grep 零命中（RAII/智能指针红线现状达标）。
+
+验证口径：gcc-coverage 树 109/109 全绿（本环境无 libmysql/libpq/podman，SQL 段
+按环境变量门控跳过，与 clang18/gcc13 树口径一致）；clang 21 树构建零警告。
+
 ## 测试覆盖率专项（2026-09-22，行 78.5%→86.9%，gcovr 实测）
 
 基线（gcc-coverage preset + gcovr）：行 78.5%、函数 85.3%、分支 46.0%。

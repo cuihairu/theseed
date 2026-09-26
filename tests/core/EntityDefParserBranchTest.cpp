@@ -201,6 +201,28 @@ static void testMalformedTagStructures() {
         bool ok = def != nullptr && def->entityType() == "Q";
         if (ok) PASS(); else FAIL("quoted stray token rejected");
     }
+
+    // 错配闭合标签：闭合校验要求 tag 与父级一致，不匹配时该层提前收尾，
+    // 误配点之后的属性被归属到祖先层（对 loader 即丢失），前缀正常加载。
+    {
+        auto def = EntityDefLoader::loadFromString(
+            "<EntityDef name=\"Mismatch\">"
+            "<Properties><Property name=\"a\" type=\"Int32\"/>"
+            "</Wrong><Property name=\"b\" type=\"Int32\"/></Properties></EntityDef>");
+        bool ok = def != nullptr && def->entityType() == "Mismatch";
+        ok = ok && def->propertyCount() == 1;
+        if (ok) PASS(); else FAIL("mismatched closing tag handled wrong");
+    }
+
+    // 闭合标签带首尾空白（</EntityDef >）：trim 后仍视为匹配，正常收尾。
+    {
+        auto def = EntityDefLoader::loadFromString(
+            "<EntityDef name=\"SpacedClose\">"
+            "<Properties><Property name=\"a\" type=\"Int32\"/></ Properties ></ EntityDef >");
+        bool ok = def != nullptr && def->entityType() == "SpacedClose";
+        ok = ok && def->propertyCount() == 1;
+        if (ok) PASS(); else FAIL("whitespace-padded closing tag rejected");
+    }
 }
 
 static void testForeignChildNodes() {

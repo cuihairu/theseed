@@ -27,7 +27,6 @@ public:
     void connect(PipedTransport& peer);
 
 private:
-    ComponentId localComponent_;
     PipedTransport* peer_ = nullptr;
     mutable std::mutex mutex_;
     std::deque<RuntimeInvocation> inbox_;

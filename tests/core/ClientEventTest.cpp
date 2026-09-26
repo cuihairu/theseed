@@ -124,10 +124,8 @@ static void testEmitAndFlush() {
     theseed::runtime::TcpConnection::globalInit();
     MiniCluster c(dir);
 
-    auto* baseEntity = c.baseApp->createEntity("Avatar");
-    auto entityId = baseEntity->id();
+    c.baseApp->createEntity("Avatar");
     auto* cellEntity = c.cellApp->createEntity("Avatar", Vector3{0, 0, 0});
-    auto cellEntityId = cellEntity->id();
 
     // Emit client events on cell entity
     std::string hello = "hello";

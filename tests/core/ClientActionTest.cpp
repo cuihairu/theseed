@@ -193,7 +193,7 @@ static void testClientActionForwardToCell() {
     // Set up method handler on cell entity
     std::string receivedAction;
     std::vector<std::byte> receivedData;
-    cellEntity->bindMethodHandler("moveTo", [&](Entity& e, std::span<const std::byte> payload) {
+    cellEntity->bindMethodHandler("moveTo", [&](Entity&, std::span<const std::byte> payload) {
         receivedAction = "moveTo";
         receivedData.assign(payload.begin(), payload.end());
     });
@@ -254,7 +254,7 @@ static void testClientActionEmptyPayload() {
     if (!ok) { std::filesystem::remove_all(dir); FAIL("cell entity missing"); return; }
 
     std::string receivedAction;
-    cellEntity->bindMethodHandler("attack", [&](Entity& e, std::span<const std::byte> payload) {
+    cellEntity->bindMethodHandler("attack", [&](Entity&, std::span<const std::byte>) {
         receivedAction = "attack";
     });
 
