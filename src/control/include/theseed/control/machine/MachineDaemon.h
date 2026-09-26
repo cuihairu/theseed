@@ -64,6 +64,10 @@ public:
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
         runtime::ComponentId componentId = 60;  // Machine 组件默认 id
         std::size_t auditCapacity = 128;  // 审计环形容量；0 = 关闭审计
+        // 节点摘要上报周期；0 = 关闭周期上报。到期即采一次快照推给
+        // reportSink（首个 tick 立即上报，保证中心侧新鲜度）。
+        std::chrono::milliseconds reportInterval{0};
+        INodeReportSink* reportSink = nullptr;  // 不持有；生命周期由调用方保证
     };
 
     MachineDaemon(Config config, IMachineAgent& agent);
@@ -88,6 +92,7 @@ private:
     void handleInvocation(runtime::RuntimeInvocation& inv);
     void handleAudit(runtime::RuntimeInvocation& inv);
     void appendAudit(const AuditEntry& entry);
+    void reportIfDue();
     void sendResponse(runtime::ComponentId target,
                       const std::string& method,
                       std::span<const std::byte> payload);
@@ -97,6 +102,7 @@ private:
     runtime::TcpListener listener_;
     std::shared_ptr<runtime::TransportHub> hub_;
     std::vector<AuditEntry> auditLog_;
+    std::chrono::steady_clock::time_point lastReportAt_{};
 };
 
 }  // namespace theseed::control::machine

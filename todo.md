@@ -1,5 +1,34 @@
 # TODO
 
+## 节点摘要上报落地：IMachineAgent::report() + OpsControlCenter 聚合器（2026-09-26）
+
+对齐设计文档 06-machine-agent-and-host-ops §2.4/§4.3 的 `report()` 与
+04-ops-control-plane MVP 的聚合基座：
+
+1. **NodeReport/INodeReportSink**（control/machine/NodeReport.h）：
+   NodeSummary 上提到独立头（快照 RPC 与上报共用数据形状，消除 MachineAgent.h
+   的循环包含）；上报帧 = nodeId（取快照 hostname）+ 时间戳 + 快照；
+   agent 只依赖 sink 接口，不认识具体中心。
+2. **MachineAgent::report()**：采一次快照推给出口；无出口空操作（上报是
+   能力而非义务）；`setReportSink` 运行期换绑。
+3. **OpsControlCenter**（control/ops/，INodeReportSink 实现）：按 nodeId
+   upsert 每节点最新快照；容量上界 maxNodes（逐出最早接入节点——活跃节点
+   不因持续上报改变首报序）；`pruneStale` 按 TTL 摘除掉线节点并清理首报序
+   残留（否则容量逐出目标错乱）；`snapshotNodes` 按 nodeId 升序稳定输出。
+   跨机网络转发属跨 realm 平面，后续接入。
+4. **MachineDaemon 周期上报**：Config 增 reportInterval/reportSink；
+   到期即调 agent.report()，首个 tick 立即上报（中心侧新鲜度）；0 或无
+   sink 关闭。tick 单线程上下文，无锁。
+5. **测试**（OpsControlCenterTest，11 项）：upsert 语义、无身份丢弃、
+   miss、排序快照、容量逐出（活跃刷新不改变逐出序）、TTL 摘除、
+   prune 后容量逐出仍正确（含首报序残留场景）、agent report 推送与
+   无 sink 空操作、daemon 周期上报真链路、双开关关闭路径。
+   ——初版断言模型错了一处（prune 后容量 2 再进两节点必然挤掉最早幸存者，
+   产品逻辑正确），已修正。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（9975/9975）；clang 21 树
+零警告、113/113 全绿。
+
 ## Ops Control Plane MVP 切片：受控命令审计（2026-09-26）
 
 对齐 docs/design/5-access-and-control-plane/04-ops-control-plane.md §8 MVP

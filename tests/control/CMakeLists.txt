@@ -51,3 +51,12 @@ target_link_libraries(
     PRIVATE theseed_control theseed_runtime)
 
 add_test(NAME theseed_machine_daemon_test COMMAND theseed_machine_daemon_test)
+
+add_executable(theseed_ops_control_center_test OpsControlCenterTest.cpp)
+
+target_link_libraries(
+    theseed_ops_control_center_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control theseed_runtime)
+
+add_test(NAME theseed_ops_control_center_test COMMAND theseed_ops_control_center_test)

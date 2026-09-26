@@ -78,6 +78,21 @@ void MachineDaemon::tick() {
     acceptConnections();
     hub_->tick();
     processMessages();
+    reportIfDue();
+}
+
+void MachineDaemon::reportIfDue() {
+    if (config_.reportInterval.count() <= 0 || config_.reportSink == nullptr) {
+        return;  // 周期上报关闭
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    // lastReportAt_ 默认 epoch：首个 tick 立即上报，保证中心侧新鲜度
+    if (now - lastReportAt_ < config_.reportInterval) {
+        return;
+    }
+    lastReportAt_ = now;
+    agent_.report();
 }
 
 bool MachineDaemon::isListening() const {

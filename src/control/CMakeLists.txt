@@ -5,7 +5,8 @@ add_library(
     machine/MachineDaemon.cpp
     machine/MachineSnapshotCodec.cpp
     machine/ProcessPortScanner.cpp
-    machine/ProcessSupervisor.cpp)
+    machine/ProcessSupervisor.cpp
+    ops/OpsControlCenter.cpp)
 
 target_link_libraries(
     theseed_control
