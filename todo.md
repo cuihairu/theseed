@@ -1,5 +1,70 @@
 # TODO
 
+## 权限分级 + 配置热改限制：04 §6 安全模型落地（2026-09-26）
+
+把前几批一直记录为「沿用边界、未顺手扩面」的 §6 落地成码：
+
+1. **§6.1 角色模型**（machine/AccessControl.h，agent 与中心共用）：
+   `AccessRole{None/ReadOnly/Operator/Admin}` 单调档位 + `RoleBinding`
+   （来源组件 → 角色）+ `roleMeets` 分级判定。分级口径（§6.1 的动作族 →
+   本仓库实际动作的映射，缺命令的留档位不造命令）：
+   - inspect（≥ReadOnly）：snapshot / audit 查询 / 进程枚举 / 剖面清单
+     与下载（agent 侧 + 中心侧查询下载）；
+   - operate（≥Operator）：execute 受管编排（start/stop/restart）、
+     诊断采样触发（§6.1 的 kick session / set draining / clear
+     temporary bans 同级——三命令仓库未建，见边界）；
+   - administer（=Admin）：machine.terminate（≙ §6.1 的 retire
+     process）、machine.config.apply（≙ apply runtime config）。
+2. **叠位语义（先策略后角色）**：全部入口先过既有策略白名单
+   （ExecPolicy / ProcessGovernPolicy / DiagnosticsPolicy 的
+   canTrigger/canAccess），再过角色门——既有拒绝原因串不失真（策略拒绝
+   照旧），角色位是第二道独立关口（canAccess 放行 ≠ 可读）。未绑定角色
+   = None = 全拒（含只读面；绑定表缺省空 = 安全缺省）。角色拒绝照记
+   审计 + 各动作族既有拒绝计数同款口径；只读面（snapshot/audit 查询）
+   原本接受不留痕，拒绝补齐留痕并配对补计数
+   （machine_snapshot_rejected_count / machine_audit_rejected_count）。
+3. **§6.2 审计映射（如实对齐，无新口径）**：operatorId ≙ 既有
+   AuditEntry.source 组件 id（绑定表就是按组件 id 查角色，不另设操作者
+   命名空间）；result=rejected ≙ accepted=false；command/args/timestamp
+   同既有条目形状。requestId 字段仍缺（沿用既有边界记录）。
+4. **§6.3 配置热改**（machine.config.apply，Admin 级，新方法）：载荷
+   key NUL value（与 execute 同 NUL 约定）。**禁改四类先行指认**——键
+   前缀命中协议定义（protocol.*）/ 持久化 schema（persistence.*）/
+   entity property flags（entity.property*）/ 迁移语义（migration.*）
+   即拒且指认类别；**白名单是唯一通道**——白名单外任意键一律拒（扩面
+   须改码评审，配置自身开不了门）；白名单内目前唯一可调项
+   `ops.report_interval_ms`（毫秒，0 = 关闭上报），就地生效、效果可观测
+   （上报从关闭到打开，下一轮 tick 中心即见快照）。全程 span + 审计
+   （args 记 key=value）+ 一对计数
+   （machine_config_apply_accepted/rejected_count）。
+5. **Gateway 限流/超时：如实边界**。仓库无 Gateway 组件，不造；检查过
+   foundation 既有 RateLimiter——Redis 后备（IRedisProvider），接到
+   进程内 ops 读入口需引入 redis 依赖，不存在「直接、明显」的节流点，
+   不接、不扩面（限流语义属于跨进程控制面入口，归 Gateway 层）。
+6. **测试**（MachineDaemonTest 27→29、OpsControlCenterTest 27→28）：
+   三级角色 × 三档动作正反矩阵（ReadOnly 可读不可写、Operator 可操作
+   不可处置、Admin 全通、策略白名单内未绑定者全拒、策略外者既有消息
+   不变）、只读面角色拒绝照记审计与配对计数、中心侧 canAccess+角色
+   叠位（canAccess 四者皆含、角色表缺一者被拒）、配置热改（畸形载荷/
+   角色不足/禁改四类各指认/白名单外/非法值 ×2/白名单内生效可观测/
+   全部尝试留痕 10 条 + span 10 个）。
+
+**边界与缺字段（如实记录，未编造）**：
+- §6.1 的 kick session / set draining / clear temporary bans /
+  controlled shutdown 四命令仓库未建（无会话面/排水命令/临时禁名单/
+  受控停机命令），角色档位已预留（operate/operate/operate/administer），
+  建命令时按档位落角色门即可。
+- metrics summary（/metrics HTTP 导出）与中心聚合器基础查询
+  （latest/snapshotNodes/auditTrail）不在角色门内：前者是无鉴权 HTTP
+  导出面（05 遥测口径），后者是 ops 宿主自身装配面——§6.1 的管控落点
+  是控制面 RPC 与中心剖面读入口，宿主内嵌调用属信任边界内侧。
+- RateLimiter 未接（理由见上 5）；Gateway 层（正式鉴权/限流/超时）
+  整体沿用既有边界记录。
+- requestId 字段仍缺（§6.2 七字段之六已对齐，沿既有记录）。
+- 白名单可调项仅 ops.report_interval_ms 一项：其余运行时可调项（如
+  诊断阈值 slow_threshold）目前只进产物统计（05 边界），需要热改时
+  逐项评审入白名单。
+
 ## 诊断产物跨机回传 + 中心侧剖面查询：04 §7 中心半边（2026-09-26）
 
 补齐上一批明确留下的边界（「产物仅存 agent 本地，跨机器回传中心的通道

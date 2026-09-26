@@ -285,6 +285,18 @@ std::vector<machine::NodeProfileEntry> OpsControlCenter::queryProfiles(
         return {};
     }
 
+    // §6.1 角色门（叠加在 canAccess 之上）：inspect 面需 ReadOnly 及以上。
+    if (!machine::roleMeets(machine::roleFor(config_.roleBindings, requester),
+                            machine::AccessRole::ReadOnly)) {
+        entry.accepted = false;
+        appendAuditRing(machine::NodeAuditEntry{std::string(), entry});
+        rejectProfileRead(entry, kProfileQueryRejectedCount,
+                          "profile query rejected: source component " +
+                              std::to_string(requester) +
+                              " requires ReadOnly role");
+        return {};
+    }
+
     std::vector<machine::NodeProfileEntry> matched;
     for (const auto& [nodeId, metas] : profileIndex_) {
         if (!query.nodeId.empty() && query.nodeId != nodeId) {
@@ -343,6 +355,13 @@ bool OpsControlCenter::downloadProfileArtifact(runtime::ComponentId requester,
     if (!isProfileAccessAuthorized(requester)) {
         return reject("profile download rejected: source component " +
                       std::to_string(requester) + " is not authorized");
+    }
+
+    // §6.1 角色门（叠加在 canAccess 之上）：inspect 面需 ReadOnly 及以上。
+    if (!machine::roleMeets(machine::roleFor(config_.roleBindings, requester),
+                            machine::AccessRole::ReadOnly)) {
+        return reject("profile download rejected: source component " +
+                      std::to_string(requester) + " requires ReadOnly role");
     }
 
     for (const auto& artifact : profileArtifacts_) {

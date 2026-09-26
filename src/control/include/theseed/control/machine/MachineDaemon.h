@@ -1,5 +1,6 @@
 #pragma once
 
+#include "theseed/control/machine/AccessControl.h"
 #include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/MachineAgent.h"
 #include "theseed/control/machine/ProfileRelay.h"
@@ -50,6 +51,12 @@ inline constexpr const char* kProfiles = "machine.profiles";
 inline constexpr const char* kProfilesOk = "machine.profiles.ok";
 inline constexpr const char* kProfile = "machine.profile";
 inline constexpr const char* kProfileOk = "machine.profile.ok";
+// 运行时配置热改（04 §6.3，Admin 级）：machine.config.apply →
+// machine.config.apply.ok  payload = 1 字节 0x01
+//                     请求 payload = key '\0' value
+//                     （禁改四类命中 / 白名单外 / 角色不足 → kError）
+inline constexpr const char* kConfigApply = "machine.config.apply";
+inline constexpr const char* kConfigApplyOk = "machine.config.apply.ok";
 // 统一错误响应：payload 为短原因串（可读，供人工诊断与测试断言）。
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
@@ -90,6 +97,13 @@ inline constexpr const char* kError = "machine.error";
 // agent（report() 组装 NodeReport 时带上本机剖面清单，经既有上报通道
 // 汇聚），并在 tick 里把新固化产物经 artifactSink 推给中心存储——中心
 // 侧查询/下载不依赖直连 agent。
+//
+// 权限分级（04 §6.1）：全部方法先过各自策略白名单（若该面有策略门），
+// 再过角色门（Config.roleBindings，见 AccessControl.h）——inspect 面
+// （snapshot/audit/清单/剖面下载）需 ReadOnly 及以上，operate 面
+// （execute/采样触发）需 Operator 及以上，administer 面（terminate/
+// config apply）需 Admin。未绑定角色的调用方无任何动作可用；角色拒绝
+// 与策略拒绝同权留痕（审计 + 计数 + kError 原因串）。
 class MachineDaemon final : private IProfileMetaSource {
 public:
     // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
@@ -97,7 +111,8 @@ public:
     // - trustedComponents：允许发起 execute 的来源组件白名单；
     // - allowedCommands：允许执行的命令名白名单（start/stop/restart…）。
     // 两个集合都为空集语义 = 一律拒绝（安全缺省：未显式授权即不可执行）。
-    // snapshot/audit 只读不设限。拒绝照常记审计（accepted=false）。
+    // 拒绝照常记审计（accepted=false）。策略门与 §6.1 角色门叠加：
+    // 过策略门的调用方还需具备该动作所需角色（execute 需 Operator）。
     struct ExecPolicy final {
         std::vector<runtime::ComponentId> trustedComponents;
         std::vector<std::string> allowedCommands;
@@ -132,6 +147,12 @@ public:
         ProcessGovernPolicy processGovernPolicy;
         // 诊断采样入口策略（machine.profile.*）；缺省全拒。
         DiagnosticsPolicy diagnosticsPolicy;
+        // §6.1 权限分级绑定表（来源组件 → 角色；口径见 AccessControl.h）。
+        // 与既有策略门叠加：动作先过各自策略白名单（execute/govern/
+        // diagnostics），再过角色门——inspect 面需 ReadOnly 及以上，
+        // operate 面需 Operator 及以上，administer 面需 Admin。缺省
+        // 空表 = 所有动作（含只读）一律拒绝（安全缺省）。
+        std::vector<RoleBinding> roleBindings;
         // 采样能力出口（ITickProfiler，runtime 侧 TickProfiler 实现，
         // 由宿主把它挂到本进程 TickScheduler）：nullptr = 采样入口关闭
         // （machine.profile.* 视同未知方法）。不持有；生命周期由调用方
@@ -179,12 +200,15 @@ private:
     void handleProfileTrigger(runtime::RuntimeInvocation& inv);
     void handleProfiles(runtime::RuntimeInvocation& inv);
     void handleProfileDownload(runtime::RuntimeInvocation& inv);
+    void handleConfigApply(runtime::RuntimeInvocation& inv);
     bool isTrustedSource(runtime::ComponentId source) const;
     bool isCommandAllowed(const std::string& command) const;
     bool isGovernTrustedSource(runtime::ComponentId source) const;
     bool isKillableName(const std::string& name) const;
     bool isTriggerAuthorized(runtime::ComponentId source) const;
     bool isDiagnosticsAccessAuthorized(runtime::ComponentId source) const;
+    // §6.1 角色门：来源绑定角色达到 required 档位（未绑定 = None = 全拒）。
+    bool hasRole(runtime::ComponentId source, AccessRole required) const;
     void appendAudit(const AuditEntry& entry);
     void reportIfDue();
     // 剖面回传：发现新固化产物即推给 artifactSink（见 tick()）。

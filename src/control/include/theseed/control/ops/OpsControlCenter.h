@@ -1,5 +1,6 @@
 #pragma once
 
+#include "theseed/control/machine/AccessControl.h"
 #include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/NodeReport.h"
 #include "theseed/control/machine/ProfileRelay.h"
@@ -34,7 +35,8 @@ namespace theseed::control::ops {
 //   推送产物副本进全局环形（容量 maxProfileArtifacts，满后丢最旧，
 //   0 = 关闭副本存储；历史事实语义，不随节点摘除而清，与审计同纪律）。
 //   queryProfiles / downloadProfileArtifact 是中心侧读入口，沿用
-//   DiagnosticsPolicy 读位（canAccess）鉴权，全部尝试（含拒绝）入审计
+//   DiagnosticsPolicy 读位（canAccess）鉴权、再叠 §6.1 角色位
+//   （Config.roleBindings，inspect 面），全部尝试（含拒绝）入审计
 //   与指标；触发权（canTrigger）仍在 agent 侧，中心无写命令。
 // - 查询：latest（单节点）、snapshotNodes（全量、按 nodeId 稳定排序）。
 //
@@ -54,6 +56,11 @@ public:
         // 口径；canTrigger 写位在中心无生效点——本批无中心侧写命令）。
         // 缺省空集 = 查询/下载一律拒绝（安全缺省）。
         machine::DiagnosticsPolicy profilePolicy;
+        // §6.1 权限分级绑定表（口径见 machine/AccessControl.h）：剖面
+        // 读入口在 canAccess 之上再叠角色位（inspect 面，ReadOnly 及
+        // 以上）。缺省空表 = 未绑定者一律拒绝；operatorId 沿用既有
+        // source 组件 id 口径（§6.2）。
+        std::vector<machine::RoleBinding> roleBindings;
     };
 
     // 注：`Config config = {}` 的类内默认实参对带 NSDMI 的嵌套类型非法
@@ -106,17 +113,18 @@ public:
     // entity/entityType 两维当前无生产者（机器 agent 的 TickProfiler 是
     // 进程级 tick 粒度），按这两维查询如实返回空——不编造数据。
     // 全部尝试（含拒绝）入审计（command = center.profiler.query）与指标；
-    // 未授权（profilePolicy.canAccess 不含 requester）返回空并照记拒绝。
-    // 调用方身份是进程内自报（正式鉴权归 Gateway 层，见 todo.md 边界）。
-    // 非常量：每次尝试（含拒绝）都要落审计环形——"只读"是授权语义，
-    // 物理上审计留痕本身是写。
+    // 未授权（canAccess 不含 requester，或 §6.1 角色位不足）返回空并照记
+    // 拒绝。调用方身份是进程内自报（正式鉴权归 Gateway 层，见 todo.md
+    // 边界）。非常量：每次尝试（含拒绝）都要落审计环形——"只读"是授权
+    // 语义，物理上审计留痕本身是写。
     std::vector<machine::NodeProfileEntry> queryProfiles(
         runtime::ComponentId requester, const machine::ProfileQuery& query);
 
     // 中心侧产物下载（只读）：从中心副本环形取 (nodeId, handle) 的只读
     // 字节——不再依赖直连该 agent。副本未持有（未推送/已逐出/副本存储
     // 关闭）如实返回 false。全部尝试（含拒绝）入审计
-    // （command = center.profiler.download）与指标。非常量理由同上。
+    // （command = center.profiler.download）与指标；鉴权口径同查询
+    // （canAccess + §6.1 角色位）。非常量理由同上。
     bool downloadProfileArtifact(runtime::ComponentId requester,
                                  const std::string& nodeId,
                                  std::uint64_t handle,

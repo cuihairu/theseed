@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+using theseed::control::machine::AccessRole;
 using theseed::control::machine::HostSummary;
 using theseed::control::machine::IHostProbe;
 using theseed::control::machine::INodeReportSink;
@@ -583,6 +584,7 @@ int main() {
         OpsControlCenter::Config cfg;
         cfg.maxProfileArtifacts = 8;
         cfg.profilePolicy.canAccess = {1};
+        cfg.roleBindings = {{1, AccessRole::Admin}};
         OpsControlCenter center(cfg);
 
         // 两台 agent 的剖面元数据经 report() 通道汇聚：node-a 只带进程维
@@ -665,6 +667,7 @@ int main() {
         OpsControlCenter::Config cfg;
         cfg.maxProfileArtifacts = 2;
         cfg.profilePolicy.canAccess = {1};
+        cfg.roleBindings = {{1, AccessRole::Admin}};
         OpsControlCenter center(cfg);
 
         const auto mk = [](const std::string& node, std::uint64_t handle,
@@ -733,6 +736,7 @@ int main() {
         OpsControlCenter::Config cfg;
         cfg.maxProfileArtifacts = 0;
         cfg.profilePolicy.canAccess = {1};
+        cfg.roleBindings = {{1, AccessRole::Admin}};
         OpsControlCenter center(cfg);
 
         auto report = makeReport("node-a", 1.0, std::chrono::system_clock::now());
@@ -793,6 +797,7 @@ int main() {
         OpsControlCenter::Config tightCfg;
         tightCfg.maxNodes = 1;
         tightCfg.profilePolicy.canAccess = {1};
+        tightCfg.roleBindings = {{1, AccessRole::Admin}};
         OpsControlCenter tight(tightCfg);
         auto r1 = makeReport("n1", 1.0, std::chrono::system_clock::now());
         ProfileMeta m1;
@@ -804,6 +809,58 @@ int main() {
         byN1.nodeId = "n1";
         EXPECT(tight.queryProfiles(1, byN1).empty(),
                "capacity eviction clears the index");
+        PASS();
+    }
+
+    TEST("center role tiers: profile reads need bound roles above canAccess (04 §6.1)");
+    {
+        // §6.1 叠位语义：canAccess 四者皆含，角色表只绑三个——三档角色
+        // 都能读（inspect 面，ReadOnly 及以上），未绑定者被角色门拒绝
+        // （canAccess 放行 ≠ 可读：角色位是第二道独立关口）。
+        OpsControlCenter::Config cfg;
+        cfg.profilePolicy.canAccess = {1, 2, 3, 4};
+        cfg.roleBindings = {{1, AccessRole::ReadOnly},
+                            {2, AccessRole::Operator},
+                            {3, AccessRole::Admin}};
+        OpsControlCenter center(cfg);
+
+        auto report = makeReport("node-a", 1.0, std::chrono::system_clock::now());
+        ProfileMeta meta;
+        meta.handle = 9;
+        report.profiles.push_back(meta);
+        center.publish(report);
+
+        ProfileQuery byNode;
+        byNode.nodeId = "node-a";
+        EXPECT(center.queryProfiles(1, byNode).size() == 1, "ReadOnly reads");
+        EXPECT(center.queryProfiles(2, byNode).size() == 1, "Operator reads");
+        EXPECT(center.queryProfiles(3, byNode).size() == 1, "Admin reads");
+
+        auto& queryRejected = foundation::MetricsRegistry::instance().counter(
+            "center_profile_query_rejected_count");
+        auto& downloadRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "center_profile_download_rejected_count");
+        const auto qRej0 = queryRejected.value();
+        const auto dRej0 = downloadRejected.value();
+        const auto audits0 = center.auditCount();
+
+        EXPECT(center.queryProfiles(4, byNode).empty(),
+               "unbound query is refused despite canAccess");
+        std::string out;
+        EXPECT(!center.downloadProfileArtifact(4, "node-a", 9, out),
+               "unbound download is refused despite canAccess");
+
+        EXPECT(queryRejected.value() == qRej0 + 1, "query rejected +1");
+        EXPECT(downloadRejected.value() == dRej0 + 1, "download rejected +1");
+        const auto& trail = center.auditTrail();
+        EXPECT(trail.size() == audits0 + 2, "both refusals audited");
+        EXPECT(trail[trail.size() - 2].nodeId.empty() &&
+                   !trail[trail.size() - 2].entry.accepted,
+               "query refusal: center-local rejected entry");
+        EXPECT(trail[trail.size() - 1].entry.command ==
+                   "center.profiler.download",
+               "download refusal keeps its command shape");
         PASS();
     }
 

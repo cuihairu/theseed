@@ -35,6 +35,7 @@
 #include <variant>
 #include <vector>
 
+using theseed::control::machine::AccessRole;
 using theseed::control::machine::LocalHostProbe;
 using theseed::control::machine::LocalProcessSupervisor;
 using theseed::control::machine::MachineAgent;
@@ -200,9 +201,10 @@ int main() {
     MachineDaemon::Config config;
     config.listenPort = 0;
     // execute 策略：仅本测试客户端来源 + 三个受控命令（安全缺省全拒，
-    // 这里显式授权）
+    // 这里显式授权）；§6.1 角色绑定：客户端 = Admin（覆盖三档动作）
     config.execPolicy.trustedComponents = {kClientComponent};
     config.execPolicy.allowedCommands = {"start", "stop", "restart"};
+    config.roleBindings = {{kClientComponent, AccessRole::Admin}};
     // 审计聚合只接 auditSink（不接 reportSink）：顺带覆盖 auditSink-only
     // 部署——采身份汇审计流，但不上注册簿。
     OpsControlCenter auditCenter;
@@ -534,6 +536,7 @@ int main() {
         smallConfig.auditCapacity = 2;
         smallConfig.execPolicy.trustedComponents = {kClientComponent};
         smallConfig.execPolicy.allowedCommands = {"restart"};
+        smallConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         MachineDaemon smallDaemon(smallConfig, smallAgent);
         if (!smallDaemon.start()) FAIL("small daemon start failed");
         auto smallTick = [&smallDaemon] { smallDaemon.tick(); };
@@ -572,6 +575,7 @@ int main() {
         silentConfig.auditCapacity = 0;
         silentConfig.execPolicy.trustedComponents = {kClientComponent};
         silentConfig.execPolicy.allowedCommands = {"restart"};
+        silentConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         // 本地环形关闭 ≠ 中心聚合关闭：auditSink 独立开关
         silentConfig.auditSink = &auditCenter;
         MachineDaemon silentDaemon(silentConfig, silentAgent);
@@ -654,6 +658,7 @@ int main() {
         governConfig.execPolicy.trustedComponents = {kClientComponent};
         governConfig.execPolicy.allowedCommands = {"start", "stop"};
         governConfig.processGovernPolicy.trustedComponents = {kClientComponent};
+        governConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         MachineDaemon governDaemon(governConfig, governAgent);
         if (!governDaemon.start()) FAIL("govern daemon start failed");
         auto governTick = [&governDaemon] { governDaemon.tick(); };
@@ -757,6 +762,7 @@ int main() {
         // 处置名单故意不含 sleep：名称不匹配臂可达
         guardConfig.processGovernPolicy.trustedComponents = {kClientComponent};
         guardConfig.processGovernPolicy.killableNames = {"other"};
+        guardConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         MachineDaemon guardDaemon(guardConfig, guardAgent);
         if (!guardDaemon.start()) FAIL("guard daemon start failed");
         auto guardTick = [&guardDaemon] { guardDaemon.tick(); };
@@ -863,6 +869,7 @@ int main() {
         killConfig.auditSink = &killCenter;
         killConfig.processGovernPolicy.trustedComponents = {kClientComponent};
         killConfig.processGovernPolicy.killableNames = {"sleep"};
+        killConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         MachineDaemon killDaemon(killConfig, killAgent);
         if (!killDaemon.start()) FAIL("kill daemon start failed");
         auto killTick = [&killDaemon] { killDaemon.tick(); };
@@ -969,6 +976,7 @@ int main() {
         profileConfig.auditSink = &profileCenter;
         profileConfig.diagnosticsPolicy.canTrigger = {kClientComponent};
         profileConfig.diagnosticsPolicy.canAccess = {kClientComponent};
+        profileConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         profileConfig.tickProfiler = &profiler;
         MachineDaemon profileDaemon(profileConfig, profileAgent);
         if (!profileDaemon.start()) FAIL("profile daemon start failed");
@@ -1207,6 +1215,7 @@ int main() {
         OpsControlCenter::Config centerCfg;
         centerCfg.maxProfileArtifacts = 8;
         centerCfg.profilePolicy.canAccess = {kClientComponent};
+        centerCfg.roleBindings = {{kClientComponent, AccessRole::Admin}};
         OpsControlCenter relayCenter(centerCfg);
 
         // agent 持 reportSink（注册 + 周期上报），daemon 持 artifactSink
@@ -1229,6 +1238,7 @@ int main() {
         relayConfig.artifactSink = &relayCenter;
         relayConfig.diagnosticsPolicy.canTrigger = {kClientComponent};
         relayConfig.diagnosticsPolicy.canAccess = {kClientComponent};
+        relayConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         relayConfig.tickProfiler = &relayProfiler;
         MachineDaemon relayDaemon(relayConfig, relayAgent);
         if (!relayDaemon.start()) FAIL("relay daemon start failed");
@@ -1386,6 +1396,7 @@ int main() {
     {
         OpsControlCenter::Config centerCfg;
         centerCfg.profilePolicy.canAccess = {kClientComponent};
+        centerCfg.roleBindings = {{kClientComponent, AccessRole::Admin}};
         OpsControlCenter skipCenter(centerCfg);
 
         MachineAgent skipAgent(std::make_unique<LocalHostProbe>(),
@@ -1410,6 +1421,430 @@ int main() {
         if (skipCenter.downloadProfileArtifact(kClientComponent, skipNodeId,
                                                77, out))
             FAIL("unreadable frame must not be stored");
+        PASS();
+    }
+
+    TEST("access tiers: role gates layer over policy gates (04 §6.1)");
+    {
+        // 三级角色 × 三档动作的正反矩阵（角色绑定缺省空表 = 全拒，这里
+        // 显式绑定）：组件 1 = ReadOnly（inspect 可用）；组件 5 =
+        // Operator；组件 6 = Admin；组件 7 = 策略白名单内但未绑定角色
+        // （角色缺失 = 未授权）；组件 2 = 策略外（既有策略拒绝语义不变，
+        // 先策略后角色）。inspect = snapshot/audit/清单；operate =
+        // execute/触发；administer = terminate。
+        OpsControlCenter tierCenter;
+        MachineAgent tierAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>(),
+                               &tierCenter);
+        TickScheduler tierScheduler(std::chrono::milliseconds{0});
+        TickProfiler::Config tierProfilerConfig;
+        tierProfilerConfig.windowTicks = 4;
+        tierProfilerConfig.maxArtifacts = 4;
+        TickProfiler tierProfiler(tierProfilerConfig);
+        tierScheduler.setObserver(&tierProfiler);
+
+        MachineDaemon::Config tierConfig;
+        tierConfig.listenPort = 0;
+        tierConfig.auditSink = &tierCenter;
+        tierConfig.execPolicy.trustedComponents = {1, 5, 6, 7};
+        tierConfig.execPolicy.allowedCommands = {"restart"};
+        tierConfig.processGovernPolicy.trustedComponents = {1, 5, 6, 7};
+        tierConfig.processGovernPolicy.killableNames = {"sleep"};
+        tierConfig.diagnosticsPolicy.canTrigger = {1, 5, 6, 7};
+        tierConfig.diagnosticsPolicy.canAccess = {1, 5, 6, 7};
+        tierConfig.tickProfiler = &tierProfiler;
+        tierConfig.roleBindings = {
+            {1, AccessRole::ReadOnly},
+            {5, AccessRole::Operator},
+            {6, AccessRole::Admin},
+        };
+        MachineDaemon tierDaemon(tierConfig, tierAgent);
+        if (!tierDaemon.start()) FAIL("tier daemon start failed");
+        auto tierTick = [&tierDaemon] { tierDaemon.tick(); };
+
+        // 各身份一个连接（hub 按首条请求的 sourceComponent 自报注册）
+        RawClient ro;      // ReadOnly
+        ro.component = 1;
+        if (!ro.connect(tierDaemon.localPort())) FAIL("ro connect failed");
+        ro.settle(tierTick);
+        RawClient op;      // Operator
+        op.component = 5;
+        if (!op.connect(tierDaemon.localPort())) FAIL("op connect failed");
+        op.settle(tierTick);
+        RawClient adm;     // Admin
+        adm.component = 6;
+        if (!adm.connect(tierDaemon.localPort())) FAIL("adm connect failed");
+        adm.settle(tierTick);
+        RawClient unbound;  // 策略内、角色未绑定
+        unbound.component = 7;
+        if (!unbound.connect(tierDaemon.localPort()))
+            FAIL("unbound connect failed");
+        unbound.settle(tierTick);
+        RawClient stranger;  // 策略外
+        stranger.component = 2;
+        if (!stranger.connect(tierDaemon.localPort()))
+            FAIL("stranger connect failed");
+        stranger.settle(tierTick);
+
+        auto& execAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_execute_accepted_count");
+        auto& execRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_execute_rejected_count");
+        auto& termAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_terminate_accepted_count");
+        auto& termRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_terminate_rejected_count");
+        auto& trigAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_trigger_accepted_count");
+        auto& trigRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_trigger_rejected_count");
+        auto& accessAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_access_accepted_count");
+        auto& accessRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_profile_access_rejected_count");
+        auto& listRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_process_list_rejected_count");
+        auto& snapshotRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "machine_snapshot_rejected_count");
+        auto& auditRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_audit_rejected_count");
+        auto& snapshotCount = foundation::MetricsRegistry::instance().counter(
+            "machine_snapshot_count");
+        const auto execAcc0 = execAccepted.value();
+        const auto execRej0 = execRejected.value();
+        const auto termAcc0 = termAccepted.value();
+        const auto termRej0 = termRejected.value();
+        const auto trigAcc0 = trigAccepted.value();
+        const auto trigRej0 = trigRejected.value();
+        const auto accAcc0 = accessAccepted.value();
+        const auto accRej0 = accessRejected.value();
+        const auto listRej0 = listRejected.value();
+        const auto snapRej0 = snapshotRejected.value();
+        const auto audRej0 = auditRejected.value();
+        const auto snapCnt0 = snapshotCount.value();
+
+        RuntimeInvocation resp;
+        // ReadOnly：inspect 面可用（快照 + 清单），operate/administer 全拒
+        if (!ro.request(MachineMethod::kSnapshot, {}, tierTick, resp))
+            FAIL("no response to ro snapshot");
+        if (resp.method != MachineMethod::kSnapshotOk)
+            FAIL("ReadOnly must inspect: " + resp.method);
+        if (!ro.request(MachineMethod::kProfiles, {}, tierTick, resp))
+            FAIL("no response to ro listing");
+        if (resp.method != MachineMethod::kProfilesOk)
+            FAIL("ReadOnly with canAccess must list: " + payloadToString(resp));
+        if (!ro.request(MachineMethod::kExecute,
+                        executePayload("restart", "4000021"), tierTick, resp))
+            FAIL("no response to ro execute");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly execute must be refused by role: " +
+                 payloadToString(resp));
+        if (!ro.request(MachineMethod::kProfileTrigger, {}, tierTick, resp))
+            FAIL("no response to ro trigger");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly trigger must be refused by role: " +
+                 payloadToString(resp));
+        if (!ro.request(MachineMethod::kTerminate, payloadOf("4194307"),
+                        tierTick, resp))
+            FAIL("no response to ro terminate");
+        if (payloadToString(resp).find("requires Admin role") ==
+            std::string::npos)
+            FAIL("ReadOnly terminate must be refused by role: " +
+                 payloadToString(resp));
+
+        // 策略白名单内但未绑定角色：策略门放行，角色门拒绝
+        if (!unbound.request(MachineMethod::kExecute,
+                             executePayload("restart", "4000022"), tierTick,
+                             resp))
+            FAIL("no response to unbound execute");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("unbound execute must be refused by role: " +
+                 payloadToString(resp));
+        if (!unbound.request(MachineMethod::kTerminate, payloadOf("4194308"),
+                             tierTick, resp))
+            FAIL("no response to unbound terminate");
+        if (payloadToString(resp).find("requires Admin role") ==
+            std::string::npos)
+            FAIL("unbound terminate must be refused by role: " +
+                 payloadToString(resp));
+        // 只读面的角色拒绝臂：枚举与剖面读在 canAccess/govern 白名单
+        // 放行后仍需绑定 ReadOnly 及以上
+        if (!unbound.request(MachineMethod::kProcesses, {}, tierTick, resp))
+            FAIL("no response to unbound enumeration");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound enumeration must be refused by role: " +
+                 payloadToString(resp));
+        if (!unbound.request(MachineMethod::kProfiles, {}, tierTick, resp))
+            FAIL("no response to unbound listing");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound listing must be refused by role: " +
+                 payloadToString(resp));
+
+        // Operator：触发可用，处置（administer）拒
+        if (!op.request(MachineMethod::kProfileTrigger, {}, tierTick, resp))
+            FAIL("no response to op trigger");
+        if (resp.method != MachineMethod::kProfileTriggerOk)
+            FAIL("Operator trigger must succeed: " + payloadToString(resp));
+        const auto tierHandle = payloadToString(resp);
+        for (int i = 0; i < 4; ++i) tierScheduler.runOnce();
+        if (!op.request(MachineMethod::kProfiles, {}, tierTick, resp))
+            FAIL("no response to op listing");
+        if (resp.method != MachineMethod::kProfilesOk)
+            FAIL("Operator listing must succeed: " + payloadToString(resp));
+        if (!op.request(MachineMethod::kTerminate, payloadOf("4194309"),
+                        tierTick, resp))
+            FAIL("no response to op terminate");
+        if (payloadToString(resp).find("requires Admin role") ==
+            std::string::npos)
+            FAIL("Operator terminate must be refused by role: " +
+                 payloadToString(resp));
+        // 剖面下载的角色拒绝臂：canAccess 放行 + 句柄真实存在，仍差角色位
+        if (!unbound.request(MachineMethod::kProfile, payloadOf(tierHandle),
+                             tierTick, resp))
+            FAIL("no response to unbound download");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound download must be refused by role: " +
+                 payloadToString(resp));
+
+        // Admin：execute（accept + ok=false，不留子进程）、清单、真实处置
+        if (!adm.request(MachineMethod::kExecute,
+                         executePayload("restart", "4000023"), tierTick, resp))
+            FAIL("no response to adm execute");
+        if (resp.method != MachineMethod::kExecuteOk ||
+            resp.payload[0] != std::byte{0x00})
+            FAIL("Admin execute must pass the role gate");
+        if (!adm.request(MachineMethod::kProfiles, {}, tierTick, resp))
+            FAIL("no response to adm listing");
+        if (resp.method != MachineMethod::kProfilesOk)
+            FAIL("Admin listing must succeed: " + payloadToString(resp));
+        const pid_t sleeper = ::fork();
+        if (sleeper == 0) {
+            ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
+            ::_exit(127);
+        }
+        if (!adm.request(MachineMethod::kTerminate,
+                         payloadOf(std::to_string(static_cast<std::uint32_t>(
+                             sleeper))),
+                         tierTick, resp))
+            FAIL("no response to adm terminate");
+        if (resp.method != MachineMethod::kTerminateOk ||
+            resp.payload[0] != std::byte{0x01})
+            FAIL("Admin terminate must pass the role gate: " +
+                 payloadToString(resp));
+        int status = 0;
+        ::waitpid(sleeper, &status, 0);
+        if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM)
+            FAIL("sleeper must die by SIGTERM");
+
+        // 策略先行语义保持：策略外来源的拒绝消息仍是既有口径（先策略
+        // 后角色，拒绝原因不失真）
+        if (!stranger.request(MachineMethod::kExecute,
+                              executePayload("restart", "4000024"), tierTick,
+                              resp))
+            FAIL("no response to stranger execute");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger execute must be refused by policy: " +
+                 payloadToString(resp));
+        // 只读面无策略门：角色门是唯一关口（未绑定 = 拒绝，且照记审计）
+        if (!stranger.request(MachineMethod::kSnapshot, {}, tierTick, resp))
+            FAIL("no response to stranger snapshot");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound snapshot must be refused by role: " +
+                 payloadToString(resp));
+        if (!stranger.request(MachineMethod::kAudit, {}, tierTick, resp))
+            FAIL("no response to stranger audit query");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound audit query must be refused by role: " +
+                 payloadToString(resp));
+
+        // 指标增量：角色拒绝进各动作族既有拒绝计数（同款口径），只读
+        // 面拒绝进补齐成对的 snapshot/audit 拒绝计数
+        if (execAccepted.value() != execAcc0 + 1) FAIL("exec accepted +1");
+        if (execRejected.value() != execRej0 + 3)
+            FAIL("exec rejected +3 (ro/unbound/stranger)");
+        if (termAccepted.value() != termAcc0 + 1) FAIL("terminate accepted +1");
+        if (termRejected.value() != termRej0 + 3)
+            FAIL("terminate rejected +3 (ro/unbound/op)");
+        if (trigAccepted.value() != trigAcc0 + 1) FAIL("trigger accepted +1");
+        if (trigRejected.value() != trigRej0 + 1) FAIL("trigger rejected +1");
+        if (accessAccepted.value() != accAcc0 + 3)
+            FAIL("access accepted +3 (ro/op/adm listings)");
+        if (accessRejected.value() != accRej0 + 2)
+            FAIL("access rejected +2 (unbound listing/download)");
+        if (listRejected.value() != listRej0 + 1)
+            FAIL("list rejected +1 (unbound enumeration)");
+        if (snapshotRejected.value() != snapRej0 + 1)
+            FAIL("snapshot rejected +1");
+        if (auditRejected.value() != audRej0 + 1) FAIL("audit rejected +1");
+        if (snapshotCount.value() != snapCnt0 + 1) FAIL("snapshot served +1");
+
+        // 审计：18 次动作留痕（3 次接受的清单 + 全部拒绝与接受的控制
+        // 动作；接受的 snapshot/audit 查询不留痕避免噪声）
+        const auto& trail = tierDaemon.auditLog();
+        if (trail.size() != 18)
+            FAIL("all eighteen audited actions must be present, got " +
+                 std::to_string(trail.size()));
+        bool sawRoleRejectSnapshot = false;
+        bool sawAcceptedKill = false;
+        for (const auto& entry : trail) {
+            if (entry.command == "machine.snapshot" && !entry.accepted)
+                sawRoleRejectSnapshot = true;
+            if (entry.command == "process.kill" && entry.accepted && entry.ok)
+                sawAcceptedKill = true;
+        }
+        if (!sawRoleRejectSnapshot)
+            FAIL("role-rejected snapshot must be audited");
+        if (!sawAcceptedKill) FAIL("Admin disposition must be audited");
+
+        tierDaemon.stop();
+        PASS();
+    }
+
+    TEST("config hot-change: whitelist applies, protected classes refused (04 §6.3)");
+    {
+        // Admin 级热改通道：禁改四类命中即拒且指认类别；白名单外一律
+        // 拒；白名单内生效且效果可观测（上报周期 0 = 关闭 → 1ms 打开，
+        // 下一轮 tick 中心即见快照）。
+        OpsControlCenter cfgCenter;
+        MachineAgent cfgAgent(std::make_unique<LocalHostProbe>(),
+                              std::make_unique<LocalProcessSupervisor>(),
+                              &cfgCenter);
+        MachineDaemon::Config cfgConfig;
+        cfgConfig.listenPort = 0;
+        cfgConfig.auditSink = &cfgCenter;
+        cfgConfig.reportSink = &cfgCenter;
+        cfgConfig.reportInterval = std::chrono::milliseconds{0};  // 上报关闭
+        cfgConfig.roleBindings = {{kClientComponent, AccessRole::Admin},
+                                  {5, AccessRole::Operator}};
+        MachineDaemon cfgDaemon(cfgConfig, cfgAgent);
+        if (!cfgDaemon.start()) FAIL("cfg daemon start failed");
+        auto cfgTick = [&cfgDaemon] { cfgDaemon.tick(); };
+
+        RawClient cfgClient;
+        if (!cfgClient.connect(cfgDaemon.localPort())) FAIL("cfg connect failed");
+        cfgClient.settle(cfgTick);
+        RawClient op;
+        op.component = 5;
+        if (!op.connect(cfgDaemon.localPort())) FAIL("cfg op connect failed");
+        op.settle(cfgTick);
+
+        auto& applyAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_config_apply_accepted_count");
+        auto& applyRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_config_apply_rejected_count");
+        const auto applyAcc0 = applyAccepted.value();
+        const auto applyRej0 = applyRejected.value();
+
+        // 捕获 span：配置变更是关键受控动作
+        const auto spans = std::make_shared<std::vector<foundation::Span>>();
+        foundation::setSpanEmitter(
+            [spans](const foundation::Span& span) { spans->push_back(span); });
+
+        RuntimeInvocation resp;
+        // 畸形载荷（缺 NUL 分隔）
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               payloadOf("ops.report_interval_ms"), cfgTick,
+                               resp))
+            FAIL("no response to malformed apply");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("missing separator must be named: " + payloadToString(resp));
+        // 角色门：Operator 不可 apply（apply runtime config 需 Admin）
+        if (!op.request(MachineMethod::kConfigApply,
+                        executePayload("ops.report_interval_ms", "1"),
+                        cfgTick, resp))
+            FAIL("no response to op apply");
+        if (payloadToString(resp).find("requires Admin role") ==
+            std::string::npos)
+            FAIL("Operator apply must be refused by role: " +
+                 payloadToString(resp));
+        // 禁改四类：命中即拒且指认类别
+        const std::pair<const char*, const char*> forbidden[4] = {
+            {"migration.batch_size", "migration semantics"},
+            {"protocol.version", "protocol definition"},
+            {"persistence.schema_version", "persistence schema"},
+            {"entity.property.flags", "entity property flags"},
+        };
+        for (const auto& [key, className] : forbidden) {
+            if (!cfgClient.request(MachineMethod::kConfigApply,
+                                   executePayload(key, "1"), cfgTick, resp))
+                FAIL(std::string("no response to forbidden apply: ") + key);
+            if (payloadToString(resp).find(className) == std::string::npos)
+                FAIL(std::string("rejection must name the class for ") + key +
+                     ": " + payloadToString(resp));
+        }
+        // 白名单外任意键：一律拒（扩面须改码评审，配置自身开不了门）
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               executePayload("server.threads", "4"), cfgTick,
+                               resp))
+            FAIL("no response to non-whitelisted apply");
+        if (payloadToString(resp).find("not in the change whitelist") ==
+            std::string::npos)
+            FAIL("non-whitelisted key must be named: " + payloadToString(resp));
+        // 白名单内但值非法
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               executePayload("ops.report_interval_ms", ""),
+                               cfgTick, resp))
+            FAIL("no response to empty-value apply");
+        if (payloadToString(resp).find("invalid value") == std::string::npos)
+            FAIL("empty value must be refused: " + payloadToString(resp));
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               executePayload("ops.report_interval_ms", "abc"),
+                               cfgTick, resp))
+            FAIL("no response to non-numeric apply");
+        if (payloadToString(resp).find("invalid value") == std::string::npos)
+            FAIL("non-numeric value must be refused: " + payloadToString(resp));
+
+        // 白名单内：生效（指标 +9 拒绝在此之后断言，先打点前值）
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               executePayload("ops.report_interval_ms", "1"),
+                               cfgTick, resp))
+            FAIL("no response to whitelisted apply");
+        if (resp.method != MachineMethod::kConfigApplyOk)
+            FAIL("whitelisted apply must succeed: " + payloadToString(resp));
+        if (resp.payload.size() != 1 || resp.payload[0] != std::byte{0x01})
+            FAIL("applied response must be the success byte");
+
+        // 效果可观测：上报从关闭到打开——一次 tick 即向中心推快照
+        cfgTick();
+        NodeReport applied;
+        const auto hostname = LocalHostProbe{}.sample().hostname;
+        if (!cfgCenter.latest(hostname, applied) ||
+            applied.summary.host.hostname != hostname)
+            FAIL("applied interval must take effect on the next tick");
+
+        if (applyAccepted.value() != applyAcc0 + 1) FAIL("apply accepted +1");
+        if (applyRejected.value() != applyRej0 + 9)
+            FAIL("apply rejected +9 (malformed/role/4 classes/out-of-list/2 bad values)");
+
+        // 审计：10 次尝试全部留痕；接受条目记录 key=value
+        const auto& trail = cfgDaemon.auditLog();
+        if (trail.size() != 10)
+            FAIL("all ten apply attempts must be audited, got " +
+                 std::to_string(trail.size()));
+        if (!trail.back().accepted || !trail.back().ok ||
+            trail.back().args != "ops.report_interval_ms=1")
+            FAIL("accepted apply must record key=value");
+
+        // span：每次尝试一个（配置变更全程受控）
+        std::size_t applySpans = 0;
+        for (const auto& span : *spans) {
+            if (span.name == "machine.config.apply") ++applySpans;
+        }
+        if (applySpans != 10)
+            FAIL("one span per apply attempt, got " +
+                 std::to_string(applySpans));
+
+        foundation::setSpanEmitter(nullptr);
+        cfgDaemon.stop();
         PASS();
     }
 
@@ -1447,6 +1882,7 @@ int main() {
         exportConfig.listenPort = 0;
         exportConfig.execPolicy.trustedComponents = {kClientComponent};
         exportConfig.execPolicy.allowedCommands = {"restart"};
+        exportConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
         exportConfig.reportSink = &exportCenter;
         exportConfig.auditSink = &exportCenter;
         MachineDaemon exportDaemon(exportConfig, exportAgent);

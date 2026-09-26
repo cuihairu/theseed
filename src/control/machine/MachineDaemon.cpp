@@ -81,6 +81,38 @@ constexpr const char* kProfileAccessRejectedCount =
 constexpr const char* kProfileTriggerCommand = "profiler.trigger";
 constexpr const char* kProfileListCommand = "profiler.list";
 constexpr const char* kProfileDownloadCommand = "profiler.download";
+// §6.1 角色门落到只读面后，快照/审计查询的拒绝也要有同款计数（此前
+// 只读面无拒绝路径，计数器是单数；拒绝臂补齐成对口径）。
+constexpr const char* kSnapshotRejectedCount = "machine_snapshot_rejected_count";
+constexpr const char* kAuditRejectedCount = "machine_audit_rejected_count";
+// §6.3 运行时配置热改：Admin 级动作一对接受/拒绝计数。
+constexpr const char* kConfigApplyAcceptedCount =
+    "machine_config_apply_accepted_count";
+constexpr const char* kConfigApplyRejectedCount =
+    "machine_config_apply_rejected_count";
+// 只读面拒绝也入审计（拒绝是动作，照记不漏）；命令名与 RPC 方法同名。
+constexpr const char* kSnapshotCommand = "machine.snapshot";
+constexpr const char* kAuditQueryCommand = "machine.audit";
+constexpr const char* kConfigApplyCommand = "config.apply";
+
+// §6.3 禁改四类（协议定义 / 持久化 schema / entity property flags /
+// 迁移语义）：键前缀 → 类别名。命中即拒绝且指认类别——在线修改会破坏
+// 滚动升级 / 存量数据兼容 / 迁移正确性，不属于运维热改的授权范围。
+struct ProtectedConfigClass final {
+    const char* prefix;
+    const char* className;
+};
+constexpr ProtectedConfigClass kProtectedConfigClasses[] = {
+    {"protocol.", "protocol definition"},
+    {"persistence.", "persistence schema"},
+    {"entity.property", "entity property flags"},
+    {"migration.", "migration semantics"},
+};
+
+// §6.3 白名单：允许在线生效的配置键 → 语义说明。白名单是热改的唯一
+// 通道：不在表内的键一律拒绝（含禁改四类之外的任意新键——扩面须改码
+// 评审，不允许配置自身把门打开）。
+constexpr const char* kConfigReportIntervalKey = "ops.report_interval_ms";
 
 foundation::Counter& telemetryCounter(const char* name) {
     return foundation::MetricsRegistry::instance().counter(name);
@@ -167,6 +199,51 @@ ParsedHandle parseHandlePayload(const std::vector<std::byte>& payload) {
         return {};
     }
     return {true, handle};
+}
+
+// machine.config.apply 请求载荷 = key '\0' value（与 execute 同一 NUL
+// 分隔约定）；key 不得为空。value 的合法性由白名单命中后的解析负责。
+struct ParsedConfigPayload {
+    bool ok = false;
+    std::string key;
+    std::string value;
+};
+
+ParsedConfigPayload parseConfigPayload(const std::vector<std::byte>& payload) {
+    const auto separator =
+        std::find(payload.begin(), payload.end(), std::byte{0});
+    if (separator == payload.end()) {
+        return {};
+    }
+    ParsedConfigPayload parsed;
+    const auto* begin = reinterpret_cast<const char*>(payload.data());
+    const auto keyLength = static_cast<std::size_t>(separator - payload.begin());
+    parsed.key.assign(begin, keyLength);
+    parsed.value.assign(begin + keyLength + 1,
+                        payload.size() - keyLength - 1);
+    parsed.ok = !parsed.key.empty();
+    return parsed;
+}
+
+// 白名单键的值解析：毫秒数（十进制、全串消费）。0 合法 = 关闭该可调项
+// （与 reportInterval 的 0 = 关闭口径一致）。
+struct ParsedMillis {
+    bool ok = false;
+    std::uint64_t value = 0;
+};
+
+ParsedMillis parseMillisValue(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    std::uint64_t millis = 0;
+    const auto* begin = text.data();
+    const auto* end = begin + text.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, millis);
+    if (ec != std::errc{} || ptr != end) {
+        return {};
+    }
+    return {true, millis};
 }
 
 }  // namespace
@@ -385,6 +462,24 @@ void MachineDaemon::processMessages() {
 
 void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
     if (inv.method == MachineMethod::kSnapshot) {
+        // §6.1 角色门：inspect 面需 ReadOnly 及以上。接受的快照照旧不留
+        // 审计（避免只读噪声）；拒绝是动作，照记审计与计数。
+        if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+            AuditEntry entry;
+            entry.timestamp = std::chrono::system_clock::now();
+            entry.source = inv.sourceComponent;
+            entry.command = kSnapshotCommand;
+            entry.accepted = false;
+            appendAudit(entry);
+            const std::string reason =
+                "snapshot rejected: source component " +
+                std::to_string(inv.sourceComponent) + " requires ReadOnly role";
+            telemetryCounter(kSnapshotRejectedCount).increment();
+            const auto payload = toBytes(reason);
+            sendResponse(inv.sourceComponent, MachineMethod::kError,
+                         std::span<const std::byte>(payload));
+            return;
+        }
         telemetryCounter(kSnapshotCount).increment();
         const auto snapshotJson = toBytes(formatSnapshotJson(agent_.snapshot()));
         sendResponse(inv.sourceComponent, MachineMethod::kSnapshotOk,
@@ -393,6 +488,23 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
     }
 
     if (inv.method == MachineMethod::kAudit) {
+        // 同 snapshot：inspect 面角色门，拒绝留痕、接受不留。
+        if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+            AuditEntry entry;
+            entry.timestamp = std::chrono::system_clock::now();
+            entry.source = inv.sourceComponent;
+            entry.command = kAuditQueryCommand;
+            entry.accepted = false;
+            appendAudit(entry);
+            const std::string reason =
+                "audit query rejected: source component " +
+                std::to_string(inv.sourceComponent) + " requires ReadOnly role";
+            telemetryCounter(kAuditRejectedCount).increment();
+            const auto payload = toBytes(reason);
+            sendResponse(inv.sourceComponent, MachineMethod::kError,
+                         std::span<const std::byte>(payload));
+            return;
+        }
         telemetryCounter(kAuditCount).increment();
         handleAudit(inv);
         return;
@@ -476,6 +588,24 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
                          std::span<const std::byte>(payload));
             return;
         }
+        // §6.1 角色门（叠加在策略门之上）：execute 是 operate 面，需
+        // Operator 及以上；拒绝同权留痕（审计 + 计数 + span 标记）。
+        if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+            entry.accepted = false;
+            appendAudit(entry);
+            telemetryCounter(kExecuteRejectedCount).increment();
+            span.setAttribute("accepted", false);
+            const std::string reason =
+                "execute rejected: source component " +
+                std::to_string(inv.sourceComponent) +
+                " requires Operator role";
+            span.setAttribute("reason", reason);
+            logExecuteRejected(entry, reason);
+            const auto payload = toBytes(reason);
+            sendResponse(inv.sourceComponent, MachineMethod::kError,
+                         std::span<const std::byte>(payload));
+            return;
+        }
 
         entry.accepted = true;
         const auto execStart = std::chrono::steady_clock::now();
@@ -528,6 +658,11 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    if (inv.method == MachineMethod::kConfigApply) {
+        handleConfigApply(inv);
+        return;
+    }
+
     telemetryCounter(kUnknownMethodCount).increment();
     AuditEntry rejected;
     rejected.timestamp = std::chrono::system_clock::now();
@@ -574,6 +709,22 @@ void MachineDaemon::handleProcesses(runtime::RuntimeInvocation& inv) {
         const std::string reason =
             "process listing rejected: source component " +
             std::to_string(inv.sourceComponent) + " is not trusted";
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, nullptr, kProcessListRejectedCount,
+                            "machine.process.govern.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+        return;
+    }
+
+    // §6.1 角色门：枚举是 inspect 面，需 ReadOnly 及以上（叠加在来源
+    // 白名单之上）。
+    if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+        const std::string reason =
+            "process listing rejected: source component " +
+            std::to_string(inv.sourceComponent) + " requires ReadOnly role";
         entry.accepted = false;
         appendAudit(entry);
         rejectControlAction(entry, nullptr, kProcessListRejectedCount,
@@ -653,6 +804,13 @@ void MachineDaemon::handleTerminate(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // §6.1 角色门：处置 ≙ §6.1 的 retire process，administer 面需 Admin。
+    if (!hasRole(inv.sourceComponent, AccessRole::Admin)) {
+        reject("terminate rejected: source component " +
+               std::to_string(inv.sourceComponent) + " requires Admin role");
+        return;
+    }
+
     // 目标解析：治理目标必须是主机上真实存在、非自身、非受管的进程。
     // 枚举与处置之间固有竞态（进程可先退出），MVP 以 SIGTERM 语义接受：
     // kill 返回 ESRCH 时处置记失败（ok=false）而非拒绝。
@@ -711,6 +869,11 @@ bool MachineDaemon::isDiagnosticsAccessAuthorized(
     return std::find(allowed.begin(), allowed.end(), source) != allowed.end();
 }
 
+bool MachineDaemon::hasRole(runtime::ComponentId source,
+                            AccessRole required) const {
+    return roleMeets(roleFor(config_.roleBindings, source), required);
+}
+
 void MachineDaemon::handleProfileTrigger(runtime::RuntimeInvocation& inv) {
     // 触发是关键受控动作：消耗主机性能预算，全程 span（05 §3.1），
     // 限流拒绝也入 span。
@@ -737,6 +900,15 @@ void MachineDaemon::handleProfileTrigger(runtime::RuntimeInvocation& inv) {
     if (!isTriggerAuthorized(inv.sourceComponent)) {
         reject("profile trigger rejected: source component " +
                std::to_string(inv.sourceComponent) + " is not authorized");
+        return;
+    }
+
+    // §6.1 角色门（叠加在 canTrigger 之上）：触发消耗主机性能预算，
+    // operate 面需 Operator 及以上。
+    if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+        reject("profile trigger rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires Operator role");
         return;
     }
 
@@ -774,6 +946,21 @@ void MachineDaemon::handleProfiles(runtime::RuntimeInvocation& inv) {
         const std::string reason =
             "profile listing rejected: source component " +
             std::to_string(inv.sourceComponent) + " is not authorized";
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, nullptr, kProfileAccessRejectedCount,
+                            "machine.profile.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+        return;
+    }
+
+    // §6.1 角色门（叠加在 canAccess 之上）：inspect 面需 ReadOnly 及以上。
+    if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+        const std::string reason =
+            "profile listing rejected: source component " +
+            std::to_string(inv.sourceComponent) + " requires ReadOnly role";
         entry.accepted = false;
         appendAudit(entry);
         rejectControlAction(entry, nullptr, kProfileAccessRejectedCount,
@@ -841,6 +1028,13 @@ void MachineDaemon::handleProfileDownload(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    // §6.1 角色门（叠加在 canAccess 之上）：inspect 面需 ReadOnly 及以上。
+    if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+        reject("profile download rejected: source component " +
+               std::to_string(inv.sourceComponent) + " requires ReadOnly role");
+        return;
+    }
+
     std::string payloadText;
     if (!config_.tickProfiler->artifactPayload(parsed.value, payloadText)) {
         reject("profile download rejected: unknown handle " +
@@ -855,6 +1049,92 @@ void MachineDaemon::handleProfileDownload(runtime::RuntimeInvocation& inv) {
     const auto payload = toBytes(payloadText);
     sendResponse(inv.sourceComponent, MachineMethod::kProfileOk,
                  std::span<const std::byte>(payload));
+}
+
+// 运行时配置热改（04 §6.3，Admin 级）：白名单是热改的唯一通道——
+// 禁改四类（协议定义/持久化 schema/entity property flags/迁移语义）
+// 命中即拒绝且指认类别，白名单外任意键一律拒绝（扩面须改码评审），
+// 白名单内解析合法即就地生效。效果立即可观测（可调项即时改写
+// config_，下一轮 tick 即按新值运转）。
+void MachineDaemon::handleConfigApply(runtime::RuntimeInvocation& inv) {
+    // 配置变更是关键受控动作：全程 span（05 §3.1），拒绝也入 span。
+    foundation::SpanScope span("machine.config.apply");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kConfigApplyCommand;
+
+    // 拒绝臂共用出口：审计先行，再计数/span/日志与错误响应。
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kConfigApplyRejectedCount,
+                            "machine.config.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    const auto parsed = parseConfigPayload(inv.payload);
+    entry.args = parsed.ok ? (parsed.key + "=" + parsed.value) : "";
+    if (!parsed.ok) {
+        reject("config apply rejected: malformed payload "
+               "(expected key NUL value)");
+        return;
+    }
+    span.setAttribute("key", parsed.key);
+
+    // §6.1 角色门：配置生效 ≙ §6.1 的 apply runtime config，需 Admin。
+    if (!hasRole(inv.sourceComponent, AccessRole::Admin)) {
+        reject("config apply rejected: source component " +
+               std::to_string(inv.sourceComponent) + " requires Admin role");
+        return;
+    }
+
+    // 禁改四类先行指认：比"白名单外"更具体的拒绝原因（审计与指标里
+    // 可直接看出命中的保护类别）。
+    for (const auto& guarded : kProtectedConfigClasses) {
+        if (parsed.key.starts_with(guarded.prefix)) {
+            reject("config apply rejected: '" + parsed.key +
+                   "' modifies the " + guarded.className +
+                   " (online changes are forbidden)");
+            return;
+        }
+    }
+
+    // 白名单：目前唯一可调项是上报周期（毫秒；0 = 关闭周期上报）。
+    if (parsed.key == kConfigReportIntervalKey) {
+        const auto millis = parseMillisValue(parsed.value);
+        if (!millis.ok) {
+            reject("config apply rejected: invalid value for '" + parsed.key +
+                   "' (expected non-negative integer milliseconds)");
+            return;
+        }
+        config_.reportInterval = std::chrono::milliseconds{millis.value};
+    } else {
+        reject("config apply rejected: key '" + parsed.key +
+               "' is not in the change whitelist");
+        return;
+    }
+
+    entry.accepted = true;
+    entry.ok = true;
+    appendAudit(entry);
+    telemetryCounter(kConfigApplyAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("value", parsed.value);
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute keyAttr = {"key", parsed.key};
+    const foundation::LogAttribute valueAttr = {"value", parsed.value};
+    foundation::logInfo("machine.config.applied",
+                        {sourceAttr, keyAttr, valueAttr});
+    const std::byte result = std::byte{0x01};
+    sendResponse(inv.sourceComponent, MachineMethod::kConfigApplyOk,
+                 std::span<const std::byte>(&result, 1));
 }
 
 void MachineDaemon::sendResponse(runtime::ComponentId target,
