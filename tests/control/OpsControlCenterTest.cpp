@@ -22,6 +22,7 @@ using theseed::control::machine::INodeReportSink;
 using theseed::control::machine::IProcessSupervisor;
 using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
+using theseed::control::machine::NodeAuditEntry;
 using theseed::control::machine::NodeReport;
 using theseed::control::machine::NodeSummary;
 using theseed::control::machine::ProcessSummary;
@@ -62,6 +63,14 @@ NodeReport makeReport(const std::string& nodeId, double cpuUsage,
     report.summary.host.hostname = nodeId;
     report.summary.host.cpuUsage = cpuUsage;
     return report;
+}
+
+// 审计条目假件：顺序即断言对象（追加序 = 时间序），时间戳不参与。
+NodeAuditEntry makeAudit(const std::string& nodeId, const std::string& command) {
+    NodeAuditEntry entry;
+    entry.nodeId = nodeId;
+    entry.entry.command = command;
+    return entry;
 }
 
 // 固定 hostname 的探针假件：验证 nodeId 取自快照 hostname。
@@ -350,6 +359,8 @@ int main() {
         EXPECT(center.nodeCount() == 0, "stop without registration is a no-op");
         PASS();
     }
+
+    TEST("MachineAgent::report pushes snapshot with nodeId from hostname");
     {
         CapturingSink sink;
         MachineAgent agent(std::make_unique<FixedHostProbe>(),
@@ -361,6 +372,74 @@ int main() {
                "nodeId must come from snapshot hostname");
         EXPECT(sink.published[0].summary.host.hostname == "node-alpha",
                "report carries the full snapshot");
+        PASS();
+    }
+
+    TEST("audit publish aggregates with node attribution");
+    {
+        OpsControlCenter center;
+        center.publish(makeAudit("node-a", "start"));
+        center.publish(makeAudit("node-a", "stop"));
+        center.publish(makeAudit("node-b", "restart"));
+
+        EXPECT(center.auditCount() == 3, "all entries aggregated");
+        const auto trail = center.auditTrail();
+        EXPECT(trail.size() == 3, "full trail");
+        EXPECT(trail[0].entry.command == "start" &&
+                   trail[1].entry.command == "stop" &&
+                   trail[2].nodeId == "node-b",
+               "trail is chronological with attribution");
+        const auto onlyA = center.auditTrail("node-a");
+        EXPECT(onlyA.size() == 2 && onlyA[1].entry.command == "stop",
+               "per-node filter keeps order");
+        EXPECT(center.auditTrail("ghost").empty(),
+               "unknown node has no trail");
+        PASS();
+    }
+
+    TEST("audit ring evicts oldest beyond capacity");
+    {
+        OpsControlCenter::Config config;
+        config.maxAuditEntries = 2;
+        OpsControlCenter center(config);
+        center.publish(makeAudit("node-a", "one"));
+        center.publish(makeAudit("node-a", "two"));
+        center.publish(makeAudit("node-a", "three"));
+
+        const auto trail = center.auditTrail();
+        EXPECT(trail.size() == 2, "ring bounded");
+        EXPECT(trail[0].entry.command == "two" &&
+                   trail[1].entry.command == "three",
+               "oldest audit dropped first");
+        PASS();
+    }
+
+    TEST("audit aggregation gated by capacity 0 and identity");
+    {
+        OpsControlCenter::Config off;
+        off.maxAuditEntries = 0;
+        OpsControlCenter silent(off);
+        silent.publish(makeAudit("node-a", "start"));
+        EXPECT(silent.auditCount() == 0, "capacity 0 disables aggregation");
+
+        OpsControlCenter center;
+        center.publish(makeAudit("", "start"));
+        EXPECT(center.auditCount() == 0, "identity-less entries dropped");
+        PASS();
+    }
+
+    TEST("audit trail survives node deregistration and pruning");
+    {
+        OpsControlCenter center;
+        center.publish(makeReport("node-a", 1.0, baseTime));
+        center.publish(makeAudit("node-a", "start"));
+
+        center.deregister("node-a");
+        EXPECT(center.nodeCount() == 0, "node deregistered");
+        EXPECT(center.auditCount() == 1, "audit is history, not node state");
+
+        center.pruneStale(std::chrono::seconds{60}, baseTime);
+        EXPECT(center.auditCount() == 1, "pruning leaves audit intact");
         PASS();
     }
 

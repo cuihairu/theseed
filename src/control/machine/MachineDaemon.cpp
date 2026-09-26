@@ -69,11 +69,13 @@ bool MachineDaemon::start() {
 void MachineDaemon::announceToCenter() {
     // 身份口径 = 快照 hostname（06 §2.4 的 nodeId）。无中心出口不采样；
     // 空 hostname（异常探针）不入中心——中心侧同纪律丢弃无身份记录。
-    if (config_.reportSink == nullptr) {
+    if (config_.reportSink == nullptr && config_.auditSink == nullptr) {
         return;
     }
     nodeId_ = agent_.snapshot().host.hostname;
-    if (!nodeId_.empty()) {
+    // 注册只走 reportSink：auditSink-only 的部署只汇审计流，不上注册簿
+    // （中心节点名册由注册+快照维持，与审计留存互不牵动）。
+    if (config_.reportSink != nullptr && !nodeId_.empty()) {
         config_.reportSink->registerNode(nodeId_, std::chrono::system_clock::now());
     }
 }
@@ -137,13 +139,21 @@ bool MachineDaemon::isCommandAllowed(const std::string& command) const {
 }
 
 void MachineDaemon::appendAudit(const AuditEntry& entry) {
-    if (config_.auditCapacity == 0) {
-        return;  // 审计关闭
+    if (config_.auditCapacity != 0) {
+        if (auditLog_.size() == config_.auditCapacity) {
+            auditLog_.erase(auditLog_.begin());  // 环形：满后丢最旧
+        }
+        auditLog_.push_back(entry);
     }
-    if (auditLog_.size() == config_.auditCapacity) {
-        auditLog_.erase(auditLog_.begin());  // 环形：满后丢最旧
+    // 本地环形容量只约束本地视图；中心聚合由 auditSink 独立开关（04 §8：
+    // 拒绝与执行同权留痕，无审计盲区）。无身份（空 hostname）不归属，
+    // 中心侧同纪律丢弃。
+    if (config_.auditSink != nullptr && !nodeId_.empty()) {
+        NodeAuditEntry record;
+        record.nodeId = nodeId_;
+        record.entry = entry;
+        config_.auditSink->publish(record);
     }
-    auditLog_.push_back(entry);
 }
 
 void MachineDaemon::acceptConnections() {

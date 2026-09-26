@@ -1,5 +1,32 @@
 # TODO
 
+## 审计对接：execute 审计汇入 OpsControlCenter 可查询审计环形（2026-09-26）
+
+对齐 todo 遗留「与 Ops Control Plane 的注册、上报和审计对接」之审计侧
+（04-ops-control-plane §8 MVP「操作审计」+ §6.2 审计要求的 MVP 映射）：
+
+1. **AuditEntry.h 上提**（与 NodeReport.h 同法）：AuditEntry 自
+   MachineDaemon.h 独立成共享头——daemon 生产与中心聚合共用同一数据形状；
+   §6.2 映射口径写在头注释（operatorId ≙ source 组件 id、target ≙ 聚合侧
+   nodeId、result ≙ accepted+ok；requestId 待协议层支持后补）。
+2. **INodeAuditSink + NodeAuditEntry**：审计上报出口接缝（daemon 只依赖
+   接口）；NodeAuditEntry = nodeId 归属 + 条目；审计是历史事实——节点
+   注销/掉线摘除不清审计，存储上界由中心环形容量约束。
+3. **OpsControlCenter 审计面**：实现 INodeAuditSink；Config.maxAuditEntries
+   （默认 1024，0 = 关闭审计聚合）；publish 环形追加（满后丢最旧，无 nodeId
+   同身份纪律丢弃）；auditTrail() / auditTrail(nodeId) 时间升序可查询。
+4. **MachineDaemon 转发**：Config 增 auditSink；appendAudit 逐条推中心
+   （含全部拒绝路径——拒绝不产生审计盲区）；本地环形容量与中心聚合正交
+   （auditCapacity=0 只关本地视图）；auditSink-only 部署采身份汇审计流但
+   不上注册簿（注册与审计互不牵动）。
+5. **测试**（MachineDaemonTest 16→17、OpsControlCenterTest 19→23）：真实
+   TCP execute→中心全链路（8 条含拒绝逐条汇入、nodeId 归属 = 快照
+   hostname、时间升序、audit-only 不注册）、本地容量 0 不拦中心转发、
+   聚合排序/逐节点过滤/环形逐出/容量 0/空身份、审计在注销与 prune 后留存。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10045/10045）；clang 21
+树零警告、113/113 全绿。
+
 ## 控制面中心注册：MachineDaemon 生命周期注册/注销 + OpsControlCenter（2026-09-26）
 
 对齐 todo 遗留「与 Ops Control Plane 的注册、上报和审计对接」之注册侧：

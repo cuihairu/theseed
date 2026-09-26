@@ -116,4 +116,34 @@ std::size_t OpsControlCenter::pruneStale(std::chrono::milliseconds ttl,
     return pruned;
 }
 
+void OpsControlCenter::publish(const machine::NodeAuditEntry& entry) {
+    if (entry.nodeId.empty() || config_.maxAuditEntries == 0) {
+        return;  // 身份纪律同节点上报；容量 0 = 审计聚合关闭
+    }
+    if (auditEntries_.size() == config_.maxAuditEntries) {
+        auditEntries_.erase(auditEntries_.begin());  // 环形：满后丢最旧
+    }
+    auditEntries_.push_back(entry);
+}
+
+std::vector<machine::NodeAuditEntry> OpsControlCenter::auditTrail() const {
+    return auditEntries_;
+}
+
+std::vector<machine::NodeAuditEntry> OpsControlCenter::auditTrail(
+    const std::string& nodeId) const {
+    std::vector<machine::NodeAuditEntry> trail;
+    trail.reserve(auditEntries_.size());
+    for (const auto& entry : auditEntries_) {
+        if (entry.nodeId == nodeId) {
+            trail.push_back(entry);
+        }
+    }
+    return trail;
+}
+
+std::size_t OpsControlCenter::auditCount() const {
+    return auditEntries_.size();
+}
+
 }  // namespace theseed::control::ops

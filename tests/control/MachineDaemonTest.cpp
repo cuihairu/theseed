@@ -152,6 +152,10 @@ int main() {
     // 这里显式授权）
     config.execPolicy.trustedComponents = {kClientComponent};
     config.execPolicy.allowedCommands = {"start", "stop", "restart"};
+    // 审计聚合只接 auditSink（不接 reportSink）：顺带覆盖 auditSink-only
+    // 部署——采身份汇审计流，但不上注册簿。
+    OpsControlCenter auditCenter;
+    config.auditSink = &auditCenter;
     MachineDaemon daemon(config, agent);
 
     TEST("daemon starts, is idempotent, and reports its port");
@@ -369,6 +373,30 @@ int main() {
         PASS();
     }
 
+    TEST("execute audit entries flow to the ops center with node attribution");
+    {
+        const auto hostname = LocalHostProbe{}.sample().hostname;
+        const auto trail = auditCenter.auditTrail();
+        if (trail.size() != 8)
+            FAIL("expected 8 forwarded entries, got " +
+                 std::to_string(trail.size()));
+        if (trail.front().nodeId != hostname)
+            FAIL("entries must carry nodeId = snapshot hostname");
+        if (trail.front().entry.command != "start" ||
+            !trail.front().entry.accepted)
+            FAIL("trail must be chronological starting with accepted start");
+        bool sawUntrustedReject = false;
+        for (const auto& record : trail) {
+            if (!record.entry.accepted && record.entry.source == 2)
+                sawUntrustedReject = true;
+        }
+        if (!sawUntrustedReject)
+            FAIL("rejections must flow to center with source attribution");
+        if (auditCenter.nodeCount() != 0)
+            FAIL("audit-only wiring must not register the node");
+        PASS();
+    }
+
     TEST("audit ring evicts oldest beyond capacity");
     {
         LocalHostProbe probe;
@@ -418,6 +446,8 @@ int main() {
         silentConfig.auditCapacity = 0;
         silentConfig.execPolicy.trustedComponents = {kClientComponent};
         silentConfig.execPolicy.allowedCommands = {"restart"};
+        // 本地环形关闭 ≠ 中心聚合关闭：auditSink 独立开关
+        silentConfig.auditSink = &auditCenter;
         MachineDaemon silentDaemon(silentConfig, silentAgent);
         if (!silentDaemon.start()) FAIL("silent daemon start failed");
         auto silentTick = [&silentDaemon] { silentDaemon.tick(); };
@@ -435,6 +465,8 @@ int main() {
             FAIL("no response to audit");
         if (payloadToString(resp) != "[]") FAIL("disabled audit must be empty");
         if (!silentDaemon.auditLog().empty()) FAIL("local audit must stay empty");
+        if (auditCenter.auditCount() != 9)
+            FAIL("local capacity 0 must not gate center forwarding");
         silentDaemon.stop();
         PASS();
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/MachineAgent.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TcpListener.h"
@@ -28,16 +29,8 @@ inline constexpr const char* kAuditOk = "machine.audit.ok";
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
 
-// 受控命令审计条目（Ops Control Plane MVP 的“操作审计”）。execute 尝试与
-// 协议层拒绝各记一条；snapshot 只读不记（避免噪声）。
-struct AuditEntry {
-    std::chrono::system_clock::time_point timestamp{};
-    runtime::ComponentId source = 0;
-    std::string command;   // 未知方法请求记 method 名
-    std::string args;
-    bool accepted = false;  // false = 协议层拒绝（畸形载荷/空命令/未知方法）
-    bool ok = false;        // agent 执行结果（accepted 时有意义）
-};
+// 受控命令审计条目 AuditEntry 见 machine/AuditEntry.h（daemon 生产与中心
+// 聚合共用同一形状，INodeAuditSink 为其上报出口）。
 
 // MachineAgent 的 RPC 输出：把 snapshot/execute/audit 暴露为控制面 TCP 端点。
 //
@@ -79,12 +72,15 @@ public:
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
         runtime::ComponentId componentId = 60;  // Machine 组件默认 id
-        std::size_t auditCapacity = 128;  // 审计环形容量；0 = 关闭审计
+        std::size_t auditCapacity = 128;  // 本地审计环形容量；0 = 关闭本地环形
         ExecPolicy execPolicy;
         // 节点摘要上报周期；0 = 关闭周期上报。到期即采一次快照推给
         // reportSink（首个 tick 立即上报，保证中心侧新鲜度）。
         std::chrono::milliseconds reportInterval{0};
         INodeReportSink* reportSink = nullptr;  // 不持有；生命周期由调用方保证
+        // 审计聚合出口（04 §8 MVP"操作审计"）：所有 execute 尝试与拒绝
+        // 逐条推给中心（含 nodeId 归属）；本地环形容量与之正交。
+        INodeAuditSink* auditSink = nullptr;  // 不持有；生命周期由调用方保证
     };
 
     MachineDaemon(Config config, IMachineAgent& agent);
