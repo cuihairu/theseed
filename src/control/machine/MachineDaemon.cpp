@@ -172,11 +172,18 @@ ParsedHandle parseHandlePayload(const std::vector<std::byte>& payload) {
 }  // namespace
 
 MachineDaemon::MachineDaemon(Config config, IMachineAgent& agent)
-    : config_(std::move(config)), agent_(agent) {}
-
-MachineDaemon::~MachineDaemon() {
-    stop();
+    : config_(std::move(config)), agent_(agent) {
+    // 剖面元数据接线：本 daemon 是 IProfileMetaSource 的自然实现方
+    // （持有采样出口指针），agent 组装 NodeReport 时向本机拉取清单。
+    agent_.setProfileMetaSource(this);
 }
+
+MachineDaemon::~MachineDaemon() {  // LCOV_EXCL_LINE 私有继承 IProfileMetaSource 使析构隐式虚化：D0/D1/D2 三符号变体里基类子对象变体恒不被选中，签名行计数结构性为 0（D1 变体已在 100% 函数覆盖内）
+    stop();
+    // 摘除元数据接线，避免 agent 侧留悬垂指针（生命周期由调用方保证，
+    // 但先于 agent 析构的 daemon 不应再被拉取）。
+    agent_.setProfileMetaSource(nullptr);
+}  // LCOV_EXCL_LINE 同上：闭合行计数随 D2 变体结构性为 0
 
 bool MachineDaemon::start() {
     if (listener_.isListening()) {
@@ -232,6 +239,7 @@ void MachineDaemon::tick() {
     hub_->tick();
     processMessages();
     reportIfDue();
+    relayArtifacts();
 }
 
 void MachineDaemon::reportIfDue() {
@@ -246,6 +254,77 @@ void MachineDaemon::reportIfDue() {
     }
     lastReportAt_ = now;
     agent_.report();
+}
+
+// 剖面回传（04 §7 中心持有副本）：发现新固化产物即推给 artifactSink。
+// 推送（而非中心拉取）的选型理由：当前拓扑只有 agent→center 单向通道
+// （daemon 是 TCP 服务端，中心不持有 agent 连接），拉取需要新的反向
+// 传输腿，远超本批只读优先的范围；推送与审计/上报同向复用既有接缝。
+void MachineDaemon::relayArtifacts() {
+    if (config_.artifactSink == nullptr || config_.tickProfiler == nullptr ||
+        nodeId_.empty()) {
+        return;  // 回传未配置 / 采样入口关闭 / 无中心身份
+    }
+
+    const auto artifacts = config_.tickProfiler->listArtifacts();
+    for (const auto& artifact : artifacts) {
+        const bool relayed =
+            std::find(relayedHandles_.begin(), relayedHandles_.end(),
+                      artifact.handle) != relayedHandles_.end();
+        if (relayed) {
+            continue;
+        }
+        NodeProfileArtifact frame;
+        frame.nodeId = nodeId_;
+        frame.meta.handle = artifact.handle;
+        frame.meta.tickCount = artifact.tickCount;
+        frame.meta.windowMs = artifact.windowMs;
+        // entity/entityType 维度无生产者：frame.meta 恒空（ProfileMeta
+        // 的维度纪律），中心侧按这两维查询如实落空。
+        if (!config_.tickProfiler->artifactPayload(artifact.handle,
+                                                   frame.payload)) {
+            continue;  // 清单与存储的窄窗竞态（环形刚逐出）：跳过
+        }
+        config_.artifactSink->publish(frame);
+        relayedHandles_.push_back(artifact.handle);
+        const foundation::LogAttribute nodeIdAttr = {"node_id", nodeId_};
+        const foundation::LogAttribute handleAttr = {
+            "handle", static_cast<std::int64_t>(artifact.handle)};
+        const foundation::LogAttribute bytesAttr = {
+            "bytes", static_cast<std::int64_t>(frame.payload.size())};
+        foundation::logInfo("machine.profile.relayed",
+                            {nodeIdAttr, handleAttr, bytesAttr});
+    }
+
+    // 已回传账本修剪：只留仍在产物环形里的句柄（环形逐出者不会复现，
+    // 账本上界 = 产物环形容量）。
+    relayedHandles_.erase(
+        std::remove_if(relayedHandles_.begin(), relayedHandles_.end(),
+                       [&artifacts](std::uint64_t handle) {
+                           for (const auto& artifact : artifacts) {
+                               if (artifact.handle == handle) {
+                                   return false;
+                               }
+                           }
+                           return true;
+                       }),
+        relayedHandles_.end());
+}
+
+std::vector<ProfileMeta> MachineDaemon::profileMetas() const {
+    std::vector<ProfileMeta> metas;
+    if (config_.tickProfiler == nullptr) {
+        return metas;  // 采样入口关闭：诚实空清单
+    }
+    for (const auto& artifact : config_.tickProfiler->listArtifacts()) {
+        ProfileMeta meta;
+        meta.handle = artifact.handle;
+        meta.tickCount = artifact.tickCount;
+        meta.windowMs = artifact.windowMs;
+        // entityId/entityType 恒空（无生产者，见 ProfileMeta 维度纪律）。
+        metas.push_back(meta);
+    }
+    return metas;
 }
 
 bool MachineDaemon::isListening() const {

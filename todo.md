@@ -1,5 +1,66 @@
 # TODO
 
+## 诊断产物跨机回传 + 中心侧剖面查询：04 §7 中心半边（2026-09-26）
+
+补齐上一批明确留下的边界（「产物仅存 agent 本地，跨机器回传中心的通道
+未做」），落地 04 §7 的中心侧两件事：「按 entity / entity type / process
+查询当前剖面」+ 中心持有产物副本后中心侧下载不再依赖直连 agent：
+
+1. **回传选型：agent 推送（非中心拉取）**。理由：当前拓扑只有
+   agent→center 单向通道（daemon 是 TCP 服务端，中心不持有 agent 连接），
+   拉取需要新增中心→agent 反向传输腿，远超本批只读优先的范围；推送与
+   审计/上报同向，复用既有接缝族（INodeArtifactSink 与 INodeAuditSink
+   同构）。daemon 在 tick 里轮询 `listArtifacts()`，发现新固化句柄即推
+   （元数据 + 只读字节），已回传账本只留仍在产物环形里的句柄（句柄不复
+   用，被逐出者不会复现，账本上界 = 产物环形容量）。
+2. **元数据通道：复用 report() 上报**。`NodeReport` 增 profiles 字段
+   （快照语义：后到覆盖中心侧该节点剖面索引；无剖面来源的报告照常清空
+   索引——诚实反映 agent 侧已无剖面）；`IMachineAgent::setProfileMeta
+   Source` 能力接缝（nullptr = 无剖面，报告照发），daemon 是自然实现方。
+   维度纪律（不编造数据）：机器 agent 的 TickProfiler 是进程级 tick 粒度
+   ——entityId/entityType 无生产者恒空上报，中心按这两维查询如实落空；
+   process 维 ≙ nodeId（06 的 hostname 口径），不冗余进 ProfileMeta。
+3. **中心侧（OpsControlCenter）**：实现 INodeArtifactSink，产物副本进
+   跨节点全局环形（容量 maxProfileArtifacts=32，满后按到达序丢最旧，
+   0 = 关闭副本存储——索引照常、下载如实报无副本；副本是历史事实，不随
+   节点注销/pruneStale/容量逐出而清，与审计同纪律；剖面索引是节点状态，
+   随节点摘除而清，与快照同纪律）。`queryProfiles` / `downloadProfile
+   Artifact` 读入口：沿用 `DiagnosticsPolicy` 读位 canAccess（类型从
+   MachineDaemon 嵌套上提为命名空间级，授权口径不复制不走样；canTrigger
+   写位只在 agent 侧生效，中心无写命令）；查询输出按 (nodeId, handle)
+   稳定排序；产物帧并额外并入查询索引（报告通道未及的窗口也能查到）。
+4. **审计与指标**：中心侧查询/下载及全部拒绝逐条入审计（command 前缀
+   center.profiler.* 与 agent 侧 profiler.* 区分归属；nodeId 为空 =
+   中心本地动作——与「daemon 无身份上报丢弃」纪律区分：后者管的是无法
+   归属的节点上报，中心本地动作的身份就是中心）+ 指标四对计数
+   （center_profile_query/download_accepted/rejected_count）+ 副本逐出
+   计数；读动作不进 trace（与 agent 侧清单/下载同口径）。
+5. **测试**（OpsControlCenterTest 24→27、MachineDaemonTest 25→27）：
+   中心聚合（多 agent 上报→维度查询，entity 维诚实落空、未知节点落空、
+   稳定序）、副本存储（回传→中心下载同源字节→未知句柄/未知节点/未授权
+   三拒绝→环形逐出）、索引生命周期（副本关闭仍可查询、快照覆盖清索引、
+   注销/prune/容量逐出清索引、仅产物帧节点可查、空帧身份纪律丢弃）、
+   E2E（真实 agent 推送→中心查询/下载与 agent 侧字节同源→report 通道
+   携带元数据→agent 侧环形逐出后中心副本仍可下载→不可读产物帧安全
+   跳过不落库）。
+
+**边界与缺字段（如实记录，未编造）**：
+- 中心侧查询/下载是进程内 API（ops 宿主进程直调 OpsControlCenter），
+  跨机网络转发属跨 realm 异步平面，后续接入；调用方身份为进程内自报，
+  正式鉴权归 Gateway 层（沿用既有边界记录）。
+- entity / entityType 维度当前无生产者（不做 EntityProfiler→负载反馈
+  链，归 03 谱系），查询如实落空；过滤逻辑本身已按维度实现并有测试。
+- 中心副本的保留时长只有容量上界（无 TTL/落盘）——中心进程重启即失，
+  跨机持久化留待跨 realm 平面。
+- 触发入口仍在 agent 侧（machine.profile.trigger），本批无中心侧写命令
+  （只读优先）；§6.1 角色模型、Gateway 限流/超时、配置在线热改边界
+  沿用上一批记录，未顺手扩面。
+- daemon 私有继承 IProfileMetaSource 使析构隐式虚化（D0/D1/D2 多符号
+  变体），签名行覆盖按既有 ABI 结构性口径排除。
+
+验证口径：gcc-coverage 115/115 全绿、gcovr 100%（10702/10702 行 +
+1589/1589 函数）；clang 树全新重建零警告、115/115 全绿。
+
 ## 诊断采样触发/下载入口：04 §7 控制面 MVP 切片（2026-09-26）
 
 对齐 04-ops-control-plane §7 的职责拆分（采样/导出语义归 05，谁可以

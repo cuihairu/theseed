@@ -50,7 +50,15 @@ void MachineAgent::report() {
     report.summary = snapshot();
     report.nodeId = report.summary.host.hostname;
     report.timestamp = std::chrono::system_clock::now();
+    if (profileMetaSource_ != nullptr) {
+        report.profiles = profileMetaSource_->profileMetas();
+    }
     reportSink_->publish(report);
+}
+
+void MachineAgent::setProfileMetaSource(
+    IProfileMetaSource* profileMetaSource) {
+    profileMetaSource_ = profileMetaSource;
 }
 
 bool MachineAgent::execute(const std::string& command, const std::string& args) {

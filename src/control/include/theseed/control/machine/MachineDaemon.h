@@ -2,6 +2,7 @@
 
 #include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/MachineAgent.h"
+#include "theseed/control/machine/ProfileRelay.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TcpListener.h"
 #include "theseed/runtime/TickProfiler.h"
@@ -84,7 +85,12 @@ inline constexpr const char* kError = "machine.error";
 // hostname（nodeId 口径）向中心注册占位；周期上报随后刷新快照；stop()
 // 优雅下线立即注销摘除。疑似掉线（无注销机会）由中心 pruneStale 的
 // TTL 兜底——注册/注销/掉线摘除三者语义自洽。
-class MachineDaemon final {
+//
+// 剖面回传接线（04 §7 中心侧）：daemon 以 IProfileMetaSource 身份挂到
+// agent（report() 组装 NodeReport 时带上本机剖面清单，经既有上报通道
+// 汇聚），并在 tick 里把新固化产物经 artifactSink 推给中心存储——中心
+// 侧查询/下载不依赖直连 agent。
+class MachineDaemon final : private IProfileMetaSource {
 public:
     // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
     // “少量受控命令”）：
@@ -111,17 +117,9 @@ public:
         std::vector<std::string> killableNames;
     };
 
-    // 诊断采样入口策略（04 §7：触发/下载鉴权归 Ops Control Plane；§6.1
-    // 权限分级）。与 ExecPolicy/ProcessGovernPolicy 分离——采样消耗主机
-    // 性能预算（写侧），产物含运行时明细（读侧外泄面），授权口径独立：
-    // - canTrigger：允许触发采样窗口（写侧）；
-    // - canAccess：允许查询产物清单与按 handle 下载（读侧）。
-    // 读写分开：只读观测角色可取既有产物但开不了新窗口。触发、查询、
-    // 下载及全部拒绝逐条入审计（profiler.trigger/list/download）。
-    struct DiagnosticsPolicy final {
-        std::vector<runtime::ComponentId> canTrigger;
-        std::vector<runtime::ComponentId> canAccess;
-    };
+    // 诊断采样入口策略 DiagnosticsPolicy（04 §7）上提至命名空间级
+    // （ProfileRelay.h）：中心侧查询/下载沿用同一读位（canAccess），
+    // 授权口径不复制不走样；canTrigger 写位只在 agent 侧生效。
 
     struct Config final {
         std::string listenHost = "127.0.0.1";
@@ -146,6 +144,10 @@ public:
         // 审计聚合出口（04 §8 MVP"操作审计"）：所有 execute 尝试与拒绝
         // 逐条推给中心（含 nodeId 归属）；本地环形容量与之正交。
         INodeAuditSink* auditSink = nullptr;  // 不持有；生命周期由调用方保证
+        // 剖面产物回传出口（04 §7 中心持有副本）：tick 里发现新固化产物
+        // 即推送（含元数据与只读字节）。nullptr = 不回传，中心侧下载
+        // 无副本可用（诚实报无副本）。不持有；生命周期由调用方保证。
+        INodeArtifactSink* artifactSink = nullptr;
     };
 
     MachineDaemon(Config config, IMachineAgent& agent);
@@ -185,6 +187,10 @@ private:
     bool isDiagnosticsAccessAuthorized(runtime::ComponentId source) const;
     void appendAudit(const AuditEntry& entry);
     void reportIfDue();
+    // 剖面回传：发现新固化产物即推给 artifactSink（见 tick()）。
+    void relayArtifacts();
+    // IProfileMetaSource：本机当前剖面清单（report() 通道快照语义）。
+    std::vector<ProfileMeta> profileMetas() const override;
     void sendResponse(runtime::ComponentId target,
                       const std::string& method,
                       std::span<const std::byte> payload);
@@ -198,6 +204,9 @@ private:
     // 本机身份（快照 hostname，06 的 nodeId 口径）；空 = 未向中心登记。
     // start() 采样、stop() 注销沿用同一值——注销必与注册同键。
     std::string nodeId_;
+    // 已回传中心的产品句柄账本（只留仍在产物环形里的——句柄不复用，
+    // 被逐出者不会复现；上界 = 产物环形容量）。
+    std::vector<std::uint64_t> relayedHandles_;
 };
 
 }  // namespace theseed::control::machine

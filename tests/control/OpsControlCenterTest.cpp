@@ -24,8 +24,11 @@ using theseed::control::machine::IProcessSupervisor;
 using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
 using theseed::control::machine::NodeAuditEntry;
+using theseed::control::machine::NodeProfileArtifact;
 using theseed::control::machine::NodeReport;
 using theseed::control::machine::NodeSummary;
+using theseed::control::machine::ProfileMeta;
+using theseed::control::machine::ProfileQuery;
 using theseed::control::machine::ProcessSummary;
 using theseed::control::ops::OpsControlCenter;
 namespace foundation = theseed::foundation;
@@ -572,6 +575,235 @@ int main() {
         }
         EXPECT(center.nodeCount() == 0, "missing sink disables reporting");
         daemonNoSink.stop();
+        PASS();
+    }
+
+    TEST("profile aggregation: dimension queries are honest about gaps");
+    {
+        OpsControlCenter::Config cfg;
+        cfg.maxProfileArtifacts = 8;
+        cfg.profilePolicy.canAccess = {1};
+        OpsControlCenter center(cfg);
+
+        // 两台 agent 的剖面元数据经 report() 通道汇聚：node-a 只带进程维
+        // （机器 agent 的 TickProfiler 是进程级 tick 粒度，无 entity 维
+        // 生产者）；node-b 的一条实体维条目只为验证中心过滤逻辑本身。
+        auto reportA = makeReport("node-a", 1.0, std::chrono::system_clock::now());
+        ProfileMeta metaA;
+        metaA.handle = 5;
+        metaA.tickCount = 32;
+        metaA.windowMs = 1.5;
+        reportA.profiles.push_back(metaA);
+        center.publish(reportA);
+
+        auto reportB = makeReport("node-b", 2.0, std::chrono::system_clock::now());
+        ProfileMeta metaB;
+        metaB.handle = 7;
+        metaB.entityType = "Monster";
+        reportB.profiles.push_back(metaB);
+        center.publish(reportB);
+
+        ProfileQuery allQuery;
+        auto all = center.queryProfiles(1, allQuery);
+        EXPECT(all.size() == 2, "both nodes' profiles aggregated, got " +
+                                    std::to_string(all.size()));
+        EXPECT(all[0].nodeId == "node-a" && all[0].meta.handle == 5,
+               "output stable by (nodeId, handle)");
+        EXPECT(all[1].nodeId == "node-b" && all[1].meta.handle == 7,
+               "second row is node-b");
+
+        ProfileQuery byNode;
+        byNode.nodeId = "node-a";
+        auto byNodeRows = center.queryProfiles(1, byNode);
+        EXPECT(byNodeRows.size() == 1 && byNodeRows[0].meta.handle == 5,
+               "node dimension filters");
+
+        ProfileQuery byEntity;
+        byEntity.entityId = "e-1";
+        EXPECT(center.queryProfiles(1, byEntity).empty(),
+               "entity dimension has no producers: honest empty");
+
+        ProfileQuery byType;
+        byType.entityType = "Monster";
+        auto byTypeRows = center.queryProfiles(1, byType);
+        EXPECT(byTypeRows.size() == 1 && byTypeRows[0].nodeId == "node-b",
+               "entity-type dimension filters reported metas");
+
+        ProfileQuery byNope;
+        byNope.nodeId = "nope";
+        EXPECT(center.queryProfiles(1, byNope).empty(),
+               "unknown node is honestly empty");
+
+        // 未授权查询：空结果 + 拒绝审计（nodeId 空 = 中心本地动作）+ 指标
+        auto& queryAccepted = foundation::MetricsRegistry::instance().counter(
+            "center_profile_query_accepted_count");
+        auto& queryRejected = foundation::MetricsRegistry::instance().counter(
+            "center_profile_query_rejected_count");
+        const auto acc0 = queryAccepted.value();
+        const auto rej0 = queryRejected.value();
+        const auto audits0 = center.auditCount();
+
+        EXPECT(center.queryProfiles(2, allQuery).empty(),
+               "unauthorized query is empty");
+        EXPECT(queryRejected.value() == rej0 + 1, "rejected counter +1");
+        const auto trail = center.auditTrail();
+        EXPECT(trail.size() == audits0 + 1, "rejection audited");
+        EXPECT(trail.back().nodeId.empty(), "center-local audit: empty nodeId");
+        EXPECT(trail.back().entry.command == "center.profiler.query" &&
+                   !trail.back().entry.accepted,
+               "rejection entry shape");
+
+        center.queryProfiles(1, allQuery);
+        EXPECT(queryAccepted.value() == acc0 + 1, "accepted counter +1");
+        EXPECT(center.auditCount() == audits0 + 2,
+               "acceptance audited in the same ring");
+        PASS();
+    }
+
+    TEST("artifact relay: center stores copies, download reads them back");
+    {
+        OpsControlCenter::Config cfg;
+        cfg.maxProfileArtifacts = 2;
+        cfg.profilePolicy.canAccess = {1};
+        OpsControlCenter center(cfg);
+
+        const auto mk = [](const std::string& node, std::uint64_t handle,
+                           const std::string& payload) {
+            NodeProfileArtifact frame;
+            frame.nodeId = node;
+            frame.meta.handle = handle;
+            frame.meta.tickCount = 4;
+            frame.payload = payload;
+            return frame;
+        };
+
+        center.publish(mk("node-a", 1, "{\"handle\":1}"));
+        center.publish(mk("node-a", 2, "{\"handle\":2}"));
+
+        // 产物帧同时并入查询索引（报告通道未及的窗口也能查到）
+        ProfileQuery byNode;
+        byNode.nodeId = "node-a";
+        EXPECT(center.queryProfiles(1, byNode).size() == 2,
+               "artifact frames merge into the query index");
+
+        std::string out;
+        EXPECT(center.downloadProfileArtifact(1, "node-a", 2, out),
+               "download by (node, handle)");
+        EXPECT(out == "{\"handle\":2}", "payload is the relayed bytes");
+
+        const auto audits0 = center.auditCount();
+        EXPECT(!center.downloadProfileArtifact(1, "node-a", 99, out),
+               "unknown handle is honestly refused");
+        EXPECT(!center.downloadProfileArtifact(1, "node-b", 1, out),
+               "unknown node is honestly refused");
+        EXPECT(!center.downloadProfileArtifact(2, "node-a", 1, out),
+               "unauthorized download refused");
+        const auto trail = center.auditTrail();
+        EXPECT(trail.size() == audits0 + 3, "three attempts audited");
+        EXPECT(!trail[trail.size() - 3].entry.accepted,
+               "unknown-handle attempt rejected");
+        EXPECT(!trail[trail.size() - 2].entry.accepted,
+               "unknown-node attempt rejected");
+        EXPECT(trail[trail.size() - 1].entry.command ==
+                   "center.profiler.download",
+               "download command shape");
+
+        // 副本环形容量 2：第三份挤掉最旧（到达序），逐出计数
+        auto& dropped = foundation::MetricsRegistry::instance().counter(
+            "center_profile_artifacts_dropped_count");
+        const auto drop0 = dropped.value();
+        center.publish(mk("node-a", 3, "{\"handle\":3}"));
+        EXPECT(dropped.value() == drop0 + 1, "eviction counted");
+        EXPECT(!center.downloadProfileArtifact(1, "node-a", 1, out),
+               "oldest copy evicted");
+        EXPECT(center.downloadProfileArtifact(1, "node-a", 3, out),
+               "newest copy held");
+
+        // 空帧：身份纪律丢弃（不聚合、不进索引、不计数）
+        center.publish(mk("", 9, "x"));
+        ProfileQuery allQuery;
+        EXPECT(center.queryProfiles(1, allQuery).size() == 3,
+               "empty frame contributes nothing");
+        PASS();
+    }
+
+    TEST("profile index lifecycle: store off, node removal, snapshot overwrite");
+    {
+        // 副本存储关闭：元数据索引照常，下载如实报无副本
+        OpsControlCenter::Config cfg;
+        cfg.maxProfileArtifacts = 0;
+        cfg.profilePolicy.canAccess = {1};
+        OpsControlCenter center(cfg);
+
+        auto report = makeReport("node-a", 1.0, std::chrono::system_clock::now());
+        ProfileMeta meta;
+        meta.handle = 5;
+        report.profiles.push_back(meta);
+        center.publish(report);
+
+        NodeProfileArtifact frame;
+        frame.nodeId = "node-a";
+        frame.meta.handle = 5;
+        frame.payload = "bytes";
+        center.publish(frame);  // 字节不留（存储关闭），索引并入句柄
+
+        ProfileQuery byNodeA;
+        byNodeA.nodeId = "node-a";
+        EXPECT(center.queryProfiles(1, byNodeA).size() == 1,
+               "index works without copies");
+        std::string out;
+        EXPECT(!center.downloadProfileArtifact(1, "node-a", 5, out),
+               "no local copy: honest refusal");
+
+        // 报告快照后到覆盖：无剖面的报告清空该节点索引
+        center.publish(makeReport("node-a", 1.0, std::chrono::system_clock::now()));
+        EXPECT(center.queryProfiles(1, byNodeA).empty(),
+               "profile-free report clears the index (snapshot semantics)");
+
+        // 仅产物帧的节点（不在名册）也可查询；注销名册节点清索引
+        NodeProfileArtifact frameB;
+        frameB.nodeId = "node-b";
+        frameB.meta.handle = 1;
+        frameB.payload = "b1";
+        center.publish(frameB);
+        ProfileQuery byNodeB;
+        byNodeB.nodeId = "node-b";
+        EXPECT(center.queryProfiles(1, byNodeB).size() == 1,
+               "artifact-only node is queryable");
+        EXPECT(center.deregister("node-a"), "node-a deregistered");
+        EXPECT(center.queryProfiles(1, byNodeA).empty(),
+               "deregister clears the index (state semantics)");
+
+        // pruneStale 同纪律：摘节点清索引
+        auto staleReport = makeReport(
+            "node-c", 1.0, std::chrono::system_clock::now() - std::chrono::hours{1});
+        ProfileMeta metaC;
+        metaC.handle = 2;
+        staleReport.profiles.push_back(metaC);
+        center.publish(staleReport);
+        EXPECT(center.pruneStale(std::chrono::milliseconds{1000},
+                                 std::chrono::system_clock::now()) == 1,
+               "stale node pruned");
+        ProfileQuery byNodeC;
+        byNodeC.nodeId = "node-c";
+        EXPECT(center.queryProfiles(1, byNodeC).empty(),
+               "prune clears the index");
+
+        // 容量逐出同样清索引（maxNodes=1，n1 被 n2 挤出）
+        OpsControlCenter::Config tightCfg;
+        tightCfg.maxNodes = 1;
+        tightCfg.profilePolicy.canAccess = {1};
+        OpsControlCenter tight(tightCfg);
+        auto r1 = makeReport("n1", 1.0, std::chrono::system_clock::now());
+        ProfileMeta m1;
+        m1.handle = 1;
+        r1.profiles.push_back(m1);
+        tight.publish(r1);
+        tight.publish(makeReport("n2", 2.0, std::chrono::system_clock::now()));
+        ProfileQuery byN1;
+        byN1.nodeId = "n1";
+        EXPECT(tight.queryProfiles(1, byN1).empty(),
+               "capacity eviction clears the index");
         PASS();
     }
 

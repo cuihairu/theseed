@@ -39,7 +39,9 @@ using theseed::control::machine::LocalHostProbe;
 using theseed::control::machine::LocalProcessSupervisor;
 using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
+using theseed::control::machine::NodeAuditEntry;
 using theseed::control::machine::NodeReport;
+using theseed::control::machine::ProfileQuery;
 using theseed::control::ops::OpsControlCenter;
 namespace foundation = theseed::foundation;
 // 命名空间不能 using-declare，用别名
@@ -163,6 +165,26 @@ public:
 private:
     foundation::LogLevel level_ = foundation::LogLevel::Debug;
     std::vector<foundation::LogRecord> records_;
+};
+
+// 剖面出口假件：清单报告句柄但字节不可读——验证回传对"清单与存储
+// 分歧"的接口鲁棒性（daemon 对任意 ITickProfiler 实现安全，不推送
+// 残缺帧）。
+class UnreadableProfiler final : public theseed::runtime::ITickProfiler {
+public:
+    std::uint64_t trigger() override { return 0; }
+    bool sampling() const override { return false; }
+    std::vector<theseed::runtime::ITickProfiler::ArtifactMeta> listArtifacts()
+        const override {
+        theseed::runtime::ITickProfiler::ArtifactMeta phantom;
+        phantom.handle = 77;
+        phantom.tickCount = 4;
+        return {phantom};
+    }
+    bool artifactPayload(std::uint64_t /*handle*/,
+                         std::string& /*out*/) const override {
+        return false;
+    }
 };
 
 }  // namespace
@@ -1176,6 +1198,218 @@ int main() {
 
         foundation::setSpanEmitter(nullptr);
         profileDaemon.stop();
+        PASS();
+    }
+
+    TEST("diagnostics relay: agent pushes artifacts, center queries and downloads");
+    {
+        // 中心侧配置：读侧授权本测试客户端；副本环形 8 份
+        OpsControlCenter::Config centerCfg;
+        centerCfg.maxProfileArtifacts = 8;
+        centerCfg.profilePolicy.canAccess = {kClientComponent};
+        OpsControlCenter relayCenter(centerCfg);
+
+        // agent 持 reportSink（注册 + 周期上报），daemon 持 artifactSink
+        // （产物回传）——同 一个中心实例，两条汇聚通道各自工作。
+        MachineAgent relayAgent(std::make_unique<LocalHostProbe>(),
+                                std::make_unique<LocalProcessSupervisor>(),
+                                &relayCenter);
+        TickScheduler relayScheduler(std::chrono::milliseconds{0});
+        TickProfiler::Config relayProfilerConfig;
+        relayProfilerConfig.windowTicks = 4;
+        relayProfilerConfig.maxArtifacts = 2;  // 小环形：后续窗口逐出旧产物
+        TickProfiler relayProfiler(relayProfilerConfig);
+        relayScheduler.setObserver(&relayProfiler);
+
+        MachineDaemon::Config relayConfig;
+        relayConfig.listenPort = 0;
+        relayConfig.reportSink = &relayCenter;
+        relayConfig.reportInterval = std::chrono::milliseconds{30};
+        relayConfig.auditSink = &relayCenter;
+        relayConfig.artifactSink = &relayCenter;
+        relayConfig.diagnosticsPolicy.canTrigger = {kClientComponent};
+        relayConfig.diagnosticsPolicy.canAccess = {kClientComponent};
+        relayConfig.tickProfiler = &relayProfiler;
+        MachineDaemon relayDaemon(relayConfig, relayAgent);
+        if (!relayDaemon.start()) FAIL("relay daemon start failed");
+        auto relayTick = [&relayDaemon] { relayDaemon.tick(); };
+
+        RawClient relayClient;
+        if (!relayClient.connect(relayDaemon.localPort()))
+            FAIL("relay connect failed");
+        relayClient.settle(relayTick);
+
+        // nodeId：daemon 上线即按快照 hostname 注册（06 口径）
+        const auto roster = relayCenter.snapshotNodes();
+        if (roster.size() != 1) FAIL("exactly one node expected");
+        const auto& nodeId = roster.front().nodeId;
+
+        // 中心侧读入口的审计/指标基线（agent 侧触发也推审计，按 command
+        // 前缀 + nodeId 空判区分中心本地动作）
+        const auto countLocal = [](const std::vector<NodeAuditEntry>& trail,
+                                   const char* command, bool accepted) {
+            std::size_t n = 0;
+            for (const auto& record : trail) {
+                if (record.nodeId.empty() &&
+                    record.entry.command == command &&
+                    record.entry.accepted == accepted) {
+                    ++n;
+                }
+            }
+            return n;
+        };
+        auto& queryAccepted =
+            foundation::MetricsRegistry::instance().counter(
+                "center_profile_query_accepted_count");
+        auto& queryRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "center_profile_query_rejected_count");
+        auto& downloadAccepted =
+            foundation::MetricsRegistry::instance().counter(
+                "center_profile_download_accepted_count");
+        auto& downloadRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "center_profile_download_rejected_count");
+        const auto qAcc0 = queryAccepted.value();
+        const auto qRej0 = queryRejected.value();
+        const auto dAcc0 = downloadAccepted.value();
+        const auto dRej0 = downloadRejected.value();
+        const auto qAccAudit0 =
+            countLocal(relayCenter.auditTrail(), "center.profiler.query", true);
+        const auto dRejAudit0 = countLocal(relayCenter.auditTrail(),
+                                           "center.profiler.download", false);
+
+        // 触发采样（agent 侧策略门）→ 真实调度器驱满窗口 → 产物固化
+        RuntimeInvocation resp;
+        if (!relayClient.request(MachineMethod::kProfileTrigger, {},
+                                 relayTick, resp))
+            FAIL("no response to relay trigger");
+        if (resp.method != MachineMethod::kProfileTriggerOk)
+            FAIL("relay trigger must succeed: " + payloadToString(resp));
+        const auto handle = payloadToString(resp);
+        for (int i = 0; i < 4; ++i) relayScheduler.runOnce();
+        if (relayProfiler.sampling()) FAIL("window must close");
+
+        // 窗口后的 daemon tick 推产物副本（payload + 元数据）给中心
+        relayTick();
+
+        // 中心持有副本：中心侧下载读到与 agent 侧同源字节
+        const auto handleNum =
+            static_cast<std::uint64_t>(std::stoll(handle));
+        std::string centerPayload;
+        if (!relayCenter.downloadProfileArtifact(kClientComponent, nodeId,
+                                                 handleNum, centerPayload))
+            FAIL("center must hold the relayed copy");
+        std::string agentPayload;
+        if (!relayProfiler.artifactPayload(handleNum, agentPayload))
+            FAIL("agent must still hold its own copy");
+        if (centerPayload != agentPayload)
+            FAIL("center copy must be the relayed bytes");
+
+        // 元数据经 report() 通道汇聚：latest 快照的 profiles 带窗口句柄
+        //（先泵满一个上报周期：首报在触发前，剖面为空）
+        for (int i = 0; i < 40; ++i) {
+            relayTick();
+            ::usleep(2000);
+        }
+        NodeReport latestReport;
+        if (!relayCenter.latest(nodeId, latestReport))
+            FAIL("node must have a latest report");
+        bool sawMeta = false;
+        for (const auto& meta : latestReport.profiles) {
+            if (meta.handle == handleNum) sawMeta = true;
+        }
+        if (!sawMeta)
+            FAIL("report channel must carry profile metas, got " +
+                 std::to_string(latestReport.profiles.size()));
+
+        // 中心侧按维度查询：进程维（nodeId）命中；entity 维无生产者，
+        // 如实落空
+        ProfileQuery byNode;
+        byNode.nodeId = nodeId;
+        auto rows = relayCenter.queryProfiles(kClientComponent, byNode);
+        bool sawRow = false;
+        for (const auto& row : rows) {
+            if (row.meta.handle == handleNum) sawRow = true;
+        }
+        if (!sawRow) FAIL("query by node must surface the window");
+        ProfileQuery byEntity;
+        byEntity.entityId = "e-1";
+        if (!relayCenter.queryProfiles(kClientComponent, byEntity).empty())
+            FAIL("entity dimension has no producer: honest empty");
+
+        // 未授权的中心侧读：查询空、下载拒，且各记审计与指标
+        if (!relayCenter.queryProfiles(2, byNode).empty())
+            FAIL("unauthorized query must be empty");
+        if (relayCenter.downloadProfileArtifact(2, nodeId, handleNum,
+                                                centerPayload))
+            FAIL("unauthorized download must be refused");
+
+        // 未知句柄的中心侧下载：如实拒
+        if (relayCenter.downloadProfileArtifact(kClientComponent, nodeId,
+                                                99999, centerPayload))
+            FAIL("unknown handle must be refused at the center");
+
+        if (queryAccepted.value() != qAcc0 + 2) FAIL("query accepted +2");
+        if (queryRejected.value() != qRej0 + 1) FAIL("query rejected +1");
+        if (downloadAccepted.value() != dAcc0 + 1) FAIL("download accepted +1");
+        if (downloadRejected.value() != dRej0 + 2)
+            FAIL("download rejected +2");
+        if (countLocal(relayCenter.auditTrail(), "center.profiler.query",
+                       true) != qAccAudit0 + 2)
+            FAIL("query acceptances audited twice");
+        if (countLocal(relayCenter.auditTrail(), "center.profiler.download",
+                       false) != dRejAudit0 + 2)
+            FAIL("both download rejections audited");
+
+        // 产物环形逐出（agent 侧 maxArtifacts=2）：后续窗口把第一份挤出
+        // ——已回传账本随之修剪（被逐出者不会复现）；中心副本不受影响
+        //（副本环形是历史事实，独立于 agent 侧存储）。
+        for (int w = 0; w < 2; ++w) {
+            if (!relayClient.request(MachineMethod::kProfileTrigger, {},
+                                     relayTick, resp))
+                FAIL("no response to eviction-phase trigger");
+            if (resp.method != MachineMethod::kProfileTriggerOk)
+                FAIL("eviction-phase trigger must succeed");
+            for (int i = 0; i < 4; ++i) relayScheduler.runOnce();
+        }
+        relayTick();  // 推送新产物 + 修剪已回传账本
+        if (!relayCenter.downloadProfileArtifact(kClientComponent, nodeId,
+                                                 handleNum, centerPayload))
+            FAIL("center keeps its copy after agent-side eviction");
+
+        relayDaemon.stop();
+        PASS();
+    }
+
+    TEST("diagnostics relay: unreadable artifact frames are skipped safely");
+    {
+        OpsControlCenter::Config centerCfg;
+        centerCfg.profilePolicy.canAccess = {kClientComponent};
+        OpsControlCenter skipCenter(centerCfg);
+
+        MachineAgent skipAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>());
+        UnreadableProfiler phantom;  // 清单有句柄、字节不可读
+        MachineDaemon::Config skipConfig;
+        skipConfig.listenPort = 0;
+        skipConfig.auditSink = &skipCenter;  // 采样本机身份（不上注册簿）
+        skipConfig.artifactSink = &skipCenter;
+        skipConfig.tickProfiler = &phantom;
+        MachineDaemon skipDaemon(skipConfig, skipAgent);
+        if (!skipDaemon.start()) FAIL("skip daemon start failed");
+        skipDaemon.tick();  // 回传循环遇不可读产物：跳过不推送残缺帧
+        skipDaemon.stop();
+
+        LocalHostProbe identityProbe;
+        const auto skipNodeId = identityProbe.sample().hostname;
+        ProfileQuery all;
+        if (!skipCenter.queryProfiles(kClientComponent, all).empty())
+            FAIL("unreadable frame must not merge into the index");
+        std::string out;
+        if (skipCenter.downloadProfileArtifact(kClientComponent, skipNodeId,
+                                               77, out))
+            FAIL("unreadable frame must not be stored");
         PASS();
     }
 

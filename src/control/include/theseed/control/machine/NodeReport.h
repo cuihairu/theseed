@@ -1,6 +1,7 @@
 #pragma once
 
 #include "theseed/control/machine/HostProbe.h"
+#include "theseed/control/machine/ProfileRelay.h"
 #include "theseed/control/machine/ProcessSupervisor.h"
 
 #include <chrono>
@@ -21,10 +22,14 @@ struct NodeSummary {
 // 节点摘要上报帧（设计文档 06-machine-agent-and-host-ops §2.4）：
 // MachineAgent 周期采样 → 控制面中心聚合。nodeId 取快照时的 hostname
 // （与 OpsInspector 的 role+version 语义分层：nodeId 定位机器，快照看状态）。
+// profiles：本机当前剖面元数据快照（04 §7 中心侧维度视图的汇聚通道，
+// 快照语义——后到覆盖中心侧该节点的剖面索引）；无剖面来源时留空
+// （诚实缺省：中心侧查询该节点剖面如实落空）。
 struct NodeReport {
     std::string nodeId;
     std::chrono::system_clock::time_point timestamp{};
     NodeSummary summary{};
+    std::vector<ProfileMeta> profiles;
 };
 
 // 上报出口：MachineAgent 只依赖本接口（不认识具体控制面中心），

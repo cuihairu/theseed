@@ -30,6 +30,12 @@ public:
     // 节点摘要上报（设计文档 06 §2.4/§4.3）：采一次快照推给上报出口。
     // 无出口（未注册）时为空操作——上报是能力而非义务。
     virtual void report() = 0;
+
+    // 绑定剖面元数据来源（04 §7 中心侧维度视图的汇聚通道）：report()
+    // 组装 NodeReport 时拉取本机当前剖面清单；nullptr = 无剖面（报告照
+    // 发，profiles 留空）。不持有（调用方保证生命周期覆盖 agent）。
+    virtual void setProfileMetaSource(
+        IProfileMetaSource* profileMetaSource) = 0;
 };
 
 class MachineAgent final : public IMachineAgent {
@@ -46,6 +52,8 @@ public:
     std::vector<ProcessSummary> enumerateHostProcesses() override;
     bool terminateHostProcess(std::uint32_t pid) override;
     void report() override;
+    void setProfileMetaSource(
+        IProfileMetaSource* profileMetaSource) override;
 
     // 运行期换绑上报出口（nullptr = 关闭上报）。
     void setReportSink(INodeReportSink* reportSink);
@@ -54,6 +62,7 @@ private:
     std::unique_ptr<IHostProbe> hostProbe_;
     std::unique_ptr<IProcessSupervisor> processSupervisor_;
     INodeReportSink* reportSink_ = nullptr;
+    IProfileMetaSource* profileMetaSource_ = nullptr;
 };
 
 }  // namespace theseed::control::machine
