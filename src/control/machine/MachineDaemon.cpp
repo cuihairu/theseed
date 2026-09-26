@@ -62,10 +62,29 @@ bool MachineDaemon::start() {
         hub_.reset();
         return false;
     }
+    announceToCenter();
     return true;
 }
 
+void MachineDaemon::announceToCenter() {
+    // 身份口径 = 快照 hostname（06 §2.4 的 nodeId）。无中心出口不采样；
+    // 空 hostname（异常探针）不入中心——中心侧同纪律丢弃无身份记录。
+    if (config_.reportSink == nullptr) {
+        return;
+    }
+    nodeId_ = agent_.snapshot().host.hostname;
+    if (!nodeId_.empty()) {
+        config_.reportSink->registerNode(nodeId_, std::chrono::system_clock::now());
+    }
+}
+
 void MachineDaemon::stop() {
+    // 优雅下线：先注销再关听——中心立即摘除，不等 pruneStale 的 TTL
+    // 疑似掉线兜底。nodeId_ 已清空（二次 stop / 未 start）时跳过。
+    if (config_.reportSink != nullptr && !nodeId_.empty()) {
+        config_.reportSink->deregister(nodeId_);
+    }
+    nodeId_.clear();
     listener_.close();
     hub_.reset();
 }

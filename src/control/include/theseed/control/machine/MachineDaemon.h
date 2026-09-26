@@ -57,6 +57,11 @@ struct AuditEntry {
 // （attachServerTransport，与 DBApp 同机制）。调用方负责在自身 tick
 // 循环里泵 tick()：accept 新连接 + 收发分发一轮，全部非阻塞；审计日志
 // 只在 tick 上下文写入，无锁（单线程假设与 DBApp 一致）。
+//
+// 中心侧生命周期（reportSink 配置时）：start() 成功监听后用快照
+// hostname（nodeId 口径）向中心注册占位；周期上报随后刷新快照；stop()
+// 优雅下线立即注销摘除。疑似掉线（无注销机会）由中心 pruneStale 的
+// TTL 兜底——注册/注销/掉线摘除三者语义自洽。
 class MachineDaemon final {
 public:
     // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
@@ -99,6 +104,9 @@ public:
     const std::vector<AuditEntry>& auditLog() const;
 
 private:
+    // 上线登记：有中心出口（上报/审计聚合）才采样本机身份；有上报出口
+    // 且身份非空则向中心注册占位（详情见 start()）。
+    void announceToCenter();
     void acceptConnections();
     void processMessages();
     void handleInvocation(runtime::RuntimeInvocation& inv);
@@ -117,6 +125,9 @@ private:
     std::shared_ptr<runtime::TransportHub> hub_;
     std::vector<AuditEntry> auditLog_;
     std::chrono::steady_clock::time_point lastReportAt_{};
+    // 本机身份（快照 hostname，06 的 nodeId 口径）；空 = 未向中心登记。
+    // start() 采样、stop() 注销沿用同一值——注销必与注册同键。
+    std::string nodeId_;
 };
 
 }  // namespace theseed::control::machine

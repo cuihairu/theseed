@@ -1,5 +1,29 @@
 # TODO
 
+## 控制面中心注册：MachineDaemon 生命周期注册/注销 + OpsControlCenter（2026-09-26）
+
+对齐 todo 遗留「与 Ops Control Plane 的注册、上报和审计对接」之注册侧：
+
+1. **INodeReportSink 升级为三段生命周期接缝**：`registerNode`（上线占位：
+   早于首份快照中心即可见；已知节点只续 lastSeen、不覆盖快照——注册不是
+   快照）+ `publish`（摘要 upsert，原语义）+ `deregister`（优雅下线立即
+   摘除，返回是否确有该节点）。
+2. **OpsControlCenter**：注册占位行（summary 空 = 已注册未报快照）、注销
+   摘行并清接入序残留（与 pruneStale 同一清理纪律）；注册与首报共用同一
+   接入序，容量逐出口径不变（最早接入优先）；注册但静默的节点同样受
+   pruneStale TTL 兜底——注册/注销/掉线摘除三者语义自洽。
+3. **MachineDaemon 生命周期**：start() 成功监听后采快照 hostname（nodeId
+   既有口径）注册；stop() 先注销再关听（二次 stop/未 start 幂等跳过）；
+   空 hostname（异常探针）不入中心。注册与上报节奏解耦（reportInterval=0
+   仍注册、只是不推快照）。
+4. **测试**（OpsControlCenterTest 11→19、MachineDaemonTest 15→16）：占位
+   可见性、注册退化心跳不覆快照、空身份丢弃、注销返回值与残留、注销后
+   容量逐出仍正确、静默注册 TTL 摘除、daemon start 注册/stop 注销 E2E
+   （真实 TCP 上报把占位行升级为快照）、空 hostname 不注册。
+
+验证口径：gcc-coverage 113/113 全绿、src/control gcovr 100%；clang 21 树
+零警告、113/113 全绿。
+
 ## 权限边界落地：MachineDaemon execute 策略门（2026-09-26）
 
 对齐 04-ops-control-plane MVP「少量**受控**命令」的受控语义与 todo 遗留

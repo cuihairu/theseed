@@ -75,6 +75,12 @@ public:
     }
 };
 
+// 异常探针：hostname 为空（nodeId 身份口径下不可注册）。
+class EmptyHostProbe final : public IHostProbe {
+public:
+    HostSummary sample() override { return {}; }
+};
+
 class FixedSupervisor final : public IProcessSupervisor {
 public:
     std::vector<ProcessSummary> listProcesses() const override { return {}; }
@@ -83,11 +89,21 @@ public:
     bool restart(std::uint32_t) override { return true; }
 };
 
-// 捕获假件：记录 report 推送过的报告。
+// 捕获假件：记录中心出口推过的注册/上报/注销。
 class CapturingSink final : public INodeReportSink {
 public:
+    void registerNode(const std::string& nodeId,
+                      std::chrono::system_clock::time_point) override {
+        registered.push_back(nodeId);
+    }
     void publish(const NodeReport& report) override { published.push_back(report); }
+    bool deregister(const std::string& nodeId) override {
+        deregistered.push_back(nodeId);
+        return true;
+    }
+    std::vector<std::string> registered;
     std::vector<NodeReport> published;
+    std::vector<std::string> deregistered;
 };
 
 }  // namespace
@@ -203,7 +219,137 @@ int main() {
         PASS();
     }
 
-    TEST("MachineAgent::report pushes snapshot with nodeId from hostname");
+    TEST("registerNode creates a placeholder visible before any snapshot");
+    {
+        OpsControlCenter center;
+        center.registerNode("node-r", baseTime);
+
+        NodeReport out;
+        EXPECT(center.nodeCount() == 1, "registration inserts a row");
+        EXPECT(center.latest("node-r", out), "registered node is queryable");
+        EXPECT(out.nodeId == "node-r", "identity recorded");
+        EXPECT(out.summary.host.hostname.empty(),
+               "placeholder has no snapshot yet");
+        EXPECT(out.timestamp == baseTime, "lastSeen starts at registration");
+        PASS();
+    }
+
+    TEST("registerNode on known node refreshes lastSeen without clobbering snapshot");
+    {
+        OpsControlCenter center;
+        center.publish(makeReport("node-a", 10.0, baseTime));
+        center.registerNode("node-a", baseTime + std::chrono::seconds{3});
+
+        NodeReport out;
+        EXPECT(center.latest("node-a", out), "node still present");
+        EXPECT(out.summary.host.cpuUsage == 10.0, "snapshot preserved");
+        EXPECT(out.timestamp == baseTime + std::chrono::seconds{3},
+               "lastSeen advanced");
+        PASS();
+    }
+
+    TEST("registerNode drops empty identity");
+    {
+        OpsControlCenter center;
+        center.registerNode("", baseTime);
+        EXPECT(center.nodeCount() == 0, "identity discipline same as publish");
+        PASS();
+    }
+
+    TEST("deregister removes the node and reports presence");
+    {
+        OpsControlCenter center;
+        center.publish(makeReport("node-a", 1.0, baseTime));
+        EXPECT(center.deregister("node-a"), "existing node deregisters true");
+
+        NodeReport out;
+        EXPECT(!center.latest("node-a", out), "node removed");
+        EXPECT(center.nodeCount() == 0, "no residue");
+        EXPECT(center.deregister("node-a") == false,
+               "double deregister misses");
+        EXPECT(center.deregister("ghost") == false,
+               "unknown node deregister misses");
+        PASS();
+    }
+
+    TEST("eviction stays correct after deregister");
+    {
+        OpsControlCenter::Config config;
+        config.maxNodes = 2;
+        OpsControlCenter center(config);
+        center.publish(makeReport("first", 1.0, baseTime));
+        center.publish(makeReport("second", 2.0, baseTime));
+        // 注销摘节点也清接入序残留；重新填满后逐出仍瞄准正确的幸存者
+        EXPECT(center.deregister("first"), "deregistered");
+        center.publish(makeReport("third", 3.0, baseTime));
+        center.publish(makeReport("fourth", 4.0, baseTime));
+
+        NodeReport out;
+        EXPECT(center.nodeCount() == 2, "capacity respected");
+        EXPECT(!center.latest("second", out), "earliest survivor evicted");
+        EXPECT(center.latest("third", out), "third survives");
+        EXPECT(center.latest("fourth", out), "fourth survives");
+        PASS();
+    }
+
+    TEST("registered but silent node is pruned by ttl");
+    {
+        OpsControlCenter center;
+        center.registerNode("quiet", baseTime - std::chrono::seconds{120});
+        center.registerNode("loud", baseTime);
+        center.publish(makeReport("loud", 5.0, baseTime));  // 上报续住 lastSeen
+
+        EXPECT(center.pruneStale(std::chrono::seconds{60}, baseTime) == 1,
+               "only the silent registration times out");
+        NodeReport out;
+        EXPECT(!center.latest("quiet", out), "silent placeholder pruned");
+        EXPECT(center.latest("loud", out), "reporting node survives");
+        PASS();
+    }
+
+    TEST("daemon lifecycle registers at start and deregisters at stop");
+    {
+        OpsControlCenter center;
+        MachineAgent agent(std::make_unique<FixedHostProbe>(),
+                           std::make_unique<FixedSupervisor>());
+        MachineDaemon::Config config;
+        config.listenPort = 0;
+        config.reportInterval = std::chrono::milliseconds{0};
+        config.reportSink = &center;
+        MachineDaemon daemon(config, agent);
+
+        EXPECT(daemon.start(), "daemon start");
+        EXPECT(center.nodeCount() == 1, "start registers machine identity");
+        NodeReport out;
+        EXPECT(center.latest("node-alpha", out),
+               "nodeId = snapshot hostname even with interval 0");
+
+        EXPECT(daemon.start(), "second start idempotent");
+        EXPECT(center.nodeCount() == 1, "re-register is a heartbeat, not a row");
+
+        daemon.stop();
+        EXPECT(center.nodeCount() == 0, "graceful stop deregisters immediately");
+        daemon.stop();
+        EXPECT(center.nodeCount() == 0, "double stop stays deregistered");
+        PASS();
+    }
+
+    TEST("empty hostname never registers");
+    {
+        OpsControlCenter center;
+        MachineAgent agent(std::make_unique<EmptyHostProbe>(),
+                           std::make_unique<FixedSupervisor>());
+        MachineDaemon::Config config;
+        config.listenPort = 0;
+        config.reportSink = &center;
+        MachineDaemon daemon(config, agent);
+
+        EXPECT(daemon.start(), "daemon start");
+        EXPECT(center.nodeCount() == 0, "identity-less host cannot register");
+        daemon.stop();
+        EXPECT(center.nodeCount() == 0, "stop without registration is a no-op");
+        PASS();
+    }
     {
         CapturingSink sink;
         MachineAgent agent(std::make_unique<FixedHostProbe>(),
@@ -265,7 +411,7 @@ int main() {
         PASS();
     }
 
-    TEST("daemon without interval or sink never reports");
+    TEST("interval 0 still registers but never publishes snapshots");
     {
         OpsControlCenter center;
         MachineAgent agent(std::make_unique<FixedHostProbe>(),
@@ -283,10 +429,17 @@ int main() {
         for (int i = 0; i < 5; ++i) {
             daemonOff.tick();
         }
-        EXPECT(center.nodeCount() == 0, "interval 0 disables reporting");
+        // 注册是生命周期语义（不随上报节奏）；快照缺席 = 占位行仍空
+        NodeReport out;
+        EXPECT(center.nodeCount() == 1,
+               "lifecycle registration is cadence-independent");
+        EXPECT(center.latest("node-alpha", out) &&
+                   out.summary.host.hostname.empty(),
+               "no snapshot published at interval 0");
         daemonOff.stop();
+        EXPECT(center.nodeCount() == 0, "stop deregisters the placeholder");
 
-        // 有周期、无 sink：同样静默
+        // 有周期、无 sink：不采样不注册，中心毫无痕迹
         MachineDaemon::Config noSink;
         noSink.listenPort = 0;
         noSink.reportInterval = std::chrono::milliseconds{1};

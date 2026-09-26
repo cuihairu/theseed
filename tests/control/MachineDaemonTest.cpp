@@ -5,11 +5,14 @@
 #include "theseed/control/machine/HostProbe.h"
 #include "theseed/control/machine/MachineAgent.h"
 #include "theseed/control/machine/MachineDaemon.h"
+#include "theseed/control/machine/NodeReport.h"
 #include "theseed/control/machine/ProcessSupervisor.h"
+#include "theseed/control/ops/OpsControlCenter.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 
 #include <arpa/inet.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -27,6 +30,8 @@ using theseed::control::machine::LocalHostProbe;
 using theseed::control::machine::LocalProcessSupervisor;
 using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
+using theseed::control::machine::NodeReport;
+using theseed::control::ops::OpsControlCenter;
 // 命名空间不能 using-declare，用别名
 namespace MachineMethod = theseed::control::machine::MachineMethod;
 using theseed::runtime::ComponentId;
@@ -431,6 +436,46 @@ int main() {
         if (payloadToString(resp) != "[]") FAIL("disabled audit must be empty");
         if (!silentDaemon.auditLog().empty()) FAIL("local audit must stay empty");
         silentDaemon.stop();
+        PASS();
+    }
+
+    TEST("daemon lifecycle registers with the ops center on start, deregisters on stop");
+    {
+        OpsControlCenter center;
+        MachineAgent centerAgent(std::make_unique<LocalHostProbe>(),
+                                 std::make_unique<LocalProcessSupervisor>(),
+                                 &center);
+        MachineDaemon::Config centerConfig;
+        centerConfig.listenPort = 0;
+        centerConfig.reportInterval = std::chrono::milliseconds{10};
+        centerConfig.reportSink = &center;
+        MachineDaemon centerDaemon(centerConfig, centerAgent);
+
+        LocalHostProbe identityProbe;
+        const auto hostname = identityProbe.sample().hostname;
+
+        if (!centerDaemon.start()) FAIL("center daemon start failed");
+        if (center.nodeCount() != 1) FAIL("start must register machine identity");
+        NodeReport out;
+        if (!center.latest(hostname, out))
+            FAIL("nodeId must be the snapshot hostname");
+        if (!out.summary.host.hostname.empty())
+            FAIL("row starts as a registration placeholder");
+
+        // 周期上报随后把占位行升级为快照（同键 upsert，不新增行）
+        RawClient centerClient;
+        if (!centerClient.connect(centerDaemon.localPort()))
+            FAIL("center daemon connect failed");
+        centerClient.settle([&centerDaemon] { centerDaemon.tick(); });
+        if (center.nodeCount() != 1)
+            FAIL("reporting upserts the registered row in place");
+        if (!center.latest(hostname, out) ||
+            out.summary.host.hostname != hostname)
+            FAIL("placeholder must be upgraded to a real snapshot");
+
+        centerDaemon.stop();
+        if (center.nodeCount() != 0)
+            FAIL("graceful stop deregisters immediately");
         PASS();
     }
 

@@ -10,13 +10,17 @@
 
 namespace theseed::control::ops {
 
-// 最小控制面中心聚合器（设计文档 04-ops-control-plane MVP 的“转发聚合”基座；
+// 最小控制面中心聚合器（设计文档 04-ops-control-plane MVP 的”转发聚合”基座；
 // 06 §2.4 的节点摘要上报落地端）：
 //
+// - 注册：registerNode 上线占位（早于首份快照即可查询可见；已知节点只刷新
+//   lastSeen——注册不是快照，不得覆盖已有 summary）；
 // - ingest：按 nodeId upsert 每节点最新快照（每机一行，后到覆盖）；
-// - 容量上界：节点数超过 maxNodes 时逐出最旧上报的节点（防失控节点撑爆
-//   中心——06 §1 “machine 不能变成监控中心”的内存面镜像）；
-// - pruneStale：中心 tick 里按 TTL 摘掉超时未上报的节点（疑似掉线）；
+// - 容量上界：节点数超过 maxNodes 时逐出最旧接入的节点（注册与首报共用
+//   同一接入序，防失控节点撑爆中心——06 §1 “machine 不能变成监控中心”
+//   的内存面镜像）；
+// - 摘除：deregister 优雅下线立即摘；pruneStale 在中心 tick 里按 TTL
+//   摘掉超时未上报的节点（疑似掉线兜底，与注销语义自洽）；
 // - 查询：latest（单节点）、snapshotNodes（全量、按 nodeId 稳定排序）。
 //
 // 跨机网络转发（多台机器汇到一台中心）属跨 realm 异步平面，后续接入；
@@ -33,7 +37,15 @@ public:
     OpsControlCenter();
     explicit OpsControlCenter(Config config);
 
+    // 上线注册：未知节点建占位行（summary 为空 = 已注册未报快照）；
+    // 已知节点退化为心跳——只续 lastSeen，快照原样保留。
+    void registerNode(const std::string& nodeId,
+                      std::chrono::system_clock::time_point now) override;
+
     void publish(const machine::NodeReport& report) override;
+
+    // 优雅下线摘除；返回是否确有该节点。审计等历史数据不受注销影响。
+    bool deregister(const std::string& nodeId) override;
 
     // 单节点最新快照；无该节点返回 false。
     bool latest(const std::string& nodeId, machine::NodeReport& out) const;

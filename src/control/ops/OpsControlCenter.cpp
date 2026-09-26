@@ -9,6 +9,33 @@ OpsControlCenter::OpsControlCenter() : OpsControlCenter(Config{}) {}
 
 OpsControlCenter::OpsControlCenter(Config config) : config_(config) {}
 
+void OpsControlCenter::registerNode(
+    const std::string& nodeId, std::chrono::system_clock::time_point now) {
+    if (nodeId.empty()) {
+        return;  // 与 publish 同一身份纪律：无身份不入聚合
+    }
+
+    auto [iter, inserted] = nodes_.try_emplace(nodeId, machine::NodeReport{});
+    if (inserted) {
+        iter->second.nodeId = nodeId;
+        insertionOrder_.push_back(nodeId);  // 注册即入接入序（与首报同口径）
+        evictOldestIfFull();
+    }
+    // 已知节点：注册退化为心跳——只续 lastSeen，不碰已有快照。
+    // （新节点若被逐出也只可能是别的节点：新接入者排接入序队尾。）
+    iter->second.timestamp = now;
+}
+
+bool OpsControlCenter::deregister(const std::string& nodeId) {
+    if (nodes_.erase(nodeId) == 0) {
+        return false;
+    }
+    // 与 pruneStale 同一清理纪律：摘节点同时清接入序残留，避免容量
+    // 逐出瞄准已不存在的节点。
+    std::erase(insertionOrder_, nodeId);
+    return true;
+}
+
 void OpsControlCenter::publish(const machine::NodeReport& report) {
     if (report.nodeId.empty()) {
         return;  // 无身份的上报无法聚合：丢弃（上报方有义务带 nodeId）
