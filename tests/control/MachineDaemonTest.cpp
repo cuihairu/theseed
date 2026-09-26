@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -27,6 +28,7 @@
 #include <span>
 #include <string>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <variant>
 #include <vector>
@@ -608,6 +610,300 @@ int main() {
         centerDaemon.stop();
         if (center.nodeCount() != 0)
             FAIL("graceful stop deregisters immediately");
+        PASS();
+    }
+
+    TEST("process governance: enumeration is policy-gated");
+    {
+        // 独立治理 daemon：来源白名单含本测试客户端；名单为空（只测枚举）
+        OpsControlCenter governCenter;
+        MachineAgent governAgent(std::make_unique<LocalHostProbe>(),
+                                 std::make_unique<LocalProcessSupervisor>(),
+                                 &governCenter);
+        MachineDaemon::Config governConfig;
+        governConfig.listenPort = 0;
+        governConfig.auditSink = &governCenter;
+        // execute 策略仅用于 spawn 一个受管 sleep：证明治理视图不重复
+        // 暴露受管进程（受管编排走 execute，治理只看非受控）
+        governConfig.execPolicy.trustedComponents = {kClientComponent};
+        governConfig.execPolicy.allowedCommands = {"start", "stop"};
+        governConfig.processGovernPolicy.trustedComponents = {kClientComponent};
+        MachineDaemon governDaemon(governConfig, governAgent);
+        if (!governDaemon.start()) FAIL("govern daemon start failed");
+        auto governTick = [&governDaemon] { governDaemon.tick(); };
+
+        RawClient governClient;
+        if (!governClient.connect(governDaemon.localPort()))
+            FAIL("govern connect failed");
+        governClient.settle(governTick);
+
+        auto& listCount = foundation::MetricsRegistry::instance().counter(
+            "machine_process_list_count");
+        auto& listRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_process_list_rejected_count");
+        const auto list0 = listCount.value();
+        const auto listRejected0 = listRejected.value();
+        const auto audits0 = governCenter.auditCount();
+
+        // 受信来源：返回非受控进程 JSON 数组（含 daemon 自身进程，
+        // 不含受管进程——先 spawn 一个受管 sleep 证明被过滤）
+        RuntimeInvocation resp;
+        if (!governClient.request(MachineMethod::kExecute,
+                                  executePayload("start", "/bin/sleep 30"),
+                                  governTick, resp))
+            FAIL("no response to managed spawn");
+        if (!governClient.request(MachineMethod::kSnapshot, {}, governTick,
+                                  resp))
+            FAIL("no response to managed snapshot");
+        const auto managedPid = firstManagedPid(payloadToString(resp));
+        if (managedPid == 0) FAIL("managed pid missing for filtering test");
+
+        if (!governClient.request(MachineMethod::kProcesses, {}, governTick,
+                                  resp))
+            FAIL("no response to process enumeration");
+        if (resp.method != MachineMethod::kProcessesOk)
+            FAIL("wrong method: " + resp.method);
+        const auto listing = payloadToString(resp);
+        const auto ownPid = std::to_string(static_cast<std::uint32_t>(::getpid()));
+        if (listing.find("\"pid\":" + ownPid) == std::string::npos)
+            FAIL("enumeration must contain the daemon's own pid: " +
+                 listing.substr(0, 120));
+        if (listing.find("\"pid\":" + std::to_string(managedPid)) !=
+            std::string::npos)
+            FAIL("governance view must not repeat managed processes");
+        if (listing.find("\"managed\"") != std::string::npos)
+            FAIL("governance view must not carry managed flags");
+
+        if (!governClient.request(MachineMethod::kExecute,
+                                  executePayload("stop", std::to_string(managedPid)),
+                                  governTick, resp))
+            FAIL("no response to managed cleanup");
+
+        // 非受信来源：拒绝照记审计与计数
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(governDaemon.localPort()))
+            FAIL("govern stranger connect failed");
+        stranger.settle(governTick);
+        if (!stranger.request(MachineMethod::kProcesses, {}, governTick, resp))
+            FAIL("no response to stranger enumeration");
+        if (resp.method != MachineMethod::kError)
+            FAIL("stranger enumeration must be rejected");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("rejection should name the untrusted source: " +
+                 payloadToString(resp));
+
+        if (listCount.value() != list0 + 1) FAIL("list counter +1");
+        if (listRejected.value() != listRejected0 + 1)
+            FAIL("list rejected counter +1");
+        // 两次枚举尝试（受信+非受信）都进中心审计环形；spawn/stop 的
+        // execute 审计同环但与 list 断言无关，按捕获点切片扫描
+        if (governCenter.auditCount() != audits0 + 4)
+            FAIL("spawn/list/stop/stranger-list must all be audited: " +
+                 std::to_string(governCenter.auditCount() - audits0));
+        const auto trail = governCenter.auditTrail();
+        bool sawAcceptedList = false;
+        bool sawRejectedList = false;
+        for (std::size_t i = audits0; i < trail.size(); ++i) {
+            if (trail[i].entry.command != "process.list") continue;
+            if (trail[i].entry.accepted) sawAcceptedList = true;
+            else sawRejectedList = true;
+        }
+        if (!sawAcceptedList)
+            FAIL("accepted listing must be audited");
+        if (!sawRejectedList)
+            FAIL("rejected listing must be audited as refused");
+        governDaemon.stop();
+        PASS();
+    }
+
+    TEST("process governance: terminate guards");
+    {
+        OpsControlCenter guardCenter;
+        MachineAgent guardAgent(std::make_unique<LocalHostProbe>(),
+                                std::make_unique<LocalProcessSupervisor>(),
+                                &guardCenter);
+        MachineDaemon::Config guardConfig;
+        guardConfig.listenPort = 0;
+        guardConfig.auditSink = &guardCenter;
+        guardConfig.execPolicy.trustedComponents = {kClientComponent};
+        guardConfig.execPolicy.allowedCommands = {"start", "stop"};
+        // 处置名单故意不含 sleep：名称不匹配臂可达
+        guardConfig.processGovernPolicy.trustedComponents = {kClientComponent};
+        guardConfig.processGovernPolicy.killableNames = {"other"};
+        MachineDaemon guardDaemon(guardConfig, guardAgent);
+        if (!guardDaemon.start()) FAIL("guard daemon start failed");
+        auto guardTick = [&guardDaemon] { guardDaemon.tick(); };
+
+        RawClient guardClient;
+        if (!guardClient.connect(guardDaemon.localPort()))
+            FAIL("guard connect failed");
+        guardClient.settle(guardTick);
+
+        auto& termRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_terminate_rejected_count");
+        const auto rejected0 = termRejected.value();
+
+        RuntimeInvocation resp;
+        // 1) 载荷畸形：空载荷与非数字 pid
+        if (!guardClient.request(MachineMethod::kTerminate, {}, guardTick, resp))
+            FAIL("no response to empty terminate");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty payload must be named malformed: " +
+                 payloadToString(resp));
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf("abc"), guardTick, resp))
+            FAIL("no response to malformed terminate");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("malformed pid must be named: " + payloadToString(resp));
+        // 2) 非受信来源
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(guardDaemon.localPort()))
+            FAIL("guard stranger connect failed");
+        stranger.settle(guardTick);
+        if (!stranger.request(MachineMethod::kTerminate,
+                              payloadOf("4194305"), guardTick, resp))
+            FAIL("no response to stranger terminate");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger terminate must be untrusted: " +
+                 payloadToString(resp));
+        // 3) 主机上不存在的 pid（pid_max 上界外，恒 ESRCH 区间）
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf("4194305"), guardTick, resp))
+            FAIL("no response to unknown-pid terminate");
+        if (payloadToString(resp).find("unknown pid") == std::string::npos)
+            FAIL("unknown pid must be named: " + payloadToString(resp));
+        // 4) 守卫自身：daemon 就是本测试进程，处置自己必须被拒
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf(std::to_string(::getpid())),
+                                 guardTick, resp))
+            FAIL("no response to self terminate");
+        if (payloadToString(resp).find("itself") == std::string::npos)
+            FAIL("self target must be refused: " + payloadToString(resp));
+
+        // 5) 受管进程：治理路径拒绝，唯一出口是 stop/restart
+        if (!guardClient.request(MachineMethod::kExecute,
+                                 executePayload("start", "/bin/sleep 30"),
+                                 guardTick, resp))
+            FAIL("no response to managed spawn");
+        if (!guardClient.request(MachineMethod::kSnapshot, {}, guardTick, resp))
+            FAIL("no response to managed snapshot");
+        const auto managedPid = firstManagedPid(payloadToString(resp));
+        if (managedPid == 0) FAIL("managed pid missing for guard test");
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf(std::to_string(managedPid)),
+                                 guardTick, resp))
+            FAIL("no response to managed terminate");
+        if (payloadToString(resp).find("managed process") == std::string::npos)
+            FAIL("managed target must be refused: " + payloadToString(resp));
+        if (!guardClient.request(MachineMethod::kExecute,
+                                 executePayload("stop", std::to_string(managedPid)),
+                                 guardTick, resp))
+            FAIL("no response to managed cleanup");
+
+        // 6) 名称不在处置名单：fork 未登记的 sleep，进程在但名单不含
+        const pid_t sleeper = ::fork();
+        if (sleeper == 0) {
+            ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
+            ::_exit(127);
+        }
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf(std::to_string(sleeper)),
+                                 guardTick, resp))
+            FAIL("no response to unlisted terminate");
+        if (payloadToString(resp).find("not in the kill list") ==
+            std::string::npos)
+            FAIL("unlisted name must be refused: " + payloadToString(resp));
+        int status = 0;
+        ::kill(sleeper, SIGTERM);
+        ::waitpid(sleeper, &status, 0);
+
+        if (termRejected.value() != rejected0 + 7)
+            FAIL("all seven rejections must count, got delta " +
+                 std::to_string(termRejected.value() - rejected0));
+        guardDaemon.stop();
+        PASS();
+    }
+
+    TEST("process governance: accepted disposition kills an unmanaged process");
+    {
+        OpsControlCenter killCenter;
+        MachineAgent killAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>(),
+                               &killCenter);
+        MachineDaemon::Config killConfig;
+        killConfig.listenPort = 0;
+        killConfig.auditSink = &killCenter;
+        killConfig.processGovernPolicy.trustedComponents = {kClientComponent};
+        killConfig.processGovernPolicy.killableNames = {"sleep"};
+        MachineDaemon killDaemon(killConfig, killAgent);
+        if (!killDaemon.start()) FAIL("kill daemon start failed");
+        auto killTick = [&killDaemon] { killDaemon.tick(); };
+
+        RawClient killClient;
+        if (!killClient.connect(killDaemon.localPort()))
+            FAIL("kill connect failed");
+        killClient.settle(killTick);
+
+        // 捕获 span：处置是关键受控动作，接受路径必须带 ok/accepted
+        const auto spans = std::make_shared<std::vector<foundation::Span>>();
+        foundation::setSpanEmitter(
+            [spans](const foundation::Span& span) { spans->push_back(span); });
+
+        // 未登记 sleep 子进程：枚举可见，SIGTERM 处置生效
+        const pid_t sleeper = ::fork();
+        if (sleeper == 0) {
+            ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
+            ::_exit(127);
+        }
+        const auto sleeperPid = std::to_string(static_cast<std::uint32_t>(sleeper));
+
+        RuntimeInvocation resp;
+        if (!killClient.request(MachineMethod::kProcesses, {}, killTick, resp))
+            FAIL("no response to pre-kill enumeration");
+        if (payloadToString(resp).find("\"pid\":" + sleeperPid) ==
+            std::string::npos)
+            FAIL("unmanaged sleeper must appear in the governance view");
+
+        auto& termAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_terminate_accepted_count");
+        const auto accepted0 = termAccepted.value();
+        if (!killClient.request(MachineMethod::kTerminate,
+                                payloadOf(sleeperPid), killTick, resp))
+            FAIL("no response to governed terminate");
+        if (resp.method != MachineMethod::kTerminateOk)
+            FAIL("wrong method: " + resp.method);
+        if (resp.payload.size() != 1 || resp.payload[0] != std::byte{0x01})
+            FAIL("governed terminate should report success");
+        int status = 0;
+        ::waitpid(sleeper, &status, 0);
+        if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM)
+            FAIL("sleeper must die by SIGTERM");
+        if (termAccepted.value() != accepted0 + 1) FAIL("accepted counter +1");
+
+        if (spans->size() != 1) FAIL("one span per governed terminate");
+        if ((*spans)[0].name != "machine.terminate") FAIL("span name");
+        bool sawAccepted = false;
+        bool sawOk = false;
+        for (const auto& attr : (*spans)[0].attrs) {
+            if (attr.key == "accepted" && std::get<bool>(attr.value))
+                sawAccepted = true;
+            if (attr.key == "ok" && std::get<bool>(attr.value))
+                sawOk = true;
+        }
+        if (!sawAccepted || !sawOk)
+            FAIL("accepted span must carry accepted/ok");
+
+        const auto trail = killCenter.auditTrail();
+        if (trail.empty() || trail.back().entry.command != "process.kill" ||
+            !trail.back().entry.accepted || !trail.back().entry.ok)
+            FAIL("accepted disposition must be audited with ok=true");
+        if (trail.back().entry.args != sleeperPid)
+            FAIL("audit must record the target pid");
+
+        foundation::setSpanEmitter(nullptr);
+        killDaemon.stop();
         PASS();
     }
 

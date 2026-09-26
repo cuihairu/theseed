@@ -1,5 +1,42 @@
 # TODO
 
+## 主机级非受控进程的策略化治理（Linux 起步，2026-09-26）
+
+对齐 06-machine-agent-and-host-ops §7 MVP "process list / state / pid" 的
+控制面治理切片。选型理由：枚举面已存在（supervisor 的 /proc 全主机枚举
++ managed 标记，machine.snapshot 已带全表），真实缺口是**处置侧**——
+supervisor stop/restart 只对受管子进程生效，主机上其他进程无策略化出口；
+且治理与 execute 的授权语义必须分离（execute 是受管进程编排，治理是
+对主机其他进程的越权面，风险等级与审计语义不同，不得共享白名单）。
+
+1. **能力面**：`IProcessSupervisor::terminateUnmanaged(pid)`（Linux
+   SIGTERM；受管进程一律拒绝——唯一停止入口是 stop/restart，绕开会脱离
+   reap/记账；非 Linux 平台暂不开放处置，枚举照常）；`currentProcessId()`
+   跨平台 pid 助手。`IMachineAgent` 增 `enumerateHostProcesses()`（全主机
+   表，不采资源摘要）与 `terminateHostProcess(pid)`（纯能力转发，策略
+   判定在 daemon 侧）。
+2. **策略面**（与 ExecPolicy 分离的 `ProcessGovernPolicy`）：
+   trustedComponents（枚举/处置共用来源白名单）+ killableNames（处置目标
+   comm 名精确匹配白名单）；双空集 = 全拒（安全缺省）。
+3. **RPC 面**：machine.processes → machine.processes.ok（非受控进程 JSON
+   数组，不含受管进程、不带 managed 标记——受管编排走 execute，治理视图
+   不重复暴露）；machine.terminate → machine.terminate.ok（pid 十进制
+   串载荷；守卫链：载荷解析 → 来源白名单 → pid 存在 → 非自身 → 非受管 →
+   名单匹配；守卫与 supervisor 登记簿互为纵深）。
+4. **遥测/审计面**：枚举与处置各一对接受/拒绝计数（snake_case 同族）；
+   处置全程 `SpanScope("machine.terminate")`（拒绝也入 span：accepted/
+   reason/pid 属性），枚举只读不进 trace；全部尝试（含拒绝）照记审计
+   （command = process.list / process.kill）并推中心审计环形。
+5. **测试**（MachineDaemonTest 21→24、MachineAgentTest 8→10）：三块 E2E
+   ——枚举策略门（受信含自身 pid、受管被过滤、非受信拒绝、审计切片）、
+   处置守卫七连（空载荷/非数字/非受信/未知 pid/自身/受管/名单外）、
+   接受处置（未登记 fork sleep 经 SIGTERM 终结，waitpid 断言信号死因，
+   span accepted/ok、审计带 pid）；agent 转发与 terminateUnmanaged 三态
+   （未登记成功/受管拒绝/pid_max 上界外恒 ESRCH）。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10281/10281）；clang 21
+树零警告、113/113 全绿。
+
 ## Telemetry 导出面：控制面遥测经 /metrics Prometheus 端点导出（2026-09-26）
 
 对齐 05-telemetry-and-debug 的导出层（OTel SDK/OTLP 判定过重：vcpkg 工具

@@ -12,6 +12,12 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 using namespace theseed::control::machine;
 
 #define TEST(name)                            \
@@ -67,9 +73,16 @@ public:
         return pid != 0;
     }
 
+    bool terminateUnmanaged(std::uint32_t pid) override {
+        lastTerminate = pid;
+        return terminateResult;
+    }
+
     std::string lastStart;
     std::uint32_t lastStop = 0;
     std::uint32_t lastRestart = 0;
+    std::uint32_t lastTerminate = 0;
+    bool terminateResult = false;
 };
 
 }  // namespace
@@ -165,6 +178,22 @@ int main() {
     }
 #endif
 
+    TEST("governance forwarders delegate to the supervisor");
+    {
+        const auto processes = agent.enumerateHostProcesses();
+        if (processes.size() != 1 || processes[0].pid != 4321)
+            FAIL("enumerate must forward to supervisor list");
+        supervisorPtr->terminateResult = true;
+        if (!agent.terminateHostProcess(4321))
+            FAIL("terminate result must forward");
+        if (supervisorPtr->lastTerminate != 4321)
+            FAIL("terminate pid must forward");
+        supervisorPtr->terminateResult = false;
+        if (agent.terminateHostProcess(7))
+            FAIL("supervisor refusal must forward");
+        PASS();
+    }
+
 #ifndef _WIN32
     // LocalProcessSupervisor：真实 fork/exec 一个 sleep 子进程，
     // 走 start/snapshot(stop/restart) 主路径。fork 出的子进程走 _exit，
@@ -202,6 +231,42 @@ int main() {
         if (!supervisor.stop(newPid)) FAIL("stop sleep");
         if (supervisor.stop(newPid)) FAIL("second stop should fail");
         if (supervisor.restart(newPid)) FAIL("restart stopped pid should fail");
+        PASS();
+    }
+
+    // 非受控治理处置：fork 出不经 supervisor 登记的 sleep 子进程，
+    // SIGTERM 送达即 true；受管进程拒绝；越界 pid 恒 ESRCH。
+    TEST("terminateUnmanaged governs only unmanaged processes");
+    {
+        LocalProcessSupervisor supervisor;
+        const pid_t sleeper = ::fork();
+        if (sleeper == 0) {
+            ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
+            ::_exit(127);  // 仅 exec 失败可达
+        }
+        const auto sleeperPid = static_cast<std::uint32_t>(sleeper);
+        if (!supervisor.terminateUnmanaged(sleeperPid))
+            FAIL("unmanaged termination should succeed");
+        int status = 0;
+        ::waitpid(sleeper, &status, 0);
+        if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM)
+            FAIL("sleep must die by SIGTERM");
+
+        if (!supervisor.start("sleep 5")) FAIL("start managed sleep");
+        std::uint32_t managedPid = 0;
+        for (const auto& p : supervisor.listProcesses()) {
+            if (p.managed && p.name == "sleep") {
+                managedPid = p.pid;
+                break;
+            }
+        }
+        if (managedPid == 0) FAIL("managed sleep missing");
+        if (supervisor.terminateUnmanaged(managedPid))
+            FAIL("managed process must be refused");
+        if (!supervisor.stop(managedPid)) FAIL("managed cleanup stop");
+
+        if (supervisor.terminateUnmanaged(4194305))
+            FAIL("pid beyond pid_max must fail with ESRCH");
         PASS();
     }
 #endif

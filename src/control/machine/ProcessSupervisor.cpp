@@ -474,6 +474,36 @@ bool LocalProcessSupervisor::restart(std::uint32_t pid) {
     return start(commandLine);
 }
 
+bool LocalProcessSupervisor::terminateUnmanaged(std::uint32_t pid) {
+    // 受管进程的治理处置一律拒绝：它们的唯一停止入口是 stop/restart，
+    // 走治理路径会绕开 reap/记账（单一控制路径纪律，与 daemon 侧守卫
+    // 互为纵深——daemon 用枚举的 managed 标记，这里用登记簿本身）。
+    {
+        std::lock_guard lock(mutex_);
+        if (managedProcesses_.find(pid) != managedProcesses_.end()) {
+            return false;
+        }
+    }
+
+#if defined(__linux__)
+    // Linux 起步（06 §7 分阶段）：SIGTERM 交由目标进程优雅退出；
+    // false = 进程已不存在（ESRCH）或无权限（EPERM）。
+    return kill(static_cast<pid_t>(pid), SIGTERM) == 0;
+#else
+    (void)pid;
+    // 非 Linux 平台治理处置暂不开放（Windows/macOS 枚举照常，处置待补）。
+    return false;
+#endif
+}
+
+std::uint32_t currentProcessId() {
+#if defined(_WIN32)
+    return static_cast<std::uint32_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::uint32_t>(getpid());
+#endif
+}
+
 void LocalProcessSupervisor::reapManagedProcesses() const {
     std::lock_guard lock(mutex_);
 

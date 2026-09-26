@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace theseed::control::machine {
 
@@ -15,6 +16,16 @@ public:
 
     virtual NodeSummary snapshot() = 0;
     virtual bool execute(const std::string& command, const std::string& args) = 0;
+
+    // 主机级进程枚举（06 §7 MVP "process list / state / pid"）：全主机
+    // 进程表（含 managed 标记），治理侧据此过滤非受控目标并做保护判定。
+    // 与 snapshot 的差别：不采主机资源摘要（枚举只读、高频调用无谓开销）。
+    virtual std::vector<ProcessSummary> enumerateHostProcesses() = 0;
+
+    // 非受控进程处置转发：受管进程拒绝（单一控制路径纪律，见
+    // IProcessSupervisor::terminateUnmanaged）。策略判定在 daemon 侧，
+    // 这里只做能力转发。
+    virtual bool terminateHostProcess(std::uint32_t pid) = 0;
 
     // 节点摘要上报（设计文档 06 §2.4/§4.3）：采一次快照推给上报出口。
     // 无出口（未注册）时为空操作——上报是能力而非义务。
@@ -32,6 +43,8 @@ public:
 
     NodeSummary snapshot() override;
     bool execute(const std::string& command, const std::string& args) override;
+    std::vector<ProcessSummary> enumerateHostProcesses() override;
+    bool terminateHostProcess(std::uint32_t pid) override;
     void report() override;
 
     // 运行期换绑上报出口（nullptr = 关闭上报）。

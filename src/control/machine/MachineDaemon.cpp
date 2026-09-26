@@ -8,6 +8,7 @@
 #include "theseed/runtime/TcpConnection.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <sstream>
@@ -55,6 +56,17 @@ constexpr const char* kExecuteAcceptedCount = "machine_execute_accepted_count";
 constexpr const char* kExecuteRejectedCount = "machine_execute_rejected_count";
 constexpr const char* kUnknownMethodCount = "machine_unknown_method_count";
 constexpr const char* kExecuteDurationMs = "machine_execute_duration_ms";
+// 治理切片（05 遥测同族口径）：枚举只读与处置各一对接受/拒绝计数。
+constexpr const char* kProcessListCount = "machine_process_list_count";
+constexpr const char* kProcessListRejectedCount =
+    "machine_process_list_rejected_count";
+constexpr const char* kTerminateAcceptedCount = "machine_terminate_accepted_count";
+constexpr const char* kTerminateRejectedCount =
+    "machine_terminate_rejected_count";
+// 审计命令口径：治理动作与 execute 审计同族（command 串入审计条目，
+// 中心侧按命令名可辨动作类型）。
+constexpr const char* kGovernListCommand = "process.list";
+constexpr const char* kGovernKillCommand = "process.kill";
 
 foundation::Counter& telemetryCounter(const char* name) {
     return foundation::MetricsRegistry::instance().counter(name);
@@ -76,6 +88,48 @@ void logExecuteRejected(const AuditEntry& entry, const std::string& reason) {
     const foundation::LogAttribute reasonAttr = {"reason", reason};
     foundation::logWarn("machine.execute.rejected",
                         {sourceAttr, commandAttr, reasonAttr});
+}
+
+// 治理动作拒绝（枚举/处置共用）：计数 + span 标记 + 结构化日志。span 可空
+// （枚举是只读动作，不进 trace）；审计与错误响应由调用方处理。
+void rejectGovernAction(const AuditEntry& entry,
+                        foundation::SpanScope* span,
+                        const char* counterName,
+                        const std::string& reason) {
+    telemetryCounter(counterName).increment();
+    if (span != nullptr) {
+        span->setAttribute("accepted", false);
+        span->setAttribute("reason", reason);
+    }
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute commandAttr = {"command", entry.command};
+    const foundation::LogAttribute reasonAttr = {"reason", reason};
+    foundation::logWarn("machine.process.govern.rejected",
+                        {sourceAttr, commandAttr, reasonAttr});
+}
+
+// machine.terminate 请求载荷 = pid 十进制串；pid 0 无意义（不是合法治理
+// 目标），解析失败一律 ok=false。
+struct ParsedPid {
+    bool ok = false;
+    std::uint32_t value = 0;
+};
+
+ParsedPid parsePidPayload(const std::vector<std::byte>& payload) {
+    if (payload.empty()) {
+        return {};
+    }
+    const std::string text(reinterpret_cast<const char*>(payload.data()),
+                           payload.size());
+    std::uint32_t pid = 0;
+    const auto* begin = text.data();
+    const auto* end = begin + text.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, pid);
+    if (ec != std::errc{} || ptr != end || pid == 0) {
+        return {};
+    }
+    return {true, pid};
 }
 
 }  // namespace
@@ -329,6 +383,16 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
+    if (inv.method == MachineMethod::kProcesses) {
+        handleProcesses(inv);
+        return;
+    }
+
+    if (inv.method == MachineMethod::kTerminate) {
+        handleTerminate(inv);
+        return;
+    }
+
     telemetryCounter(kUnknownMethodCount).increment();
     AuditEntry rejected;
     rejected.timestamp = std::chrono::system_clock::now();
@@ -353,6 +417,150 @@ void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {    std::ostri
     const auto json = toBytes(out.str());
     sendResponse(inv.sourceComponent, MachineMethod::kAuditOk,
                  std::span<const std::byte>(json));
+}
+
+bool MachineDaemon::isGovernTrustedSource(runtime::ComponentId source) const {
+    const auto& trusted = config_.processGovernPolicy.trustedComponents;
+    return std::find(trusted.begin(), trusted.end(), source) != trusted.end();
+}
+
+bool MachineDaemon::isKillableName(const std::string& name) const {
+    const auto& killable = config_.processGovernPolicy.killableNames;
+    return std::find(killable.begin(), killable.end(), name) != killable.end();
+}
+
+void MachineDaemon::handleProcesses(runtime::RuntimeInvocation& inv) {
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kGovernListCommand;
+
+    if (!isGovernTrustedSource(inv.sourceComponent)) {
+        const std::string reason =
+            "process listing rejected: source component " +
+            std::to_string(inv.sourceComponent) + " is not trusted";
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectGovernAction(entry, nullptr, kProcessListRejectedCount, reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+        return;
+    }
+
+    const auto hostProcesses = agent_.enumerateHostProcesses();
+    // 非受控进程视图：治理面向主机上“非本代理管理”的进程；受管进程的
+    // 编排走 execute（start/stop/restart），不在此重复暴露。
+    std::ostringstream out;
+    out << "[";
+    std::size_t listed = 0;
+    for (const auto& process : hostProcesses) {
+        if (process.managed) {
+            continue;
+        }
+        if (listed != 0) {
+            out << ',';
+        }
+        const std::string pidField = "\"pid\":" + std::to_string(process.pid);
+        const std::string nameField =
+            "\"name\":\"" + escapeJsonString(process.name) + "\"";
+        out << "{" << pidField << "," << nameField << "}";
+        ++listed;
+    }
+    out << "]";
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = std::to_string(listed);
+    appendAudit(entry);
+    telemetryCounter(kProcessListCount).increment();
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kProcessesOk,
+                 std::span<const std::byte>(json));
+}
+
+void MachineDaemon::handleTerminate(runtime::RuntimeInvocation& inv) {
+    // 处置是关键受控动作：全程 span（05 §3.1），拒绝也入 span——“谁在
+    // 何时被拒、为什么”与审计同视角。
+    foundation::SpanScope span("machine.terminate");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kGovernKillCommand;
+
+    // 拒绝臂共用出口：审计先行（与 execute 时序一致），再计数/span/日志
+    // 与错误响应。
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectGovernAction(entry, &span, kTerminateRejectedCount, reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    const auto parsed = parsePidPayload(inv.payload);
+    entry.args = parsed.ok ? std::to_string(parsed.value) : "";
+    if (!parsed.ok) {
+        reject("terminate rejected: malformed pid payload");
+        return;
+    }
+    span.setAttribute("pid", static_cast<std::int64_t>(parsed.value));
+
+    if (!isGovernTrustedSource(inv.sourceComponent)) {
+        reject("terminate rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // 目标解析：治理目标必须是主机上真实存在、非自身、非受管的进程。
+    // 枚举与处置之间固有竞态（进程可先退出），MVP 以 SIGTERM 语义接受：
+    // kill 返回 ESRCH 时处置记失败（ok=false）而非拒绝。
+    const auto hostProcesses = agent_.enumerateHostProcesses();
+    const auto target = std::find_if(hostProcesses.begin(), hostProcesses.end(),
+                                     [pid = parsed.value](
+                                         const ProcessSummary& process) {
+                                         return process.pid == pid;
+                                     });
+    if (target == hostProcesses.end()) {
+        reject("terminate rejected: unknown pid " +
+               std::to_string(parsed.value));
+        return;
+    }
+    if (parsed.value == currentProcessId()) {
+        reject("terminate rejected: target is the daemon process itself");
+        return;
+    }
+    if (target->managed) {
+        reject("terminate rejected: pid " + std::to_string(parsed.value) +
+               " is a managed process (use stop/restart)");
+        return;
+    }
+    if (!isKillableName(target->name)) {
+        reject("terminate rejected: process name '" + target->name +
+               "' is not in the kill list");
+        return;
+    }
+
+    const bool ok = agent_.terminateHostProcess(parsed.value);
+    entry.accepted = true;
+    entry.ok = ok;
+    appendAudit(entry);
+    telemetryCounter(kTerminateAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("ok", ok);
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const auto pidValue = static_cast<std::int64_t>(parsed.value);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute pidAttr = {"pid", pidValue};
+    const foundation::LogAttribute okAttr = {"ok", ok};
+    foundation::logInfo("machine.terminate", {sourceAttr, pidAttr, okAttr});
+    const std::byte result = ok ? std::byte{0x01} : std::byte{0x00};
+    sendResponse(inv.sourceComponent, MachineMethod::kTerminateOk,
+                 std::span<const std::byte>(&result, 1));
 }
 
 void MachineDaemon::sendResponse(runtime::ComponentId target,

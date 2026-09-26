@@ -25,6 +25,15 @@ inline constexpr const char* kExecuteOk = "machine.execute.ok";
 // 审计查询：payload = 最近 auditCapacity 条的 JSON 数组（时间升序）。
 inline constexpr const char* kAudit = "machine.audit";
 inline constexpr const char* kAuditOk = "machine.audit.ok";
+// 主机级非受控进程治理（策略化，见 ProcessGovernPolicy）：
+//   machine.processes → machine.processes.ok  payload = 非受控进程 JSON
+//                       数组（[{"pid":N,"name":"..."}]，不含受管进程）
+//   machine.terminate → machine.terminate.ok  payload = 1 字节 0x01/0x00
+//                       请求 payload = 目标 pid 十进制串
+inline constexpr const char* kProcesses = "machine.processes";
+inline constexpr const char* kProcessesOk = "machine.processes.ok";
+inline constexpr const char* kTerminate = "machine.terminate";
+inline constexpr const char* kTerminateOk = "machine.terminate.ok";
 // 统一错误响应：payload 为短原因串（可读，供人工诊断与测试断言）。
 inline constexpr const char* kError = "machine.error";
 }  // namespace MachineMethod
@@ -41,6 +50,11 @@ inline constexpr const char* kError = "machine.error";
 //                      请求 payload = command '\0' args（命令与参数以
 //                      NUL 分隔，与 IMachineAgent::execute 的两参对齐）
 //   machine.audit    → machine.audit.ok     payload = 审计条目 JSON 数组
+//   machine.processes → machine.processes.ok  payload = 非受控进程 JSON 数组
+//                      （来源须过 processGovernPolicy 来源白名单）
+//   machine.terminate → machine.terminate.ok  payload = 1 字节 0x01/0x00
+//                      （请求 payload = pid 十进制串；来源白名单 + 目标
+//                      comm 名单 + 保护类判定：受管进程与自身进程拒绝）
 //   其余 method 或畸形 execute 载荷 → machine.error（payload = 原因串）
 //
 // 每条 execute 尝试与协议层拒绝记入环形审计日志（容量 auditCapacity，
@@ -68,12 +82,29 @@ public:
         std::vector<std::string> allowedCommands;
     };
 
+    // 主机级非受控进程治理策略（06 §7 MVP "process list / state / pid" 的
+    // 控制面切片）。与 ExecPolicy 刻意分离——授权口径与命令白名单互不
+    // 牵动：execute 是“本代理受管进程的编排”，治理是对主机上其他进程
+    // 的越权面，两者风险等级与审计语义不同，不得共享白名单。
+    // - trustedComponents：允许发起枚举/处置的来源白名单；
+    // - killableNames：处置目标进程名（/proc/<pid>/comm，精确匹配）
+    //   白名单；空集 = 处置一律拒绝（安全缺省：未显式授权即不可处置）。
+    // 枚举与处置共用来源白名单；处置额外受名单约束。所有尝试（含拒绝）
+    // 照记审计（accepted=false）并推中心。
+    struct ProcessGovernPolicy final {
+        std::vector<runtime::ComponentId> trustedComponents;
+        std::vector<std::string> killableNames;
+    };
+
     struct Config final {
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
         runtime::ComponentId componentId = 60;  // Machine 组件默认 id
         std::size_t auditCapacity = 128;  // 本地审计环形容量；0 = 关闭本地环形
         ExecPolicy execPolicy;
+        // 主机级非受控进程治理策略（machine.processes / machine.terminate）；
+        // 缺省全拒（来源与目标名单均为空集）。
+        ProcessGovernPolicy processGovernPolicy;
         // 节点摘要上报周期；0 = 关闭周期上报。到期即采一次快照推给
         // reportSink（首个 tick 立即上报，保证中心侧新鲜度）。
         std::chrono::milliseconds reportInterval{0};
@@ -107,8 +138,12 @@ private:
     void processMessages();
     void handleInvocation(runtime::RuntimeInvocation& inv);
     void handleAudit(runtime::RuntimeInvocation& inv);
+    void handleProcesses(runtime::RuntimeInvocation& inv);
+    void handleTerminate(runtime::RuntimeInvocation& inv);
     bool isTrustedSource(runtime::ComponentId source) const;
     bool isCommandAllowed(const std::string& command) const;
+    bool isGovernTrustedSource(runtime::ComponentId source) const;
+    bool isKillableName(const std::string& name) const;
     void appendAudit(const AuditEntry& entry);
     void reportIfDue();
     void sendResponse(runtime::ComponentId target,

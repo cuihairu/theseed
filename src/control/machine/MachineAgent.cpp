@@ -26,6 +26,17 @@ NodeSummary MachineAgent::snapshot() {
     return summary;
 }
 
+std::vector<ProcessSummary> MachineAgent::enumerateHostProcesses() {
+    // 与 snapshot 同源（supervisor 的全主机枚举），只省掉资源采样——
+    // 治理动作只需要进程身份（pid/name/managed），不需要主机水位。
+    return processSupervisor_->listProcesses();
+}
+
+bool MachineAgent::terminateHostProcess(std::uint32_t pid) {
+    // 策略判定（来源白名单/目标名单/保护类）在 daemon 侧完成，这里纯转发。
+    return processSupervisor_->terminateUnmanaged(pid);
+}
+
 void MachineAgent::setReportSink(INodeReportSink* reportSink) {
     reportSink_ = reportSink;
 }

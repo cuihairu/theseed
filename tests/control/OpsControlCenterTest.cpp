@@ -98,6 +98,7 @@ public:
     bool start(const std::string&) override { return true; }
     bool stop(std::uint32_t) override { return true; }
     bool restart(std::uint32_t) override { return true; }
+    bool terminateUnmanaged(std::uint32_t) override { return false; }
 };
 
 // 捕获假件：记录中心出口推过的注册/上报/注销。
