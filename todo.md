@@ -1,5 +1,34 @@
 # TODO
 
+## 慢 tick 诊断：只读诊断采样切片（2026-09-26）
+
+对齐 05-telemetry §6 Diagnostics Profiling 的 MVP 最小切片（"慢 tick 诊断"
+三主题之一；flamegraph 采样与分阶段归因属 Phase 2 更强采样策略，留待
+后续）。上一批指令的既定退路切片，本轮正式落地：
+
+1. **边界盘点**：TickScheduler::runOnce 已自带整 tick span（tick_duration_ms
+   属性）与同名直方图观测——遥测联动已覆盖耗时分布；真正缺口是**阈值
+   分类与告警**。实体级负载信号归 EntityLoadProfiler（另一篇谱系），本
+   切片只做 tick 粒度"慢"判定，职责无重叠。
+2. **ITickObserver 观察者接缝**：调度器只广播事实（tick 序号 + 实测
+   耗时），策略不进调度器；观察者不持有、tick 线程内联回调（实现不得
+   阻塞），建议调度线程启动前挂接，nullptr = 关闭广播。
+3. **TickDiagnostics 只读诊断组件**：Config.slowThreshold（默认 200ms
+   ≈ 2 × 默认 tick 间隔 100ms，超预算两倍即信号；恰好等于不算——严格
+   大于）；slow_tick_count 计数器（snake_case 同族口径）+ 结构化警告
+   runtime.slow_tick（tick_index / duration_ms / threshold_ms 属性，tick
+   线程通常无 span 上下文、日志自动关联语义不变）；slowTickCount() /
+   lastSlowTickIndex() 只读视图（后者仅在 slowTickCount()>0 时有意义）。
+   只读留痕不触发控制动作——采样触发与结果下载权归 04-ops-control-plane，
+   后续接入。
+4. **测试**（RuntimeFrameworkTest +观察者接缝块、新增 TickDiagnosticsTest
+   4 用例）：预算内/恰好等于阈值静默（计数不动）、慢 tick 计数 +2（回
+   落不累加）、警告逐属性断言、默认阈值 200ms 两臂、调度器接缝大阈值
+   零误报（无时钟竞态）与解绑停止广播、getter/序号递增。
+
+验证口径：gcc-coverage 114/114 全绿、gcovr 100%（10308/10308）；clang 21
+树零警告、114/114 全绿。
+
 ## 主机级非受控进程的策略化治理（Linux 起步，2026-09-26）
 
 对齐 06-machine-agent-and-host-ops §7 MVP "process list / state / pid" 的
@@ -372,8 +401,10 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 
 - ~~`LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`~~（2026-09-26 完成）
 - ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux）
-- 非受控全局进程的策略化管理与权限边界（控制面 execute 双白名单已落地
-  2026-09-26；主机级非 agent 进程的策略化治理仍开放）
+- ~~非受控全局进程的策略化管理与权限边界~~（2026-09-26 完成：控制面
+  execute 双白名单 + 主机级非 agent 进程的策略化治理——machine.processes
+  / machine.terminate RPC、ProcessGovernPolicy 独立策略、全动作审计入
+  中心环形）
 - ~~端口占用扫描与二进制版本探测~~（2026-09-26 完成，Linux；Windows/macOS 留空）
 - Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
 - ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon

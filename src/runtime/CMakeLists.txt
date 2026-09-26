@@ -32,6 +32,7 @@ add_library(
     TcpListener.cpp
     TransportStatsCollector.cpp
     Witness.cpp
+    TickDiagnostics.cpp
     TickScheduler.cpp)
 
 target_link_libraries(

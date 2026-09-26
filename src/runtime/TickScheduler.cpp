@@ -75,6 +75,14 @@ Duration TickScheduler::lastTickDuration() const {
     return lastTickDuration_;
 }
 
+void TickScheduler::setObserver(ITickObserver* observer) {
+    observer_ = observer;
+}
+
+ITickObserver* TickScheduler::observer() const {
+    return observer_;
+}
+
 std::vector<ITickable*> TickScheduler::snapshot(TickPhase phase) const {
     std::lock_guard lock(mutex_);
     return tickables_[toIndex(phase)];
@@ -154,6 +162,12 @@ void TickScheduler::runOnce() {
         "tick wall-clock duration in milliseconds");
     tickMetric.observe(
         std::chrono::duration<double, std::milli>(elapsed).count());
+
+    // 慢 tick 诊断接缝（05-telemetry §6）：广播 tick 序号与实测耗时，
+    // 阈值分类/计数/结构化日志归 TickDiagnostics——策略不进调度器。
+    if (observer_ != nullptr) {
+        observer_->onTickCompleted(context.tickIndex, elapsed);
+    }
 }
 
 void TickScheduler::run() {

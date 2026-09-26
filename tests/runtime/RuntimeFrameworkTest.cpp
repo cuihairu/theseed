@@ -18,6 +18,7 @@ using theseed::runtime::IoOp;
 using theseed::runtime::IoRequest;
 using theseed::runtime::IoStatus;
 using theseed::runtime::ITickable;
+using theseed::runtime::ITickObserver;
 using theseed::runtime::IServiceApp;
 using theseed::runtime::RuntimeLoop;
 using theseed::runtime::ServiceApp;
@@ -465,6 +466,48 @@ int main() {
         }
         if (ioEdge.drainCompletions(two.data(), 2) != 1) {
             return fail("drain_rest_one");
+        }
+    }
+
+    // tick 完成观察者（慢 tick 诊断接缝）：广播 tick 序号与实测耗时；
+    // 解绑后不再广播
+    {
+        struct RecordingObserver final : ITickObserver {
+            void onTickCompleted(std::uint64_t tickIndex, Duration duration) override {
+                indices.push_back(tickIndex);
+                durations.push_back(duration);
+            }
+            std::vector<std::uint64_t> indices;
+            std::vector<Duration> durations;
+        };
+
+        TickScheduler observed(std::chrono::milliseconds{0});
+        RecordingObserver diag;
+        observed.setObserver(&diag);
+        if (observed.observer() != &diag) {
+            return fail("observer_getter");
+        }
+
+        observed.runOnce();
+        observed.runOnce();
+        if (diag.indices != std::vector<std::uint64_t>{0, 1}) {
+            return fail("observer_tick_indices");
+        }
+        if (diag.durations.size() != 2) {
+            return fail("observer_duration_count");
+        }
+        if (diag.durations.back() < Duration::zero()) {
+            return fail("observer_duration_nonnegative");
+        }
+
+        observed.setObserver(nullptr);
+        if (observed.observer() != nullptr) {
+            return fail("observer_unbind_getter");
+        }
+        const auto firedAfterBind = diag.indices.size();
+        observed.runOnce();
+        if (diag.indices.size() != firedAfterBind) {
+            return fail("observer_still_firing_after_unbind");
         }
     }
 
