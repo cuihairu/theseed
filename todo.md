@@ -1,5 +1,33 @@
 # TODO
 
+## Telemetry 导出面：控制面遥测经 /metrics Prometheus 端点导出（2026-09-26）
+
+对齐 05-telemetry-and-debug 的导出层（OTel SDK/OTLP 判定过重：vcpkg 工具
+链未安装，引入需全量重建 protobuf/abseil 与 preset 改造——按既定降级路径
+先落只读导出面，OTel 迁移留待依赖就绪）：
+
+1. **导出面盘点**：OpsServer 的 GET /metrics 早已接线
+   `OpsInspector::renderMetrics()` → 全局 `MetricsRegistry::renderText()`
+   （Prometheus 文本格式，Content-Type `text/plain; version=0.0.4`），
+   HTTP 解析/内容类型/端点矩阵在 OpsServerTest 全有覆盖——生产代码无需
+   改动，缺口是**控制面切片零证明**：machine_*/ops_* 指标从未被断言流经
+   导出面（Inspector 测试只覆盖自定义 counter，直方图渲染无 HTTP 侧证据）。
+2. **端到端测试**（MachineDaemonTest 20→21）：部署形态同进程复刻——
+   OpsControlCenter（report+audit 双 sink）+ MachineDaemon + OpsServer
+   同宿主，reset 注册表后从零计数：一笔 accepted（失败 pid 不留子进程）+
+   一笔 rejected 驱动真实 execute 路径，HTTP GET /metrics 按
+   Content-Length 读全响应，断言 `machine_execute_accepted_count 1`、
+   `machine_execute_rejected_count 1`、直方图
+   `_bucket{le=` / `_count 1` / `_sum`、中心水位 `ops_nodes_registered 1`
+   与 `ops_audit_entries 2` 均以精确值出现在导出文本中。测试侧新增
+   theseed_ops 链接（无循环依赖：ops 不依赖 control）。
+3. **语义澄清**：导出面是读路径——注册表快照即时渲染，无导出侧状态；
+   machine/ops 指标经既有 Registry 单例自然汇流，无需控制面新增导出
+   代码（「遥测接导出面」的实质是证明汇流通路，而非再建一个端点）。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10131/10131）；clang 21
+树零警告、113/113 全绿。
+
 ## Telemetry 联动：控制面三路遥测（2026-09-26）
 
 对齐 05-telemetry-and-debug MVP（结构化 logs + 基础 metrics + 关键 traces）
@@ -247,7 +275,7 @@ gcc 15 `-Werror` 零警告构建。遗留清单同步划掉已完成两项。
 验证口径：gcc-coverage 树 109/109 全绿（本环境无 libmysql/libpq/podman，SQL 段
 按环境变量门控跳过，与 clang18/gcc13 树口径一致）；clang 21 树构建零警告。
 
-## 测试覆盖率专项（2026-09-22，行 78.5%→86.9%，gcovr 实测）
+## 测试覆盖率专项（2026-09-22，行 78.5% [86.9%，gcovr 实测]
 
 基线（gcc-coverage preset + gcovr）：行 78.5%、函数 85.3%、分支 46.0%。
 本轮以端到端 TCP 回环测试补齐 0% 文件，过程中发现并修复 5 个真实缺陷：

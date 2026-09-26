@@ -9,6 +9,7 @@
 #include "theseed/control/machine/ProcessSupervisor.h"
 #include "theseed/control/ops/OpsControlCenter.h"
 #include "theseed/foundation/Logger.h"
+#include "theseed/ops/OpsServer.h"
 #include "theseed/foundation/Metrics.h"
 #include "theseed/foundation/Tracing.h"
 #include "theseed/runtime/NetworkTransport.h"
@@ -626,6 +627,109 @@ int main() {
     if (daemon.isListening()) FAIL("daemon still listening after stop");
     daemon.tick();  // 不得崩溃
     PASS();
+
+    TEST("telemetry exports over the OpsServer /metrics endpoint");
+    {
+        // 指标是进程级单例且此前用例都按增量断言；导出文本是绝对值，
+        // 这里清零从零计数，HTTP 侧才能按确切数字断言。
+        foundation::MetricsRegistry::instance().reset();
+
+        // 对应部署形态：ops 控制面宿主进程同进程持有中心聚合器与
+        // OpsServer——注册簿/审计水位与 machine 执行指标一并从
+        // /metrics 导出（05-telemetry 的 MVP 导出面）。
+        OpsControlCenter exportCenter;
+        MachineAgent exportAgent(std::make_unique<LocalHostProbe>(),
+                                 std::make_unique<LocalProcessSupervisor>(),
+                                 &exportCenter);
+        MachineDaemon::Config exportConfig;
+        exportConfig.listenPort = 0;
+        exportConfig.execPolicy.trustedComponents = {kClientComponent};
+        exportConfig.execPolicy.allowedCommands = {"restart"};
+        exportConfig.reportSink = &exportCenter;
+        exportConfig.auditSink = &exportCenter;
+        MachineDaemon exportDaemon(exportConfig, exportAgent);
+        if (!exportDaemon.start()) FAIL("export daemon start failed");
+        auto exportTick = [&exportDaemon] { exportDaemon.tick(); };
+
+        theseed::ops::ProcessInfo exportInfo;
+        exportInfo.role = "MachineDaemon";
+        theseed::ops::OpsInspector exportInspector(exportInfo);
+        theseed::ops::OpsServer::Config httpConfig;
+        httpConfig.port = 0;  // ephemeral
+        theseed::ops::OpsServer httpServer(httpConfig, exportInspector);
+        if (!httpServer.start()) FAIL("metrics endpoint start failed");
+        const auto httpPort = httpServer.localPort();
+
+        // 一笔 accepted（失败 pid，不留子进程）+ 一笔 rejected：两个
+        // 计数器与直方图都观测到，导出值才可精确断言。
+        RawClient exportClient;
+        if (!exportClient.connect(exportDaemon.localPort()))
+            FAIL("export daemon connect failed");
+        exportClient.settle(exportTick);
+        RuntimeInvocation resp;
+        if (!exportClient.request(MachineMethod::kExecute,
+                                  executePayload("restart", "4000011"),
+                                  exportTick, resp))
+            FAIL("no response to exported execute");
+        if (!exportClient.request(MachineMethod::kExecute,
+                                  executePayload("halt", "now"),
+                                  exportTick, resp))
+            FAIL("no response to exported rejection");
+
+        auto metricsConn = TcpConnection::create();
+        if (!metricsConn->connect("127.0.0.1", httpPort))
+            FAIL("connect to metrics endpoint failed");
+        std::string rx;
+        metricsConn->setOnReceived([&rx](std::span<const std::byte> data) {
+            rx.append(reinterpret_cast<const char*>(data.data()), data.size());
+        });
+        const std::string request = "GET /metrics HTTP/1.1\r\n\r\n";
+        metricsConn->write(std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(request.data()), request.size()));
+        // 头部声明多少就等到多少：一次读全再断言（导出文本无分片语义）
+        for (int i = 0; i < 400; ++i) {
+            httpServer.tick();
+            metricsConn->pump();
+            const auto headerEnd = rx.find("\r\n\r\n");
+            if (headerEnd != std::string::npos) {
+                const auto lengthKey = rx.find("Content-Length: ");
+                if (lengthKey != std::string::npos) {
+                    const auto bodyLength =
+                        std::strtoul(rx.c_str() + lengthKey + 16, nullptr, 10);
+                    if (rx.size() >= headerEnd + 4 + bodyLength) break;
+                }
+            }
+            ::usleep(2000);
+        }
+
+        const auto headerEnd = rx.find("\r\n\r\n");
+        if (headerEnd == std::string::npos) FAIL("no reply from /metrics");
+        if (rx.compare(0, 12, "HTTP/1.0 200") != 0)
+            FAIL("metrics endpoint must answer 200");
+        if (rx.find("text/plain; version=0.0.4") == std::string::npos)
+            FAIL("Prometheus exposition content-type missing");
+        const auto body = rx.substr(headerEnd + 4);
+        if (body.find("machine_execute_accepted_count 1") == std::string::npos)
+            FAIL("accepted counter must export with its value: " + body);
+        if (body.find("machine_execute_rejected_count 1") == std::string::npos)
+            FAIL("rejected counter must export with its value: " + body);
+        if (body.find("machine_execute_duration_ms_bucket{le=") ==
+            std::string::npos)
+            FAIL("execute histogram buckets must export: " + body);
+        if (body.find("machine_execute_duration_ms_count 1") ==
+            std::string::npos)
+            FAIL("execute histogram count must export: " + body);
+        if (body.find("machine_execute_duration_ms_sum") == std::string::npos)
+            FAIL("execute histogram sum must export: " + body);
+        if (body.find("ops_nodes_registered 1") == std::string::npos)
+            FAIL("center roster gauge must export: " + body);
+        if (body.find("ops_audit_entries 2") == std::string::npos)
+            FAIL("center audit watermark must export: " + body);
+
+        httpServer.stop();
+        exportDaemon.stop();
+        PASS();
+    }
 
     std::cout << "\nAll MachineDaemon tests passed!" << std::endl;
     return 0;
