@@ -85,6 +85,8 @@ std::string formatSnapshotText(const NodeSummary& summary) {
         << "memory_usage=" << summary.host.memoryUsage << '\n'
         << "disk_usage=" << summary.host.diskUsage << '\n'
         << "load_average=" << summary.host.loadAverage << '\n'
+        << "network_rx_bytes=" << summary.host.networkRxBytes << '\n'
+        << "network_tx_bytes=" << summary.host.networkTxBytes << '\n'
         << "process_count=" << summary.processes.size() << '\n';
 
     if (const auto* process = selectDisplayProcess(summary.processes)) {

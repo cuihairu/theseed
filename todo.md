@@ -1,5 +1,30 @@
 # TODO
 
+## Machine 遗留事项 1+2 落地：CPU 采样稳定化 + 网络流量统计（2026-09-26）
+
+1. **CPU 采样稳定化（遗留事项 1）**：`LocalHostProbe` 新增 `Config`（首采自举窗口
+   200ms / 轮询粒度 10ms）与可注入查询点（`CpuTickQuery` / `NetworkBytesQuery`，
+   生产实现读 /proc/stat 与 /proc/net/dev，测试注入脚本化序列）。首采自举
+   `primeCpuSample`：首次 `sample()` 无基线读数，窗口内轮询等 tick 推进后以两端
+   差值出读数——CLI 单次调用也能拿到真实使用率；零差值/查询失败走粘滞
+   `lastCpuUsage_` 不闪回 0；读数 clamp 到 [0,100]。
+2. **网络流量统计（遗留事项 2，Linux）**：`sumNetworkBytes` 解析 /proc/net/dev，
+   聚合除回环外全部网卡（rx=第 1 列、tx=第 9 列），`HostSummary` 增
+   `networkRxBytes`/`networkTxBytes`，text/JSON 快照格式同步输出。
+   Windows/macOS 暂返 0（留在遗留清单）。
+3. **测试**：新增 `HostProbeTest`（7 场景：首采自举 50%、窗口耗尽保持、零差值粘滞、
+   查询失败保持、clamp 边界、零窗口不自举、真实 /proc 单调性）；DBAppE2E 补
+   短载荷 remove 解码失败、mysql/postgresql 后端构建不可用回退 file 两场景；
+   NetworkNodeTest 调度循环停止测试改为原子计数 tickable 等满两拍再停（重负载
+   下覆盖不靠时序运气）。
+4. **DBApp.cpp 收尾**：`accountStore_` 快路径（query/create）在本构建（无
+   libmysql/libpq）恒不可达——`accountStore_` 仅由 SQL 后端置位。按既有惯例加
+   带理由的 LCOV 豁免（真臂 + 函数体），SQL 树由 THESEED_MYSQL_HOST/
+   THESEED_PG_HOST 门控 E2E 覆盖。全仓 gcovr 100%（9644/9644）。
+
+验证口径：gcc-coverage 树 110/110 全绿（新增 theseed_host_probe_test）；
+gcc 15 `-Werror` 零警告构建。遗留清单同步划掉已完成两项。
+
 ## 质量红线落地：-Werror 固化 + 零警告清零 + 架构谱系文档（2026-09-25）
 
 1. **`-Werror` 固化**：根 CMakeLists 新增 `THESEED_WARNINGS_AS_ERRORS`（默认 ON）。
@@ -89,11 +114,11 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 当前只优先实现 `MachineAgent -> HostProbe -> ProcessSupervisor -> snapshot` 核心链路。
 以下事项暂不进入当前实现：
 
-- `LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`
-- 网络流量统计与多网卡聚合
+- ~~`LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`~~（2026-09-26 完成）
+- ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux）
 - 非受控全局进程的策略化管理与权限边界
 - 端口占用扫描与二进制版本探测
-- Linux / macOS 的等价主机探针完整实现与验证
+- Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
 - `MachineAgent` 的 RPC 输出与控制面注册
 - 与 `Ops Control Plane` 的注册、上报和审计对接
 - 与 `Telemetry` 的指标、日志、trace 联动

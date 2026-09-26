@@ -440,6 +440,22 @@ int main() {
         if (resp.method != DBMethod::kRemoveOk) FAIL("wrong response method");
         PASS();
 
+        TEST("short remove payload decodes to failure response");
+        // 64×0xAB 恰好能解出 id（decodeRemoveRequest 只要求 ≥8 字节），解码
+        // 失败分支需要不足 8 字节的载荷。
+        if (!client.request(DBMethod::kRemove, {std::byte{0xFF}, std::byte{0x00}},
+                            appTick, resp))
+            FAIL("no response to short remove");
+        if (resp.method != DBMethod::kRemoveOk) FAIL("wrong response method");
+        {
+            bool rok = true;
+            if (!DBProtocol::decodeRemoveResponse(
+                    std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                    rok) || rok)
+                FAIL("short remove should report failure");
+        }
+        PASS();
+
         TEST("malformed account payloads get not-found/failure responses");
         if (!client.request(DBMethod::kQueryAccount, garbage, appTick, resp))
             FAIL("no response to malformed queryAccount");
@@ -642,6 +658,40 @@ int main() {
     if (std::getenv("THESEED_PG_HOST") != nullptr) {
         if (!sqlBackendSection("postgresql")) return 1;
     }
+
+    // ------------------------------------------------------------------
+    // 场景 3：请求 SQL 后端但构建不可用（无 libmysql/libpq）→ 回退 file。
+    // 这些分支只存在于非 SQL 构建（#else 臂），SQL 树反向不可见，
+    // 必须在本（file-only）树驱动。
+    // ------------------------------------------------------------------
+#if !THESEED_HAS_MYSQL || !THESEED_HAS_POSTGRESQL
+    {
+        const std::string fallbackDir = "test_dbapp_fallback_store";
+        std::filesystem::remove_all(fallbackDir);
+
+        auto fallbackInit = [&](const char* backend) {
+            DBApp::Config fc;
+            fc.listenPort = freePort();
+            fc.storePath = fallbackDir;
+            fc.storeBackend = backend;
+            fc.componentId = kDbComponent;
+            DBApp fapp(std::move(fc));
+            return fapp.init();
+        };
+
+#if !THESEED_HAS_MYSQL
+        TEST("storeBackend=mysql falls back to file when built without libmysql");
+        if (!fallbackInit("mysql")) FAIL("mysql fallback init failed");
+        PASS();
+#endif
+#if !THESEED_HAS_POSTGRESQL
+        TEST("storeBackend=postgresql falls back to file when built without libpq");
+        if (!fallbackInit("postgresql")) FAIL("postgresql fallback init failed");
+        PASS();
+#endif
+        std::filesystem::remove_all(fallbackDir);
+    }
+#endif
 
     std::cout << "\nAll DBApp E2E tests passed!" << std::endl;
     return 0;

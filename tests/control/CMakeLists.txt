@@ -24,3 +24,12 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_machine_agent_test COMMAND theseed_machine_agent_test)
+
+add_executable(theseed_host_probe_test HostProbeTest.cpp)
+
+target_link_libraries(
+    theseed_host_probe_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control)
+
+add_test(NAME theseed_host_probe_test COMMAND theseed_host_probe_test)

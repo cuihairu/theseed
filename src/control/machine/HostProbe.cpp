@@ -1,11 +1,15 @@
 #include "theseed/control/machine/HostProbe.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <system_error>
+#include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -164,7 +168,106 @@ double queryLoadAverage() {
     // LCOV_EXCL_STOP
 }
 
+#if defined(__linux__)
+// 解析 /proc/net/dev 流并聚合除回环外的全部网卡流量。
+// 行格式 "iface: rxBytes packets errs drop fifo frame compressed multicast
+// txBytes packets errs drop fifo colls carrier compressed"；表头两行含 '|'。
+void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t& txBytes) {
+    rxBytes = 0;
+    txBytes = 0;
+
+    std::string line;
+    while (std::getline(input, line)) {
+        const auto colon = line.find(':');
+        if (colon == std::string::npos) {
+            continue;  // 表头（含 '|'）或空行
+        }
+
+        // 接口名裁空白；聚合口径排除回环（与物理流量统计的目标一致）
+        auto name = line.substr(0, colon);
+        const auto nameBegin = name.find_first_not_of(" \t");
+        if (nameBegin == std::string::npos) {  // 冒号前全空白的行在真实 /proc/net/dev 不存在（数据行恒有接口名）
+            continue;                          // LCOV_EXCL_LINE
+        }
+        name = name.substr(nameBegin, name.find_last_not_of(" \t") - nameBegin + 1);
+        if (name == "lo") {
+            continue;
+        }
+
+        std::uint64_t rx = 0;
+        std::uint64_t tx = 0;
+        std::istringstream fields(line.substr(colon + 1));
+        if (!(fields >> rx)) {  // LCOV_EXCL_BR_LINE Linux 真实 /proc/net/dev 数据行首列恒为数值
+            continue;           // LCOV_EXCL_START 畸形数据行防御臂：真实环境不可达
+        }
+        // LCOV_EXCL_STOP
+        for (int index = 0; index < 7; ++index) {
+            std::string skipped;
+            fields >> skipped;  // packets errs drop fifo frame compressed multicast
+        }
+        if (!(fields >> tx)) {  // LCOV_EXCL_BR_LINE Linux 真实数据行 tx 列恒存在
+            continue;           // LCOV_EXCL_START 截断数据行防御臂：真实环境不可达
+        }
+        // LCOV_EXCL_STOP
+
+        rxBytes += rx;
+        txBytes += tx;
+    }
+}
+#endif
+
+std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
+#if defined(__linux__)
+    std::ifstream input("/proc/net/dev");
+    if (!input.is_open()) {  // LCOV_EXCL_BR_LINE Linux 恒有 /proc/net/dev，打开失败臂不可注入
+        return {0, 0};       // LCOV_EXCL_START
+    }
+    // LCOV_EXCL_STOP
+
+    std::uint64_t rxBytes = 0;
+    std::uint64_t txBytes = 0;
+    sumNetworkBytes(input, rxBytes, txBytes);
+    return {rxBytes, txBytes};
+#else
+    // Windows/macOS 的等价探针暂缺（todo 遗留：跨平台主机探针完整实现）
+    return {0, 0};
+#endif
+}
+
 }  // namespace
+
+LocalHostProbe::LocalHostProbe() : LocalHostProbe(Config{}) {}
+
+LocalHostProbe::LocalHostProbe(Config config, CpuTickQuery cpuTickQuery, NetworkBytesQuery networkBytesQuery)
+    : config_(config),
+      cpuTickQuery_(std::move(cpuTickQuery)),
+      networkBytesQuery_(std::move(networkBytesQuery)) {
+    if (!cpuTickQuery_) {
+        cpuTickQuery_ = queryCpuTicks;
+    }
+    if (!networkBytesQuery_) {
+        networkBytesQuery_ = queryNetworkBytes;
+    }
+}
+
+void LocalHostProbe::primeCpuSample(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
+    const auto deadline = std::chrono::steady_clock::now() + config_.minCpuWindow;
+    const auto baseTotal = totalTicks;
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(config_.retryGranularity);
+
+        std::uint64_t idle = 0;
+        std::uint64_t total = 0;
+        if (cpuTickQuery_(idle, total) && total > baseTotal) {
+            idleTicks = idle;
+            totalTicks = total;
+            return;
+        }
+    }
+    // 窗口耗尽仍未推进（系统 tick 冻结的退化情形）：保持首读数，差值为 0，
+    // sample() 的粘滞逻辑会沿用 lastCpuUsage_。
+}
 
 HostSummary LocalHostProbe::sample() {
     HostSummary summary;
@@ -173,18 +276,28 @@ HostSummary LocalHostProbe::sample() {
     summary.memoryUsage = queryMemoryUsage();
     summary.diskUsage = queryDiskUsage();
     summary.loadAverage = queryLoadAverage();
+    std::tie(summary.networkRxBytes, summary.networkTxBytes) = networkBytesQuery_();
 
     std::uint64_t idleTicks = 0;
     std::uint64_t totalTicks = 0;
-    if (queryCpuTicks(idleTicks, totalTicks)) {  // LCOV_EXCL_BR_LINE Linux /proc/stat 恒可读，失败臂不可达
+    if (cpuTickQuery_(idleTicks, totalTicks)) {
+        if (!hasPreviousCpuSample_ && config_.minCpuWindow.count() > 0) {
+            // 首采自举：以首读数为基线，窗口内等 tick 推进
+            previousIdleTicks_ = idleTicks;
+            previousTotalTicks_ = totalTicks;
+            hasPreviousCpuSample_ = true;
+            primeCpuSample(idleTicks, totalTicks);
+        }
+
         if (hasPreviousCpuSample_) {
             const auto idleDelta = idleTicks - previousIdleTicks_;
             const auto totalDelta = totalTicks - previousTotalTicks_;
-            if (totalDelta != 0) {  // LCOV_EXCL_BR_LINE 两次采样间 CPU tick 零增长在真实环境不可定向构造
+            if (totalDelta != 0) {
                 const auto usage =
                     100.0 - (static_cast<double>(idleDelta) * 100.0 / static_cast<double>(totalDelta));
-                summary.cpuUsage = std::clamp(usage, 0.0, 100.0);
+                lastCpuUsage_ = std::clamp(usage, 0.0, 100.0);
             }
+            // totalDelta == 0：窗口短于 tick 粒度，沿用上次读数（不闪回 0）
         }
 
         previousIdleTicks_ = idleTicks;
@@ -192,6 +305,7 @@ HostSummary LocalHostProbe::sample() {
         hasPreviousCpuSample_ = true;
     }
 
+    summary.cpuUsage = lastCpuUsage_;
     return summary;
 }
 

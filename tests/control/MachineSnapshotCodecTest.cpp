@@ -89,6 +89,8 @@ int main() {
         text.find("memory_usage=48.25\n") == std::string::npos ||
         text.find("disk_usage=61.00\n") == std::string::npos ||
         text.find("load_average=1.50\n") == std::string::npos ||
+        text.find("network_rx_bytes=100\n") == std::string::npos ||
+        text.find("network_tx_bytes=200\n") == std::string::npos ||
         text.find("process_count=2\n") == std::string::npos)
         FAIL("host section mismatch:\n" + text);
     // text 格式不转义：名字中的引号/换行按原始字符输出。

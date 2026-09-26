@@ -339,7 +339,8 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
     }
 
     // 优先走 MySQL/索引表的后端快速路径
-    if (accountStore_) {
+    if (accountStore_) {  // LCOV_EXCL_BR_LINE 构建条件不可达真臂：accountStore_ 仅由 SQL 后端置位，无 libmysql/libpq 的构建恒为 nullptr
+        // LCOV_EXCL_START 快路径体同上不可达；SQL 树由 THESEED_MYSQL_HOST/THESEED_PG_HOST 门控的 E2E 段覆盖
         core::EntityId id = 0;
         std::string password;
         bool found = accountStore_->queryAccount(username, id, password);
@@ -348,6 +349,7 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
+    // LCOV_EXCL_STOP
 
     // 回退：FileEntityStore 没有索引表，线性扫描 Account 实体
     auto ids = store_->listIdsByType("Account");
@@ -403,7 +405,8 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
     }
 
     // 优先走索引表后端
-    if (accountStore_) {
+    if (accountStore_) {  // LCOV_EXCL_BR_LINE 构建条件不可达真臂：accountStore_ 仅由 SQL 后端置位，无 libmysql/libpq 的构建恒为 nullptr
+        // LCOV_EXCL_START 快路径体同上不可达；SQL 树由 THESEED_MYSQL_HOST/THESEED_PG_HOST 门控的 E2E 段覆盖
         core::EntityId id = 0;
         bool ok = accountStore_->createAccount(username, password, id);
         auto resp = DBProtocol::encodeCreateAccountResponse(ok, id);
@@ -411,6 +414,7 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
+    // LCOV_EXCL_STOP
 
     // 回退：FileEntityStore 线性扫描查重后插入
     // Check if account already exists

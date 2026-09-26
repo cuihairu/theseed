@@ -11,6 +11,7 @@
 
 using theseed::runtime::DeliveryClass;
 using theseed::runtime::IBytePipe;
+using theseed::runtime::ITickable;
 using theseed::runtime::NetworkNode;
 using theseed::runtime::NetworkTransport;
 using theseed::runtime::RuntimeInvocation;
@@ -18,6 +19,7 @@ using theseed::runtime::SendResult;
 using theseed::runtime::TcpConnection;
 using theseed::runtime::TcpListener;
 using theseed::runtime::TickContext;
+using theseed::runtime::TickPhase;
 using theseed::runtime::TickScheduler;
 using theseed::runtime::TransportHub;
 
@@ -215,17 +217,36 @@ static void testSchedulerLifecycleAndFailedConnect() {
 static void testSchedulerRunLoopStops() {
     TEST("scheduler run loop: sleep-paced and busy-paced variants stop cleanly");
 
+    // 重负载下 run 线程可能迟迟未被调度：固定睡眠后 stop 会让循环在首拍前就
+    // 退出，yield/sleep 分支未被驱动。用原子计数 tickable 等待确实跑满两拍
+    //（第一拍完整走过间隔分支）再请求停止。
+    struct TickCounter final : ITickable {
+        std::atomic<std::uint64_t> count{0};
+        void tick(TickContext&) override { count.fetch_add(1, std::memory_order_relaxed); }
+    };
+    auto waitTicks = [](const std::atomic<std::uint64_t>& count, std::uint64_t target) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (count.load(std::memory_order_relaxed) < target &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds{200});
+        }
+    };
+
     // tickInterval > 0：sleep_until 节拍分支
     TickScheduler paced(std::chrono::milliseconds{2});
+    TickCounter pacedCounter;
+    paced.registerTickable(TickPhase::Timer, pacedCounter);
     std::thread pacedLoop([&] { paced.run(); });
-    std::this_thread::sleep_for(std::chrono::milliseconds{12});
+    waitTicks(pacedCounter.count, 2);
     paced.requestStop();
     pacedLoop.join();
 
     // tickInterval == 0：yield 忙等分支
     TickScheduler busy(std::chrono::milliseconds{0});
+    TickCounter busyCounter;
+    busy.registerTickable(TickPhase::Timer, busyCounter);
     std::thread busyLoop([&] { busy.run(); });
-    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    waitTicks(busyCounter.count, 2);
     busy.requestStop();
     busyLoop.join();
 
