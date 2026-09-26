@@ -1,5 +1,7 @@
 #include "theseed/control/machine/ProcessSupervisor.h"
 
+#include "theseed/control/machine/ProcessPortScanner.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -346,6 +348,30 @@ std::vector<ProcessSummary> LocalProcessSupervisor::listProcesses() const {
         upsertProcess(processes, std::move(summary));
     }
 }
+
+    // 端口占用扫描：为枚举出的进程（含受管子进程）补监听端口。
+    // scanListeningPorts 在非 Linux 平台返回空表，此处无需按平台裁剪。
+    {
+        std::vector<std::uint32_t> pids;
+        pids.reserve(processes.size());
+        for (const auto& process : processes) {
+            pids.push_back(process.pid);
+        }
+        const auto listeningPorts = scanListeningPorts(pids);
+        for (auto& process : processes) {
+            const auto iter = listeningPorts.find(process.pid);
+            if (iter != listeningPorts.end()) {
+                process.port = iter->second;
+            }
+        }
+    }
+
+    // 版本探测：权限边界——只主动连接受管进程的端口，不触碰非受管进程。
+    for (auto& process : processes) {
+        if (process.managed && process.port != 0) {
+            process.version = probeProcessVersion(process.port);
+        }
+    }
 
     return processes;
 }

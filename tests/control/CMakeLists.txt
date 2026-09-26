@@ -33,3 +33,12 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_host_probe_test COMMAND theseed_host_probe_test)
+
+add_executable(theseed_process_port_scanner_test ProcessPortScannerTest.cpp)
+
+target_link_libraries(
+    theseed_process_port_scanner_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control theseed_ops theseed_runtime)
+
+add_test(NAME theseed_process_port_scanner_test COMMAND theseed_process_port_scanner_test)

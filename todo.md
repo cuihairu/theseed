@@ -1,5 +1,27 @@
 # TODO
 
+## Machine 遗留事项落地：端口占用扫描 + 二进制版本探测（2026-09-26）
+
+1. **端口占用扫描**：新增 `ProcessPortScanner`——`collectListenInodes` 解析
+   /proc/net/tcp[tcp6]（LISTEN 套接字 inode → 端口，解析器独立暴露供合成流
+   测试），`scanListeningPorts(pids)` 经 /proc/<pid>/fd 反查拥有者；只反查
+   调用方给出的 pid 集合（不做全机 fd 扫描），无权限目录静默跳过
+   （快照是观察而非审计）。`LocalProcessSupervisor::listProcesses` 为全部
+   枚举进程（含受管子进程）补 `port` 字段。
+2. **二进制版本探测**：`probeProcessVersion(port)` 对回环端口发 GET /health、
+   从响应 JSON 取 "version"（theseed 各进程 OpsServer 均暴露该端点），
+   SO_RCVTIMEO 短超时、RAII fd 收口。权限边界：listProcesses 只对**受管**
+   进程探测，不主动连接非受管进程。
+3. **测试**（`ProcessPortScannerTest`，10 项）：合成流驱动解析器畸形分支；
+   真实 /proc 反查本进程 TcpListener 端口；探测活体 OpsServer 版本往返、
+   拒连/静默超时/无版本/截断值四类失败；端到端——子进程模式自 exec 挂真实
+   OpsServer，listProcesses 补出受管子进程 port+version 后 stop。
+4. 途中修复 `lookupPidPort` 的 inode 提取 off-by-one（"socket:[" 是 8 字符，
+   原取 7——测试先行暴露，真实 /proc 反查失败）。
+
+验证口径：gcc-coverage 111/111 全绿、gcovr 100%（9760/9760）；clang 21 树
+零警告构建、111/111 全绿。
+
 ## Machine 遗留事项 1+2 落地：CPU 采样稳定化 + 网络流量统计（2026-09-26）
 
 1. **CPU 采样稳定化（遗留事项 1）**：`LocalHostProbe` 新增 `Config`（首采自举窗口
@@ -116,8 +138,8 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 
 - ~~`LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`~~（2026-09-26 完成）
 - ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux）
-- 非受控全局进程的策略化管理与权限边界
-- 端口占用扫描与二进制版本探测
+- 非受控全局进程的策略化管理与权限边界（版本探测已限定只连受管进程端口）
+- ~~端口占用扫描与二进制版本探测~~（2026-09-26 完成，Linux；Windows/macOS 留空）
 - Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
 - `MachineAgent` 的 RPC 输出与控制面注册
 - 与 `Ops Control Plane` 的注册、上报和审计对接

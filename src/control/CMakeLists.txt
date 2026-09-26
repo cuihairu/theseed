@@ -3,6 +3,7 @@ add_library(
     machine/HostProbe.cpp
     machine/MachineAgent.cpp
     machine/MachineSnapshotCodec.cpp
+    machine/ProcessPortScanner.cpp
     machine/ProcessSupervisor.cpp)
 
 target_link_libraries(
