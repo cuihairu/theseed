@@ -107,6 +107,16 @@ const std::vector<AuditEntry>& MachineDaemon::auditLog() const {
     return auditLog_;
 }
 
+bool MachineDaemon::isTrustedSource(runtime::ComponentId source) const {
+    const auto& trusted = config_.execPolicy.trustedComponents;
+    return std::find(trusted.begin(), trusted.end(), source) != trusted.end();
+}
+
+bool MachineDaemon::isCommandAllowed(const std::string& command) const {
+    const auto& allowed = config_.execPolicy.allowedCommands;
+    return std::find(allowed.begin(), allowed.end(), command) != allowed.end();
+}
+
 void MachineDaemon::appendAudit(const AuditEntry& entry) {
     if (config_.auditCapacity == 0) {
         return;  // 审计关闭
@@ -179,6 +189,28 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
             return;
         }
 
+        // 权限边界（04 MVP “少量受控命令”）：来源与命令双白名单，安全
+        // 缺省全拒；先于 agent 分发，拒绝照记审计（accepted=false）。
+        if (!isTrustedSource(inv.sourceComponent)) {
+            entry.accepted = false;
+            appendAudit(entry);
+            const auto reason =
+                toBytes("execute rejected: source component " +
+                        std::to_string(inv.sourceComponent) + " is not trusted");
+            sendResponse(inv.sourceComponent, MachineMethod::kError,
+                         std::span<const std::byte>(reason));
+            return;
+        }
+        if (!isCommandAllowed(entry.command)) {
+            entry.accepted = false;
+            appendAudit(entry);
+            const auto reason =
+                toBytes("execute rejected: command not allowed: " + entry.command);
+            sendResponse(inv.sourceComponent, MachineMethod::kError,
+                         std::span<const std::byte>(reason));
+            return;
+        }
+
         entry.accepted = true;
         entry.ok = agent_.execute(entry.command, entry.args);
         appendAudit(entry);
@@ -198,8 +230,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
                  std::span<const std::byte>(reason));
 }
 
-void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {
-    std::ostringstream out;
+void MachineDaemon::handleAudit(runtime::RuntimeInvocation& inv) {    std::ostringstream out;
     out << "[";
     for (std::size_t index = 0; index < auditLog_.size(); ++index) {
         if (index != 0) {

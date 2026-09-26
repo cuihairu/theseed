@@ -59,11 +59,23 @@ struct AuditEntry {
 // 只在 tick 上下文写入，无锁（单线程假设与 DBApp 一致）。
 class MachineDaemon final {
 public:
+    // execute 受控命令策略（权限边界，04-ops-control-plane MVP 的
+    // “少量受控命令”）：
+    // - trustedComponents：允许发起 execute 的来源组件白名单；
+    // - allowedCommands：允许执行的命令名白名单（start/stop/restart…）。
+    // 两个集合都为空集语义 = 一律拒绝（安全缺省：未显式授权即不可执行）。
+    // snapshot/audit 只读不设限。拒绝照常记审计（accepted=false）。
+    struct ExecPolicy final {
+        std::vector<runtime::ComponentId> trustedComponents;
+        std::vector<std::string> allowedCommands;
+    };
+
     struct Config final {
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
         runtime::ComponentId componentId = 60;  // Machine 组件默认 id
         std::size_t auditCapacity = 128;  // 审计环形容量；0 = 关闭审计
+        ExecPolicy execPolicy;
         // 节点摘要上报周期；0 = 关闭周期上报。到期即采一次快照推给
         // reportSink（首个 tick 立即上报，保证中心侧新鲜度）。
         std::chrono::milliseconds reportInterval{0};
@@ -91,6 +103,8 @@ private:
     void processMessages();
     void handleInvocation(runtime::RuntimeInvocation& inv);
     void handleAudit(runtime::RuntimeInvocation& inv);
+    bool isTrustedSource(runtime::ComponentId source) const;
+    bool isCommandAllowed(const std::string& command) const;
     void appendAudit(const AuditEntry& entry);
     void reportIfDue();
     void sendResponse(runtime::ComponentId target,

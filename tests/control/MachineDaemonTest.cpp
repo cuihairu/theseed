@@ -75,8 +75,11 @@ struct RawClient {
 
     bool request(const std::string& method, std::vector<std::byte> payload,
                  const std::function<void()>& daemonTick, RuntimeInvocation& out) {
+        // 来源身份可参数化：策略测试用第二个组件身份验证拒绝路径
+        // （服务端 hub 由首条请求的 sourceComponent 自报注册）。
+        const auto component = this->component;
         RuntimeInvocation inv;
-        inv.sourceComponent = kClientComponent;
+        inv.sourceComponent = component;
         inv.targetComponent = kMachineComponent;
         inv.method = method;
         inv.payload = std::move(payload);
@@ -90,10 +93,12 @@ struct RawClient {
             daemonTick();
             transport->tick();
             ::usleep(500);
-            if (transport->receive(kClientComponent, &out, 1) > 0) return true;
+            if (transport->receive(component, &out, 1) > 0) return true;
         }
         return false;
     }
+
+    ComponentId component = kClientComponent;
 };
 
 std::string payloadToString(const RuntimeInvocation& inv) {
@@ -138,6 +143,10 @@ int main() {
 
     MachineDaemon::Config config;
     config.listenPort = 0;
+    // execute 策略：仅本测试客户端来源 + 三个受控命令（安全缺省全拒，
+    // 这里显式授权）
+    config.execPolicy.trustedComponents = {kClientComponent};
+    config.execPolicy.allowedCommands = {"start", "stop", "restart"};
     MachineDaemon daemon(config, agent);
 
     TEST("daemon starts, is idempotent, and reports its port");
@@ -250,6 +259,71 @@ int main() {
         PASS();
     }
 
+    TEST("execute policy rejects untrusted source and non-allowed command");
+    {
+        // 非受信来源：第二组件身份直连（hub 由其首条请求自报注册）
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(port)) FAIL("stranger connect failed");
+        stranger.settle(daemonTick);
+        RuntimeInvocation resp;
+        if (!stranger.request(MachineMethod::kExecute,
+                              executePayload("start", "/bin/sleep 30"),
+                              daemonTick, resp))
+            FAIL("no response to stranger execute");
+        if (resp.method != MachineMethod::kError)
+            FAIL("expected machine.error for untrusted source");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("rejection should name the untrusted source: " +
+                 payloadToString(resp));
+
+        // 受信来源 + 非白名单命令
+        if (!client.request(MachineMethod::kExecute, executePayload("format", "c"),
+                            daemonTick, resp))
+            FAIL("no response to non-allowed command");
+        if (resp.method != MachineMethod::kError)
+            FAIL("expected machine.error for non-allowed command");
+        if (payloadToString(resp).find("not allowed") == std::string::npos)
+            FAIL("rejection should name the command: " + payloadToString(resp));
+
+        // 拒绝照记审计（accepted=false），且来源可见
+        const auto& audit = daemon.auditLog();
+        if (audit.size() < 2 || audit[audit.size() - 2].accepted ||
+            audit.back().accepted)
+            FAIL("policy rejections must be audited as rejected");
+        if (audit[audit.size() - 2].source != 2)
+            FAIL("audit should record the untrusted source component");
+        PASS();
+    }
+
+    TEST("execute policy default denies everything");
+    {
+        // 缺省 ExecPolicy 两个白名单皆空：合法客户端也被拒（安全缺省）
+        MachineAgent defaultAgent(std::make_unique<LocalHostProbe>(),
+                                  std::make_unique<LocalProcessSupervisor>());
+        MachineDaemon::Config defaultConfig;
+        defaultConfig.listenPort = 0;
+        MachineDaemon defaultDaemon(defaultConfig, defaultAgent);
+        if (!defaultDaemon.start()) FAIL("default daemon start failed");
+        auto defaultTick = [&defaultDaemon] { defaultDaemon.tick(); };
+
+        RawClient defaultClient;
+        if (!defaultClient.connect(defaultDaemon.localPort()))
+            FAIL("default daemon connect failed");
+        defaultClient.settle(defaultTick);
+
+        RuntimeInvocation resp;
+        if (!defaultClient.request(MachineMethod::kExecute,
+                                   executePayload("start", "x"), defaultTick, resp))
+            FAIL("no response under default policy");
+        if (resp.method != MachineMethod::kError ||
+            payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("default policy must reject execute, got: " +
+                 payloadToString(resp));
+        defaultDaemon.stop();
+        PASS();
+    }
+
     TEST("unknown method gets machine.error");
     {
         RuntimeInvocation resp;
@@ -282,9 +356,10 @@ int main() {
         if (json.find("\"command\":\"start\"") > json.find("\"command\":\"machine.nope\""))
             FAIL("audit must be in chronological order");
         // 本地视图与 RPC 输出同源：start/stop（成功）、restart（失败）、
-        // 畸形载荷、空命令、未知方法 = 6 条
-        if (daemon.auditLog().size() != 6)
-            FAIL("expected 6 local audit entries, got " +
+        // 畸形载荷、空命令、策略拒绝 ×2（非受信来源 + 非白名单命令）、
+        // 未知方法 = 8 条
+        if (daemon.auditLog().size() != 8)
+            FAIL("expected 8 local audit entries, got " +
                  std::to_string(daemon.auditLog().size()));
         PASS();
     }
@@ -298,6 +373,8 @@ int main() {
         MachineDaemon::Config smallConfig;
         smallConfig.listenPort = 0;
         smallConfig.auditCapacity = 2;
+        smallConfig.execPolicy.trustedComponents = {kClientComponent};
+        smallConfig.execPolicy.allowedCommands = {"restart"};
         MachineDaemon smallDaemon(smallConfig, smallAgent);
         if (!smallDaemon.start()) FAIL("small daemon start failed");
         auto smallTick = [&smallDaemon] { smallDaemon.tick(); };
@@ -334,6 +411,8 @@ int main() {
         MachineDaemon::Config silentConfig;
         silentConfig.listenPort = 0;
         silentConfig.auditCapacity = 0;
+        silentConfig.execPolicy.trustedComponents = {kClientComponent};
+        silentConfig.execPolicy.allowedCommands = {"restart"};
         MachineDaemon silentDaemon(silentConfig, silentAgent);
         if (!silentDaemon.start()) FAIL("silent daemon start failed");
         auto silentTick = [&silentDaemon] { silentDaemon.tick(); };

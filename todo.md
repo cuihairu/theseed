@@ -1,5 +1,26 @@
 # TODO
 
+## 权限边界落地：MachineDaemon execute 策略门（2026-09-26）
+
+对齐 04-ops-control-plane MVP「少量**受控**命令」的受控语义与 todo 遗留
+「非受控全局进程的策略化管理与权限边界」的控制面切面：
+
+1. **ExecPolicy**：`trustedComponents`（来源组件白名单）+ `allowedCommands`
+   （命令名白名单）双门；**缺省全拒**（安全缺省：未显式授权即不可执行，
+   与 DBApp「显式选择后端」同哲学）。snapshot/audit 只读不设限。
+2. **执行序**：载荷解析（malformed/空命令臂在前）→ 来源白名单 → 命令
+   白名单 → agent 分发；两类策略拒绝均回 `machine.error`（原因串区分
+   not trusted / not allowed）并照记审计（accepted=false，来源组件可见）
+   ——拒绝路径不产生审计盲区。
+3. **测试**（MachineDaemonTest 15 项，增 2）：第二组件身份直连验非受信
+   拒绝与审计归因、非白名单命令拒绝、缺省策略对合法客户端也拒；
+   既有 execute 场景全部显式授权（安全缺省的正交陈述）。
+4. **非目标**：主机级非受控进程（非 agent 管辖的系统进程）的策略化
+   治理仍留 todo——本切片只封闭控制面命令入口的权限边界。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（9997/9997）；clang 21 树
+零警告、113/113 全绿。
+
 ## 节点摘要上报落地：IMachineAgent::report() + OpsControlCenter 聚合器（2026-09-26）
 
 对齐设计文档 06-machine-agent-and-host-ops §2.4/§4.3 的 `report()` 与
@@ -210,7 +231,8 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 
 - ~~`LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`~~（2026-09-26 完成）
 - ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux）
-- 非受控全局进程的策略化管理与权限边界（版本探测已限定只连受管进程端口）
+- 非受控全局进程的策略化管理与权限边界（控制面 execute 双白名单已落地
+  2026-09-26；主机级非 agent 进程的策略化治理仍开放）
 - ~~端口占用扫描与二进制版本探测~~（2026-09-26 完成，Linux；Windows/macOS 留空）
 - Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
 - ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon
