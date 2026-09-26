@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -108,6 +109,19 @@ constexpr const char* kShutdownRejectedCount =
 constexpr const char* kKickCommand = "session.kick";
 constexpr const char* kDrainCommand = "node.drain";
 constexpr const char* kShutdownCommand = "node.shutdown";
+// §8 Phase 2 会话运维面：list/kick-sessions 各一对接受/拒绝计数（与
+// §6.1 命令族同款配对口径；单数 machine_kick_* 已被单令牌 kick 占用，
+// 批量面用复数 sessions 免歧义）。
+constexpr const char* kListSessionsAcceptedCount =
+    "machine_list_sessions_accepted_count";
+constexpr const char* kListSessionsRejectedCount =
+    "machine_list_sessions_rejected_count";
+constexpr const char* kKickSessionsAcceptedCount =
+    "machine_kick_sessions_accepted_count";
+constexpr const char* kKickSessionsRejectedCount =
+    "machine_kick_sessions_rejected_count";
+constexpr const char* kListSessionsCommand = "sessions.list";
+constexpr const char* kKickSessionsCommand = "sessions.kick";
 
 // §6.3 禁改四类（协议定义 / 持久化 schema / entity property flags /
 // 迁移语义）：键前缀 → 类别名。命中即拒绝且指认类别——在线修改会破坏
@@ -264,6 +278,45 @@ ParsedMillis parseMillisValue(const std::string& text) {
 // 拒绝侧同口径）；长度足以核对异常与滥用，不留下可复用的残迹。
 std::string redactSessionToken(const std::string& token) {
     return "session(len=" + std::to_string(token.size()) + ")";
+}
+
+// 批量 kick 的作用域选择器（§8 Phase 2）：指纹不可逆（令牌原文不出
+// 存储/进程），批量处置按运维可见属性圈选——all | account=<id> |
+// realm=<id>。空值后缀（如 "account="）不成立，走畸形臂。
+struct SessionScope final {
+    bool valid = false;
+    bool all = false;
+    bool byAccount = false;  // valid 且非 all 时二选一
+    std::string value;
+};
+
+SessionScope parseSessionScope(const std::string& text) {
+    constexpr std::string_view kAll = "all";
+    constexpr std::string_view kAccountPrefix = "account=";
+    constexpr std::string_view kRealmPrefix = "realm=";
+
+    if (text == kAll) {
+        SessionScope scope;
+        scope.valid = true;
+        scope.all = true;
+        return scope;
+    }
+    if (text.size() > kAccountPrefix.size() &&
+        text.compare(0, kAccountPrefix.size(), kAccountPrefix) == 0) {
+        SessionScope scope;
+        scope.valid = true;
+        scope.byAccount = true;
+        scope.value = text.substr(kAccountPrefix.size());
+        return scope;
+    }
+    if (text.size() > kRealmPrefix.size() &&
+        text.compare(0, kRealmPrefix.size(), kRealmPrefix) == 0) {
+        SessionScope scope;
+        scope.valid = true;
+        scope.value = text.substr(kRealmPrefix.size());
+        return scope;
+    }
+    return {};
 }
 
 }  // namespace
@@ -690,12 +743,22 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         return;
     }
 
-    // kick 入口关闭（未配 sessionStore）= 视同未知方法，落统一错误臂
+    // 会话入口关闭（未配 sessionStore）= 视同未知方法，落统一错误臂
     //（不进审计——入口未开，无动作发生），与采样入口同口径。
     const bool sessionEntryOpen = config_.sessionStore != nullptr;
 
     if (sessionEntryOpen && inv.method == MachineMethod::kKickSession) {
         handleKickSession(inv);
+        return;
+    }
+
+    if (sessionEntryOpen && inv.method == MachineMethod::kListSessions) {
+        handleListSessions(inv);
+        return;
+    }
+
+    if (sessionEntryOpen && inv.method == MachineMethod::kKickSessions) {
+        handleKickSessions(inv);
         return;
     }
 
@@ -1256,6 +1319,187 @@ void MachineDaemon::handleKickSession(runtime::RuntimeInvocation& inv) {
     const std::byte result = std::byte{0x01};
     sendResponse(inv.sourceComponent, MachineMethod::kKickSessionOk,
                  std::span<const std::byte>(&result, 1));
+}
+
+// §8 Phase 2 会话枚举（inspect 面，≥ReadOnly）：经 SessionStore 二级
+// 索引列出活会话。令牌原文不出进程——协议行只带长度指纹 + 运维可见
+// 属性（账号/领域/user id），metadata 是客户端态不进运维面。只读动作
+// 不进 trace（与清单/审计查询同口径：无 span），接受照记审计（含
+// count，供中心侧对账）。
+void MachineDaemon::handleListSessions(runtime::RuntimeInvocation& inv) {
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kListSessionsCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, nullptr, kListSessionsRejectedCount,
+                            "machine.session.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("session listing rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门（叠加在来源白名单之上）：枚举是 inspect 面。
+    if (!hasRole(inv.sourceComponent, AccessRole::ReadOnly)) {
+        reject("session listing rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires ReadOnly role");
+        return;
+    }
+
+    const auto views = config_.sessionStore->listSessions();
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t i = 0; i < views.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        // 先拼字段再入流：多行 << 链会让 gcc 把覆盖计数错误归因到续行
+        const std::string sessionField =
+            "\"session\":\"" + redactSessionToken(views[i].token) + "\"";
+        const std::string accountField =
+            "\"account\":\"" + escapeJsonString(views[i].accountId) + "\"";
+        const std::string realmField =
+            "\"realm\":\"" + escapeJsonString(views[i].realmId) + "\"";
+        const std::string userField =
+            "\"user_id\":" + std::to_string(views[i].userId);
+        out << "{" << sessionField << "," << accountField << ","
+            << realmField << "," << userField << "}";
+    }
+    out << "]";
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = "count=" + std::to_string(views.size());
+    appendAudit(entry);
+    telemetryCounter(kListSessionsAcceptedCount).increment();
+    const foundation::LogAttribute countAttr = {"count", entry.args};
+    foundation::logInfo("machine.list-sessions", {countAttr});
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kListSessionsOk,
+                 std::span<const std::byte>(json));
+}
+
+// §8 Phase 2 批量 kick（operate 面，≥Operator）：载荷 = 作用域选择器
+// （all | account=<id> | realm=<id>），逐个吊销、成功与失败分列回给
+// 调用方。部分失败（枚举后、吊销前被并发摘除——跨进程竞争的真实臂）
+// 仍算动作接受：选择器合法、动作已执行，missing 明细就是给运维的对账
+// 凭证。审计只记 scope 与计数，令牌原文与指纹序列都不进审计环。
+void MachineDaemon::handleKickSessions(runtime::RuntimeInvocation& inv) {
+    foundation::SpanScope span("machine.kick-sessions");
+    span.setAttribute("source",
+                      static_cast<std::int64_t>(inv.sourceComponent));
+
+    AuditEntry entry;
+    entry.timestamp = std::chrono::system_clock::now();
+    entry.source = inv.sourceComponent;
+    entry.command = kKickSessionsCommand;
+
+    const auto reject = [&](const std::string& reason) {
+        entry.accepted = false;
+        appendAudit(entry);
+        rejectControlAction(entry, &span, kKickSessionsRejectedCount,
+                            "machine.session.rejected", reason);
+        const auto payload = toBytes(reason);
+        sendResponse(inv.sourceComponent, MachineMethod::kError,
+                     std::span<const std::byte>(payload));
+    };
+
+    // 空载荷的 data() 可能为空指针，先护栏再取字节（与单令牌 kick 同纪律）。
+    std::string selector;
+    if (!inv.payload.empty()) {
+        selector.assign(reinterpret_cast<const char*>(inv.payload.data()),
+                        inv.payload.size());
+    }
+    const SessionScope scope = parseSessionScope(selector);
+    if (scope.valid) {
+        // args 走 key=value 原文（序列化时由 auditEntryJson 统一转义）
+        entry.args = "scope=" + selector;
+    }
+    if (!scope.valid) {
+        reject("kick sessions rejected: malformed scope selector "
+               "(expected all | account=<id> | realm=<id>)");
+        return;
+    }
+
+    if (!isNodeOpsTrusted(inv.sourceComponent)) {
+        reject("kick sessions rejected: source component " +
+               std::to_string(inv.sourceComponent) + " is not trusted");
+        return;
+    }
+
+    // §6.1 角色门（叠加在来源白名单之上）：批量处置是 operate 面。
+    if (!hasRole(inv.sourceComponent, AccessRole::Operator)) {
+        reject("kick sessions rejected: source component " +
+               std::to_string(inv.sourceComponent) +
+               " requires Operator role");
+        return;
+    }
+
+    const auto views = config_.sessionStore->listSessions();
+    std::vector<std::string> revoked;
+    std::vector<std::string> missing;
+    std::size_t requested = 0;
+    for (const auto& view : views) {
+        const bool matches = scope.all ||
+                             (scope.byAccount ? view.accountId == scope.value
+                                              : view.realmId == scope.value);
+        if (!matches) {
+            continue;
+        }
+        ++requested;
+        if (config_.sessionStore->revoke(view.token)) {
+            revoked.push_back(redactSessionToken(view.token));
+        } else {
+            // 枚举与吊销之间被并发摘除：按失败列报，指纹同款脱敏。
+            missing.push_back(redactSessionToken(view.token));
+        }
+    }
+
+    // 应答 JSON：requested/revoked/missing 分列（指纹序列只进应答体，
+    // 审计 args 保持 scope + 计数摘要）。
+    std::ostringstream out;
+    out << "{\"requested\":" << requested << ",\"revoked\":[";
+    for (std::size_t i = 0; i < revoked.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << '"' << revoked[i] << '"';
+    }
+    out << "],\"missing\":[";
+    for (std::size_t i = 0; i < missing.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << '"' << missing[i] << '"';
+    }
+    out << "]}";
+
+    entry.accepted = true;
+    entry.ok = true;
+    entry.args = "scope=" + selector +
+                 " revoked=" + std::to_string(revoked.size()) +
+                 " missing=" + std::to_string(missing.size());
+    appendAudit(entry);
+    telemetryCounter(kKickSessionsAcceptedCount).increment();
+    span.setAttribute("accepted", true);
+    span.setAttribute("requested", static_cast<std::int64_t>(requested));
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute scopeAttr = {"scope", selector};
+    foundation::logInfo("machine.kick-sessions", {sourceAttr, scopeAttr});
+    const auto json = toBytes(out.str());
+    sendResponse(inv.sourceComponent, MachineMethod::kKickSessionsOk,
+                 std::span<const std::byte>(json));
 }
 
 // §6.1 set draining（Operator 级）：翻转节点排水位。agent 是节点状态

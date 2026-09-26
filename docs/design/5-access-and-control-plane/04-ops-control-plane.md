@@ -453,9 +453,18 @@ MVP 内未落地（如实降级）：
   - clear temporary bans：仓库无临时封禁存储，前置缺失不造
     （§6.1 档位留档，见 todo.md 边界）。
 
+Phase 2 已落地切片（会话运维命令面，2026-09-26）：
+  - machine.list-sessions（≥ReadOnly）：经 SessionStore 二级索引枚举
+    活会话，行内令牌只回显长度指纹（原文零泄露），账号/领域/user id
+    供运维圈选；
+  - machine.kick-sessions（≥Operator，≙ 批量 kick）：作用域选择器
+    all | account=<id> | realm=<id>（指纹不可逆，不按令牌列表批量），
+    逐个吊销，revoked/missing 分列回给调用方；部分失败仍入审计。
+
 Phase 2 仍开放：
   - 转发聚合 / entity-type diagnostics；
-  - 更完整的登录与会话运维命令（批量会话运维等）。
+  - 更完整的登录与会话运维命令（其余部分：会话续期策略、踢人联动
+    通知等）。
 ```
 
 ---

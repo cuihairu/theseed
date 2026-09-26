@@ -51,6 +51,9 @@ public:
         std::size_t start,
         std::size_t stop) = 0;
     virtual std::size_t zcard(const std::string& key) = 0;
+    // Remove `member` from the sorted set. Returns true if it was present.
+    // (SessionStore's secondary index uses this to retire entries.)
+    virtual bool zrem(const std::string& key, const std::string& member) = 0;
 
     // Distributed lock: returns true if acquired. Caller must call unlock().
     virtual bool lock(const std::string& key, RedisDuration ttl) = 0;
@@ -89,6 +92,7 @@ public:
         std::size_t start,
         std::size_t stop) override;
     std::size_t zcard(const std::string& key) override;
+    bool zrem(const std::string& key, const std::string& member) override;
 
     bool lock(const std::string& key, RedisDuration ttl) override;
     void unlock(const std::string& key) override;

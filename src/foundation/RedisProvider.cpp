@@ -139,6 +139,14 @@ std::size_t InMemoryRedisProvider::zcard(const std::string& key) {
     return it->second.members.size();
 }
 
+bool InMemoryRedisProvider::zrem(const std::string& key,
+                                 const std::string& member) {
+    const std::lock_guard lock(mutex_);
+    auto it = sets_.find(key);
+    if (it == sets_.end()) return false;
+    return it->second.members.erase(member) > 0;
+}
+
 bool InMemoryRedisProvider::lock(const std::string& key, RedisDuration ttl) {
     const std::lock_guard lock(mutex_);
     reapExpired();

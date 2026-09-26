@@ -13,6 +13,7 @@ using theseed::foundation::InMemoryRedisProvider;
 using theseed::foundation::RateLimiter;
 using theseed::foundation::RedisDuration;
 using theseed::foundation::SessionStore;
+using theseed::foundation::SessionView;
 using theseed::foundation::StoredSession;
 
 static int testsPassed = 0;
@@ -101,6 +102,20 @@ static void test_redis_lock_expires() {
     PASS();
 }
 
+static void test_redis_zrem() {
+    TEST("test_redis_zrem");
+    InMemoryRedisProvider r;
+    r.zadd("idx", "a", 1.0);
+    r.zadd("idx", "b", 2.0);
+    if (!r.zrem("idx", "a")) { FAIL("zrem of present member should be true"); return; }
+    if (r.zrem("idx", "a")) { FAIL("zrem of removed member should be false"); return; }
+    if (r.zrem("no-such-set", "a")) { FAIL("zrem on missing set should be false"); return; }
+    if (r.zcard("idx") != 1) { FAIL("zcard should drop to 1 after zrem"); return; }
+    auto left = r.zrange("idx", 0, -1);
+    if (left.size() != 1 || left[0].first != "b") { FAIL("wrong member left after zrem"); return; }
+    PASS();
+}
+
 // --- SessionStore tests ---
 
 static void test_session_save_load() {
@@ -178,6 +193,72 @@ static void test_session_decode_rejects_bad_user_id() {
                                     "realm-1\x1f"
                                     "not-a-number\nmeta");
     if (bad.has_value()) { FAIL("decode should reject non-numeric userId"); return; }
+    PASS();
+}
+
+static void test_session_list_enumerates_and_revoked_gone() {
+    TEST("test_session_list_enumerates_and_revoked_gone");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    SessionStore store(redis);
+    StoredSession s;
+    s.accountId = "acc-a";
+    s.realmId = "realm-1";
+    s.userId = 11;
+    if (!store.save("token-l1", s, RedisDuration(60000))) { FAIL("save l1 failed"); return; }
+    s.accountId = "acc-b";
+    s.userId = 22;
+    if (!store.save("token-l2", s, RedisDuration(60000))) { FAIL("save l2 failed"); return; }
+    auto views = store.listSessions();
+    if (views.size() != 2) { FAIL("expected 2 live sessions"); return; }
+    // 内存提供者按成员字典序枚举；字段须逐项对上
+    const SessionView* first = views[0].token == "token-l1" ? &views[0] : &views[1];
+    const SessionView* second = first == &views[0] ? &views[1] : &views[0];
+    if (first->accountId != "acc-a" || first->realmId != "realm-1" || first->userId != 11) {
+        FAIL("first row fields mismatch"); return;
+    }
+    if (second->accountId != "acc-b" || second->userId != 22) {
+        FAIL("second row fields mismatch"); return;
+    }
+    if (!store.revoke("token-l1")) { FAIL("revoke l1 failed"); return; }
+    views = store.listSessions();
+    if (views.size() != 1 || views[0].token != "token-l2") {
+        FAIL("revoked session must leave the enumeration"); return;
+    }
+    PASS();
+}
+
+static void test_session_list_prunes_expired() {
+    TEST("test_session_list_prunes_expired");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    SessionStore store(redis);
+    StoredSession s;
+    s.accountId = "acc-c";
+    store.save("token-e1", s, RedisDuration(1000));
+    store.save("token-e2", s, RedisDuration(60000));
+    redis->advanceClock(RedisDuration(1001));
+    // load 已不命中（TTL 过期），索引成员由枚举惰性清账
+    auto views = store.listSessions();
+    if (views.size() != 1 || views[0].token != "token-e2") {
+        FAIL("expired session must be pruned from enumeration"); return;
+    }
+    if (redis->zcard("sessions:index") != 1) { FAIL("index should keep exactly the live member"); return; }
+    PASS();
+}
+
+static void test_session_list_prunes_corrupt_blob() {
+    TEST("test_session_list_prunes_corrupt_blob");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    SessionStore store(redis);
+    StoredSession s;
+    s.accountId = "acc-d";
+    store.save("token-x1", s, RedisDuration(60000));
+    store.save("token-x2", s, RedisDuration(60000));
+    // 直接把一个会话键改写成损坏 blob（绕过 store 的编码器）
+    redis->set("session:token-x1", "garbage-blob", RedisDuration(60000));
+    auto views = store.listSessions();
+    if (views.size() != 1 || views[0].token != "token-x2") {
+        FAIL("corrupt entry must be pruned, live one kept"); return;
+    }
     PASS();
 }
 
@@ -421,6 +502,7 @@ int main() {
     test_redis_ttl_expires();
     test_redis_del();
     test_redis_zadd_zrange();
+    test_redis_zrem();
     test_redis_exists_across_kinds();
     test_redis_missing_key_ops();
     test_redis_lock_acquire_release();
@@ -432,6 +514,9 @@ int main() {
     test_session_refresh_extends_ttl();
     test_session_decode_rejects_garbage();
     test_session_decode_rejects_bad_user_id();
+    test_session_list_enumerates_and_revoked_gone();
+    test_session_list_prunes_expired();
+    test_session_list_prunes_corrupt_blob();
     test_session_null_redis_throws();
     test_session_empty_token_rejected();
     test_session_decode_truncated_fields();

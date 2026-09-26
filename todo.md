@@ -1,5 +1,59 @@
 # TODO
 
+## 会话运维命令面：list-sessions + kick-sessions（04 §8 Phase 2 切片，2026-09-26）
+
+Phase 2「更完整的登录与会话运维命令」里前置已真实存在的一块（SessionStore
++ 上一批接好的 kick），两条新命令 + 枚举能力：
+
+1. **SessionStore 枚举能力（最小扩展，不造假）**：
+   - `IRedisProvider` 补 `zrem`（核心 redis 原语，此前缺；InMemory
+     实现三态用例：命中/未命中/集合不存在）；
+   - 二级索引：会话键 `session:<token>` 之外，zset `sessions:index`
+     （member=token，score=保存时刻 epoch 毫秒）——provider 原语无
+     键空间扫描，枚举走索引；同一 provider 即同一视图（跨进程一致，
+     LoginApp/daemon 共享）。save 双写（set+zadd，索引写失败如实返
+     false——会话在而索引缺是对枚举面的不一致，让调用方重试）；revoke
+     命中才摘索引（未命中不误删他人视图，跨进程竞争安全）；
+     `listSessions()` 惰性清账：过期键 / 损坏 blob 顺手 zrem——索引与
+     会话键两次写不原子，枚举是收敛时机，吐出的行必对应活会话。
+   - `SessionView{token/accountId/realmId/userId}`：token 原文仅供本
+     进程续作（如批量吊销），协议出口一律掩码——纪律写在结构注释里。
+2. **machine.list-sessions（≥ReadOnly，inspect 面）**：双门沿用
+   （NodeOpsPolicy 来源白名单 → 角色门）；响应 = 行 JSON 数组
+   `[{"session":"session(len=N)","account":…,"realm":…,"user_id":N}]`，
+   account/realm 过 escapeJsonString，metadata（客户端态）不进运维面，
+   令牌原文绝不回显。**读面成对计数**（machine_list_sessions_{accepted,
+   rejected}_count）且接受臂照记审计（args=count=N）——超越 snapshot/
+   audit 只记拒绝的旧读面口径：会话存在性本身敏感，与剖面清单面同款。
+3. **machine.kick-sessions（≥Operator，operate 面，≙ 批量 kick）**：
+   载荷 = 作用域选择器 `all | account=<id> | realm=<id>`（空值后缀
+   不成立，三畸形臂具名拒绝）——指纹不可逆，批量按运维可见属性圈选，
+   令牌列表不做入口。枚举 → 过滤 → 逐个吊销，成功/失败分列回
+   `{"requested":N,"revoked":[指纹…],"missing":[指纹…]}`；部分失败
+   （枚举后吊销前被并发摘除）仍算动作接受，missing 即对账凭证。审计
+   args = `scope=<sel> revoked=N missing=M`（key=value；指纹序列只进
+   应答体不进审计环）+ span + machine_kick_sessions_{accepted,rejected}
+   _count 成对。
+4. **入口关闭口径沿用**：sessionStore==nullptr 时 list/kick-sessions 与
+   kick-session 同样视同未知方法（主 daemon 测试臂覆盖）。
+5. **测试**（MachineDaemonTest 30→31、RedisProviderTest 28→33）：
+   foundation 侧 zrem 三态、枚举/吊销退出/过期清账（advanceClock +
+   zcard 断言）/损坏 blob 清账；daemon 侧三角色 × 两命令正反矩阵 +
+   未绑定/策略外/三畸形选择器拒绝臂、realm/account/all 三作用域真实
+   吊销（load 断言）、**部分失败臂**（FlakyDelProvider：del 按后缀
+   失败一次的包装提供者，确定性复现并发摘除窗口；两个失败目标 →
+   missing 分列 ≥2）、幸存者单 kick 收尾、计数配对增量（枚举 2/2、
+   批量 3/6）、15 条审计全留痕 + args 逐条扫描零令牌原文。
+
+**边界与遗留（如实记录）**：
+- clear temporary bans 仍不做（沿既有记录：仓库无封禁存储前置）。
+- 枚举顺序由提供者定（内存实现按 token 字典序），不承诺保存时序
+  （score 只跨进程可辨先后）。
+- 长度指纹有同长歧义：同账号多会话且令牌等长时指纹不可区分——运维
+  以账号/领域行为粒度核对；引入哈希指纹属扩面，未做。
+- requestId 仍缺（沿既有记录）；kick 入口是进程内 SessionStore 指针
+  而非独立 LoginApp 组件（沿上一批记录）。
+
 ## §6.1 受控命令落地：kick session / set draining / controlled shutdown（2026-09-26）
 
 把上一批（权限分级 + 配置热改）如实记录的遗留①——「角色档位已预留、
@@ -235,9 +289,9 @@
 验证口径：gcc-coverage 115/115 全绿、gcovr 100%（10534/10534 行 +
 1576/1576 函数）；clang 树零警告、115/115 全绿。
 
-## 慢 tick 诊断：只读诊断采样切片（2026-09-26）
+## ~~慢 tick 诊断：只读诊断采样切片（2026-09-26）~~ ✅ 已完成（2026-09-26）
 
-对齐 05-telemetry §6 Diagnostics Profiling 的 MVP 最小切片（"慢 tick 诊断"
+~~对齐 05-telemetry §6 Diagnostics Profiling 的 MVP 最小切片（"慢 tick 诊断"
 三主题之一；flamegraph 采样与分阶段归因属 Phase 2 更强采样策略，留待
 后续）。上一批指令的既定退路切片，本轮正式落地：
 
@@ -262,44 +316,44 @@
    零误报（无时钟竞态）与解绑停止广播、getter/序号递增。
 
 验证口径：gcc-coverage 114/114 全绿、gcovr 100%（10308/10308）；clang 21
-树零警告、114/114 全绿。
+树零警告、114/114 全绿。~~
 
-## 主机级非受控进程的策略化治理（Linux 起步，2026-09-26）
-
-对齐 06-machine-agent-and-host-ops §7 MVP "process list / state / pid" 的
-控制面治理切片。选型理由：枚举面已存在（supervisor 的 /proc 全主机枚举
-+ managed 标记，machine.snapshot 已带全表），真实缺口是**处置侧**——
-supervisor stop/restart 只对受管子进程生效，主机上其他进程无策略化出口；
-且治理与 execute 的授权语义必须分离（execute 是受管进程编排，治理是
-对主机其他进程的越权面，风险等级与审计语义不同，不得共享白名单）。
-
-1. **能力面**：`IProcessSupervisor::terminateUnmanaged(pid)`（Linux
-   SIGTERM；受管进程一律拒绝——唯一停止入口是 stop/restart，绕开会脱离
-   reap/记账；非 Linux 平台暂不开放处置，枚举照常）；`currentProcessId()`
-   跨平台 pid 助手。`IMachineAgent` 增 `enumerateHostProcesses()`（全主机
-   表，不采资源摘要）与 `terminateHostProcess(pid)`（纯能力转发，策略
-   判定在 daemon 侧）。
-2. **策略面**（与 ExecPolicy 分离的 `ProcessGovernPolicy`）：
-   trustedComponents（枚举/处置共用来源白名单）+ killableNames（处置目标
-   comm 名精确匹配白名单）；双空集 = 全拒（安全缺省）。
-3. **RPC 面**：machine.processes → machine.processes.ok（非受控进程 JSON
-   数组，不含受管进程、不带 managed 标记——受管编排走 execute，治理视图
-   不重复暴露）；machine.terminate → machine.terminate.ok（pid 十进制
-   串载荷；守卫链：载荷解析 → 来源白名单 → pid 存在 → 非自身 → 非受管 →
-   名单匹配；守卫与 supervisor 登记簿互为纵深）。
-4. **遥测/审计面**：枚举与处置各一对接受/拒绝计数（snake_case 同族）；
-   处置全程 `SpanScope("machine.terminate")`（拒绝也入 span：accepted/
-   reason/pid 属性），枚举只读不进 trace；全部尝试（含拒绝）照记审计
-   （command = process.list / process.kill）并推中心审计环形。
-5. **测试**（MachineDaemonTest 21→24、MachineAgentTest 8→10）：三块 E2E
-   ——枚举策略门（受信含自身 pid、受管被过滤、非受信拒绝、审计切片）、
-   处置守卫七连（空载荷/非数字/非受信/未知 pid/自身/受管/名单外）、
-   接受处置（未登记 fork sleep 经 SIGTERM 终结，waitpid 断言信号死因，
-   span accepted/ok、审计带 pid）；agent 转发与 terminateUnmanaged 三态
-   （未登记成功/受管拒绝/pid_max 上界外恒 ESRCH）。
-
-验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10281/10281）；clang 21
-树零警告、113/113 全绿。
+## ~~主机级非受控进程的策略化治理（Linux 起步，2026-09-26）
+~~
+~~对齐 06-machine-agent-and-host-ops §7 MVP "process list / state / pid" 的
+~~控制面治理切片。选型理由：枚举面已存在（supervisor 的 /proc 全主机枚举
+~~+ managed 标记，machine.snapshot 已带全表），真实缺口是**处置侧**——
+~~supervisor stop/restart 只对受管子进程生效，主机上其他进程无策略化出口；
+~~且治理与 execute 的授权语义必须分离（execute 是受管进程编排，治理是
+~~对主机其他进程的越权面，风险等级与审计语义不同，不得共享白名单）。
+~~
+~~1. **能力面**：`IProcessSupervisor::terminateUnmanaged(pid)`（Linux
+~~   SIGTERM；受管进程一律拒绝——唯一停止入口是 stop/restart，绕开会脱离
+~~   reap/记账；非 Linux 平台暂不开放处置，枚举照常）；`currentProcessId()`
+~~   跨平台 pid 助手。`IMachineAgent` 增 `enumerateHostProcesses()`（全主机
+~~   表，不采资源摘要）与 `terminateHostProcess(pid)`（纯能力转发，策略
+~~   判定在 daemon 侧）。
+~~2. **策略面**（与 ExecPolicy 分离的 `ProcessGovernPolicy`）：
+~~   trustedComponents（枚举/处置共用来源白名单）+ killableNames（处置目标
+~~   comm 名精确匹配白名单）；双空集 = 全拒（安全缺省）。
+~~3. **RPC 面**：machine.processes → machine.processes.ok（非受控进程 JSON
+~~   数组，不含受管进程、不带 managed 标记——受管编排走 execute，治理视图
+~~   不重复暴露）；machine.terminate → machine.terminate.ok（pid 十进制
+~~   串载荷；守卫链：载荷解析 → 来源白名单 → pid 存在 → 非自身 → 非受管 →
+~~   名单匹配；守卫与 supervisor 登记簿互为纵深）。
+~~4. **遥测/审计面**：枚举与处置各一对接受/拒绝计数（snake_case 同族）；
+~~   处置全程 `SpanScope("machine.terminate")`（拒绝也入 span：accepted/
+~~   reason/pid 属性），枚举只读不进 trace；全部尝试（含拒绝）照记审计
+~~   （command = process.list / process.kill）并推中心审计环形。
+~~5. **测试**（MachineDaemonTest 21→24、MachineAgentTest 8→10）：三块 E2E
+~~   ——枚举策略门（受信含自身 pid、受管被过滤、非受信拒绝、审计切片）、
+~~   处置守卫七连（空载荷/非数字/非受信/未知 pid/自身/受管/名单外）、
+~~   接受处置（未登记 fork sleep 经 SIGTERM 终结，waitpid 断言信号死因，
+~~   span accepted/ok、审计带 pid）；agent 转发与 terminateUnmanaged 三态
+~~   （未登记成功/受管拒绝/pid_max 上界外恒 ESRCH）。
+~~
+~~验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10281/10281）；clang 21
+~~树零警告、113/113 全绿。
 
 ## Telemetry 导出面：控制面遥测经 /metrics Prometheus 端点导出（2026-09-26）
 

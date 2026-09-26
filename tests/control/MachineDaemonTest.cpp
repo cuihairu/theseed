@@ -190,6 +190,77 @@ public:
     }
 };
 
+// 批量 kick 部分失败臂的竞争模拟件：包一层内存提供者，armed 时对后缀
+// 匹配的键把一次 del 报成失败——确定性复现"枚举之后、吊销之前会话被
+// 并发摘除"的跨进程窗口（单线程测试里时钟/提供者都无法中途插手）。
+// 每个后缀只失败一次，可同时布多个（造出 missing 分列 ≥2 的应答）。
+class FlakyDelProvider final : public foundation::IRedisProvider {
+public:
+    explicit FlakyDelProvider(
+        std::shared_ptr<foundation::IRedisProvider> inner)
+        : inner_(std::move(inner)) {}
+
+    void armFailDel(const std::string& keySuffix) {
+        armedSuffixes_.push_back(keySuffix);
+    }
+
+    bool del(const std::string& key) override {
+        for (auto it = armedSuffixes_.begin(); it != armedSuffixes_.end();
+             ++it) {
+            if (key.size() >= it->size() &&
+                key.compare(key.size() - it->size(), it->size(), *it) == 0) {
+                armedSuffixes_.erase(it);  // 每个后缀只失败一次
+                return false;
+            }
+        }
+        return inner_->del(key);
+    }
+
+    // 其余原语全部透传（会话面用到 get/set/expire/del/zadd/zrange/zrem）
+    bool set(const std::string& key, const std::string& value,
+             foundation::RedisDuration ttl = foundation::RedisDuration::zero())
+        override {
+        return inner_->set(key, value, ttl);
+    }
+    std::optional<std::string> get(const std::string& key) override {
+        return inner_->get(key);
+    }
+    bool exists(const std::string& key) override {
+        return inner_->exists(key);
+    }
+    bool expire(const std::string& key,
+                foundation::RedisDuration ttl) override {
+        return inner_->expire(key, ttl);
+    }
+    bool zadd(const std::string& key, const std::string& member,
+              double score) override {
+        return inner_->zadd(key, member, score);
+    }
+    std::vector<std::pair<std::string, double>> zrange(
+        const std::string& key, std::size_t start, std::size_t stop) override {
+        return inner_->zrange(key, start, stop);
+    }
+    std::vector<std::pair<std::string, double>> zrevrange(
+        const std::string& key, std::size_t start, std::size_t stop) override {
+        return inner_->zrevrange(key, start, stop);
+    }
+    std::size_t zcard(const std::string& key) override {
+        return inner_->zcard(key);
+    }
+    bool zrem(const std::string& key, const std::string& member) override {
+        return inner_->zrem(key, member);
+    }
+    bool lock(const std::string& key,
+              foundation::RedisDuration ttl) override {
+        return inner_->lock(key, ttl);
+    }
+    void unlock(const std::string& key) override { inner_->unlock(key); }
+
+private:
+    std::shared_ptr<foundation::IRedisProvider> inner_;
+    std::vector<std::string> armedSuffixes_;
+};
+
 }  // namespace
 
 int main() {
@@ -2104,6 +2175,291 @@ int main() {
             FAIL("accepted kick must record the length fingerprint only");
         if (!sawShutdown) FAIL("accepted shutdown must be audited");
 
+        PASS();
+    }
+
+    TEST("session ops: list-sessions + batch kick-sessions (04 §8 Phase 2)");
+    {
+        // 会话运维面的两条命令 × 角色矩阵，令牌原文全链路不出进程：
+        // 枚举行、批量应答、审计 args 只出现长度指纹。部分失败臂用
+        // del 失败一次的包装提供者确定性复现跨进程竞争窗口。
+        OpsControlCenter sessCenter;
+        auto flaky = std::make_shared<FlakyDelProvider>(
+            std::make_shared<foundation::InMemoryRedisProvider>());
+        foundation::SessionStore sessStore(flaky);
+
+        foundation::StoredSession session;
+        session.accountId = "carl";
+        session.realmId = "realm-1";
+        session.userId = 1;
+        if (!sessStore.save("kick-me", session, std::chrono::minutes{5}))
+            FAIL("save carl#1 failed");
+        session.userId = 2;
+        const std::string bigToken(20, 'x');
+        if (!sessStore.save(bigToken, session, std::chrono::minutes{5}))
+            FAIL("save carl#2 failed");
+        session.accountId = "amy";
+        session.realmId = "realm-2";
+        session.userId = 3;
+        if (!sessStore.save("amy-tok", session, std::chrono::minutes{5}))
+            FAIL("save amy failed");
+
+        MachineAgent sessAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>(),
+                               nullptr);
+        MachineDaemon::Config sessConfig;
+        sessConfig.listenPort = 0;
+        sessConfig.auditSink = &sessCenter;
+        sessConfig.nodeOpsPolicy.trustedComponents = {1, 5, 7};
+        sessConfig.roleBindings = {{1, AccessRole::ReadOnly},
+                                   {5, AccessRole::Operator}};
+        sessConfig.sessionStore = &sessStore;
+        MachineDaemon sessDaemon(sessConfig, sessAgent);
+        if (!sessDaemon.start()) FAIL("sess daemon start failed");
+        auto sessTick = [&sessDaemon] { sessDaemon.tick(); };
+
+        RawClient ro;
+        ro.component = 1;
+        if (!ro.connect(sessDaemon.localPort())) FAIL("ro connect failed");
+        ro.settle(sessTick);
+        RawClient op;
+        op.component = 5;
+        if (!op.connect(sessDaemon.localPort())) FAIL("op connect failed");
+        op.settle(sessTick);
+        RawClient unbound;
+        unbound.component = 7;
+        if (!unbound.connect(sessDaemon.localPort()))
+            FAIL("unbound connect failed");
+        unbound.settle(sessTick);
+        RawClient stranger;
+        stranger.component = 2;
+        if (!stranger.connect(sessDaemon.localPort()))
+            FAIL("stranger connect failed");
+        stranger.settle(sessTick);
+
+        auto& listAccepted = foundation::MetricsRegistry::instance().counter(
+            "machine_list_sessions_accepted_count");
+        auto& listRejected = foundation::MetricsRegistry::instance().counter(
+            "machine_list_sessions_rejected_count");
+        auto& kickSessionsAccepted =
+            foundation::MetricsRegistry::instance().counter(
+                "machine_kick_sessions_accepted_count");
+        auto& kickSessionsRejected =
+            foundation::MetricsRegistry::instance().counter(
+                "machine_kick_sessions_rejected_count");
+        const auto listAcc0 = listAccepted.value();
+        const auto listRej0 = listRejected.value();
+        const auto kickSAcc0 = kickSessionsAccepted.value();
+        const auto kickSRej0 = kickSessionsRejected.value();
+
+        RuntimeInvocation resp;
+        // --- 枚举：三行、运维可见属性齐全、原文零泄露（ReadOnly 可读，
+        //     Operator 覆盖可读，策略外/未绑定拒绝） ---
+        if (!ro.request(MachineMethod::kListSessions, {}, sessTick, resp))
+            FAIL("no response to ro list-sessions");
+        if (resp.method != MachineMethod::kListSessionsOk)
+            FAIL("ReadOnly listing must succeed: " + payloadToString(resp));
+        const std::string listed = payloadToString(resp);
+        std::size_t rows = 0;
+        for (auto pos = listed.find("\"user_id\""); pos != std::string::npos;
+             pos = listed.find("\"user_id\"", pos + 1)) {
+            ++rows;
+        }
+        if (rows != 3) FAIL("listing must show three sessions, got " +
+                            std::to_string(rows));
+        if (listed.find("carl") == std::string::npos ||
+            listed.find("amy") == std::string::npos ||
+            listed.find("realm-1") == std::string::npos ||
+            listed.find("realm-2") == std::string::npos)
+            FAIL("listing rows must carry account/realm: " + listed);
+        if (listed.find("kick-me") != std::string::npos ||
+            listed.find("amy-tok") != std::string::npos ||
+            listed.find(bigToken) != std::string::npos)
+            FAIL("raw tokens must never leave the store: " + listed);
+        if (!op.request(MachineMethod::kListSessions, {}, sessTick, resp))
+            FAIL("no response to op list-sessions");
+        if (resp.method != MachineMethod::kListSessionsOk)
+            FAIL("Operator covers the read tier: " + payloadToString(resp));
+        if (!stranger.request(MachineMethod::kListSessions, {}, sessTick,
+                              resp))
+            FAIL("no response to stranger list-sessions");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger listing must be refused by policy: " +
+                 payloadToString(resp));
+        if (!unbound.request(MachineMethod::kListSessions, {}, sessTick,
+                             resp))
+            FAIL("no response to unbound list-sessions");
+        if (payloadToString(resp).find("requires ReadOnly role") ==
+            std::string::npos)
+            FAIL("unbound listing must be refused by role: " +
+                 payloadToString(resp));
+
+        // --- 批量 kick：领域圈选 → 账号圈选，指纹分列、真实吊销 ---
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("realm=realm-2"),
+                        sessTick, resp))
+            FAIL("no response to realm-scoped kick");
+        if (resp.method != MachineMethod::kKickSessionsOk ||
+            payloadToString(resp).find("\"requested\":1") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"revoked\":[\"session(len=7)\"]") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"missing\":[]") == std::string::npos)
+            FAIL("realm-scoped kick must revoke exactly amy: " +
+                 payloadToString(resp));
+        if (sessStore.load("amy-tok").has_value())
+            FAIL("amy token must be revoked for real");
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("account=carl"),
+                        sessTick, resp))
+            FAIL("no response to account-scoped kick");
+        if (resp.method != MachineMethod::kKickSessionsOk ||
+            payloadToString(resp).find("\"requested\":2") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"missing\":[]") == std::string::npos)
+            FAIL("account-scoped kick must revoke both carl tokens: " +
+                 payloadToString(resp));
+        if (sessStore.load("kick-me").has_value() ||
+            sessStore.load(bigToken).has_value())
+            FAIL("carl tokens must be revoked for real");
+
+        // --- 畸形选择器（空 / 未知前缀 / 空值后缀）三拒绝臂 ---
+        if (!op.request(MachineMethod::kKickSessions, {}, sessTick, resp))
+            FAIL("no response to empty selector");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty selector must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("bogus"),
+                        sessTick, resp))
+            FAIL("no response to unknown selector");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("unknown selector must be named malformed: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("account="),
+                        sessTick, resp))
+            FAIL("no response to empty-value selector");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("empty-value selector must be named malformed: " +
+                 payloadToString(resp));
+
+        // --- 角色/策略拒绝臂（ReadOnly / 未绑定 / 策略外） ---
+        if (!ro.request(MachineMethod::kKickSessions, payloadOf("all"),
+                        sessTick, resp))
+            FAIL("no response to ro batch kick");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("ReadOnly batch kick must be refused by role: " +
+                 payloadToString(resp));
+        if (!unbound.request(MachineMethod::kKickSessions, payloadOf("all"),
+                             sessTick, resp))
+            FAIL("no response to unbound batch kick");
+        if (payloadToString(resp).find("requires Operator role") ==
+            std::string::npos)
+            FAIL("unbound batch kick must be refused by role: " +
+                 payloadToString(resp));
+        if (!stranger.request(MachineMethod::kKickSessions, payloadOf("all"),
+                              sessTick, resp))
+            FAIL("no response to stranger batch kick");
+        if (payloadToString(resp).find("not trusted") == std::string::npos)
+            FAIL("stranger batch kick must be refused by policy: " +
+                 payloadToString(resp));
+
+        // --- 部分失败臂：枚举后、吊销前被"并发进程"摘除 → missing 分列
+        //     （两个失败目标，造出分列 ≥2 的应答），幸存目标仍可被单令牌
+        //     kick 收尾 ---
+        session.accountId = "vic";
+        session.realmId = "realm-9";
+        session.userId = 9;
+        if (!sessStore.save("vic", session, std::chrono::minutes{5}))
+            FAIL("save vic failed");
+        if (!sessStore.save("vic2", session, std::chrono::minutes{5}))
+            FAIL("save vic2 failed");
+        session.accountId = "survivor";
+        session.userId = 10;
+        if (!sessStore.save("survivor", session, std::chrono::minutes{5}))
+            FAIL("save survivor failed");
+        flaky->armFailDel("vic");
+        flaky->armFailDel("vic2");
+        if (!op.request(MachineMethod::kKickSessions, payloadOf("all"),
+                        sessTick, resp))
+            FAIL("no response to racing batch kick");
+        if (resp.method != MachineMethod::kKickSessionsOk ||
+            payloadToString(resp).find("\"requested\":3") ==
+                std::string::npos ||
+            payloadToString(resp).find(
+                "\"revoked\":[\"session(len=8)\"]") == std::string::npos ||
+            payloadToString(resp).find(
+                "\"missing\":[\"session(len=3)\",\"session(len=4)\"]") ==
+                std::string::npos)
+            FAIL("racing batch kick must split revoked/missing: " +
+                 payloadToString(resp));
+        if (!sessStore.load("vic").has_value() ||
+            !sessStore.load("vic2").has_value())
+            FAIL("lost races must leave the victims untouched");
+        if (sessStore.load("survivor").has_value())
+            FAIL("survivor must be revoked for real");
+        if (!op.request(MachineMethod::kKickSession, payloadOf("vic"),
+                        sessTick, resp))
+            FAIL("no response to follow-up single kick");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("victim must stay kickable after a lost race: " +
+                 payloadToString(resp));
+        if (!op.request(MachineMethod::kKickSession, payloadOf("vic2"),
+                        sessTick, resp))
+            FAIL("no response to second follow-up single kick");
+        if (resp.method != MachineMethod::kKickSessionOk)
+            FAIL("second victim must stay kickable: " + payloadToString(resp));
+
+        // 入口关闭（主 daemon 未配 sessionStore）= 视同未知方法
+        if (!client.request(MachineMethod::kListSessions, {}, daemonTick,
+                            resp))
+            FAIL("no response to closed list entry");
+        if (payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("closed list entry must fall to unknown method: " +
+                 payloadToString(resp));
+        if (!client.request(MachineMethod::kKickSessions, payloadOf("all"),
+                            daemonTick, resp))
+            FAIL("no response to closed batch entry");
+        if (payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("closed batch entry must fall to unknown method: " +
+                 payloadToString(resp));
+
+        // 计数增量（成对口径）：枚举 2/2，批量 kick 3/6
+        if (listAccepted.value() != listAcc0 + 2)
+            FAIL("list accepted must be +2");
+        if (listRejected.value() != listRej0 + 2)
+            FAIL("list rejected must be +2");
+        if (kickSessionsAccepted.value() != kickSAcc0 + 3)
+            FAIL("batch kick accepted must be +3");
+        if (kickSessionsRejected.value() != kickSRej0 + 6)
+            FAIL("batch kick rejected must be +6");
+
+        // 审计：15 次尝试全留痕（枚举 4 + 批量 kick 9 + 收尾单 kick 2），
+        // 令牌原文零泄露（逐条 args 扫描）
+        const auto& trail = sessDaemon.auditLog();
+        if (trail.size() != 15)
+            FAIL("all fifteen session-ops attempts must be audited, got " +
+                 std::to_string(trail.size()));
+        bool sawListCount = false;
+        bool sawScopeSummary = false;
+        for (const auto& entry : trail) {
+            if (entry.command == "sessions.list" && entry.accepted &&
+                entry.args == "count=3")
+                sawListCount = true;
+            if (entry.command == "sessions.kick" && entry.accepted &&
+                entry.args == "scope=account=carl revoked=2 missing=0")
+                sawScopeSummary = true;
+            if (entry.args.find("kick-me") != std::string::npos ||
+                entry.args.find("amy-tok") != std::string::npos ||
+                entry.args.find("vic") != std::string::npos ||
+                entry.args.find("survivor") != std::string::npos ||
+                entry.args.find(bigToken) != std::string::npos)
+                FAIL("audit trail leaked a raw token: " + entry.args);
+        }
+        if (!sawListCount)
+            FAIL("accepted listing must record the row count");
+        if (!sawScopeSummary)
+            FAIL("accepted batch kick must record scope + counts");
+
+        sessDaemon.stop();
         PASS();
     }
 
