@@ -1,6 +1,9 @@
 #include "theseed/control/machine/MachineDaemon.h"
 
 #include "theseed/control/machine/MachineSnapshotCodec.h"
+#include "theseed/foundation/Logger.h"
+#include "theseed/foundation/Metrics.h"
+#include "theseed/foundation/Tracing.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 
@@ -43,6 +46,38 @@ std::string auditEntryJson(const AuditEntry& entry) {
     return out.str();
 }
 
+// 控制面遥测命名（05-telemetry MVP：结构化 logs + 基础 metrics + 关键
+// traces 的控制面切片）。指标名进程级单例、snake_case + _count 后缀，
+// 与 LoginApp/DBApp 同族口径。
+constexpr const char* kSnapshotCount = "machine_snapshot_count";
+constexpr const char* kAuditCount = "machine_audit_count";
+constexpr const char* kExecuteAcceptedCount = "machine_execute_accepted_count";
+constexpr const char* kExecuteRejectedCount = "machine_execute_rejected_count";
+constexpr const char* kUnknownMethodCount = "machine_unknown_method_count";
+constexpr const char* kExecuteDurationMs = "machine_execute_duration_ms";
+
+foundation::Counter& telemetryCounter(const char* name) {
+    return foundation::MetricsRegistry::instance().counter(name);
+}
+
+foundation::Histogram& executeDurationHistogram() {
+    return foundation::MetricsRegistry::instance().histogram(
+        kExecuteDurationMs,
+        foundation::Histogram::Boundaries{1.0, 5.0, 10.0, 25.0, 50.0, 100.0,
+                                          250.0, 500.0, 1000.0, 2500.0},
+        "machine.execute dispatch duration (ms)");
+}
+
+void logExecuteRejected(const AuditEntry& entry, const std::string& reason) {
+    // 命名属性单行化：gcc 会把多行调用表达式的计数错归因到续行
+    const auto sourceValue = static_cast<std::int64_t>(entry.source);
+    const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+    const foundation::LogAttribute commandAttr = {"command", entry.command};
+    const foundation::LogAttribute reasonAttr = {"reason", reason};
+    foundation::logWarn("machine.execute.rejected",
+                        {sourceAttr, commandAttr, reasonAttr});
+}
+
 }  // namespace
 
 MachineDaemon::MachineDaemon(Config config, IMachineAgent& agent)
@@ -63,6 +98,11 @@ bool MachineDaemon::start() {
         return false;
     }
     announceToCenter();
+    // 命名属性单行化（同上，规避续行归因）
+    const auto listenPort = static_cast<std::int64_t>(listener_.localPort());
+    const foundation::LogAttribute portAttr = {"listen_port", listenPort};
+    const foundation::LogAttribute nodeIdAttr = {"node_id", nodeId_};
+    foundation::logInfo("machine.daemon.started", {portAttr, nodeIdAttr});
     return true;
 }
 
@@ -84,6 +124,7 @@ void MachineDaemon::stop() {
     // 优雅下线：先注销再关听——中心立即摘除，不等 pruneStale 的 TTL
     // 疑似掉线兜底。nodeId_ 已清空（二次 stop / 未 start）时跳过。
     if (config_.reportSink != nullptr && !nodeId_.empty()) {
+        foundation::logInfo("machine.daemon.stopped", {{"node_id", nodeId_}});
         config_.reportSink->deregister(nodeId_);
     }
     nodeId_.clear();
@@ -174,6 +215,7 @@ void MachineDaemon::processMessages() {
 
 void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
     if (inv.method == MachineMethod::kSnapshot) {
+        telemetryCounter(kSnapshotCount).increment();
         const auto snapshotJson = toBytes(formatSnapshotJson(agent_.snapshot()));
         sendResponse(inv.sourceComponent, MachineMethod::kSnapshotOk,
                      std::span<const std::byte>(snapshotJson));
@@ -181,11 +223,17 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
     }
 
     if (inv.method == MachineMethod::kAudit) {
+        telemetryCounter(kAuditCount).increment();
         handleAudit(inv);
         return;
     }
 
     if (inv.method == MachineMethod::kExecute) {
+        // 控制面 trace：execute 是关键受控动作（05 §3.1），拒绝也进 span
+        // ——"谁在何时被拒"与审计同视角；日志在 span 内自动带 trace 关联。
+        foundation::SpanScope span("machine.execute");
+        span.setAttribute("source",
+                          static_cast<std::int64_t>(inv.sourceComponent));
         // payload = command '\0' args
         const auto separator =
             std::find(inv.payload.begin(), inv.payload.end(), std::byte{0});
@@ -195,10 +243,15 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         if (separator == inv.payload.end()) {
             entry.accepted = false;
             appendAudit(entry);
-            const auto reason =
-                toBytes("malformed execute payload: missing NUL separator");
+            telemetryCounter(kExecuteRejectedCount).increment();
+            span.setAttribute("accepted", false);
+            const std::string reason =
+                "malformed execute payload: missing NUL separator";
+            span.setAttribute("reason", reason);
+            logExecuteRejected(entry, reason);
+            const auto payload = toBytes(reason);
             sendResponse(inv.sourceComponent, MachineMethod::kError,
-                         std::span<const std::byte>(reason));
+                         std::span<const std::byte>(payload));
             return;
         }
 
@@ -212,9 +265,13 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         if (entry.command.empty()) {
             entry.accepted = false;
             appendAudit(entry);
-            const auto reason = toBytes("empty command");
+            telemetryCounter(kExecuteRejectedCount).increment();
+            span.setAttribute("accepted", false);
+            span.setAttribute("reason", "empty command");
+            logExecuteRejected(entry, "empty command");
+            const auto payload = toBytes("empty command");
             sendResponse(inv.sourceComponent, MachineMethod::kError,
-                         std::span<const std::byte>(reason));
+                         std::span<const std::byte>(payload));
             return;
         }
 
@@ -223,37 +280,62 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         if (!isTrustedSource(inv.sourceComponent)) {
             entry.accepted = false;
             appendAudit(entry);
-            const auto reason =
-                toBytes("execute rejected: source component " +
-                        std::to_string(inv.sourceComponent) + " is not trusted");
+            telemetryCounter(kExecuteRejectedCount).increment();
+            span.setAttribute("accepted", false);
+            const std::string reason = "execute rejected: source component " +
+                                       std::to_string(inv.sourceComponent) +
+                                       " is not trusted";
+            span.setAttribute("reason", reason);
+            logExecuteRejected(entry, reason);
+            const auto payload = toBytes(reason);
             sendResponse(inv.sourceComponent, MachineMethod::kError,
-                         std::span<const std::byte>(reason));
+                         std::span<const std::byte>(payload));
             return;
         }
         if (!isCommandAllowed(entry.command)) {
             entry.accepted = false;
             appendAudit(entry);
-            const auto reason =
-                toBytes("execute rejected: command not allowed: " + entry.command);
+            telemetryCounter(kExecuteRejectedCount).increment();
+            span.setAttribute("accepted", false);
+            const std::string reason =
+                "execute rejected: command not allowed: " + entry.command;
+            span.setAttribute("reason", reason);
+            logExecuteRejected(entry, reason);
+            const auto payload = toBytes(reason);
             sendResponse(inv.sourceComponent, MachineMethod::kError,
-                         std::span<const std::byte>(reason));
+                         std::span<const std::byte>(payload));
             return;
         }
 
         entry.accepted = true;
+        const auto execStart = std::chrono::steady_clock::now();
         entry.ok = agent_.execute(entry.command, entry.args);
+        const std::chrono::duration<double, std::milli> execElapsed =
+            std::chrono::steady_clock::now() - execStart;
+        executeDurationHistogram().observe(execElapsed.count());
+        telemetryCounter(kExecuteAcceptedCount).increment();
+        span.setAttribute("accepted", true);
+        span.setAttribute("ok", entry.ok);
         appendAudit(entry);
+        const auto sourceValue = static_cast<std::int64_t>(entry.source);
+        const foundation::LogAttribute sourceAttr = {"source", sourceValue};
+        const foundation::LogAttribute commandAttr = {"command", entry.command};
+        const foundation::LogAttribute okAttr = {"ok", entry.ok};
+        foundation::logInfo("machine.execute",
+                            {sourceAttr, commandAttr, okAttr});
         const std::byte result = entry.ok ? std::byte{0x01} : std::byte{0x00};
         sendResponse(inv.sourceComponent, MachineMethod::kExecuteOk,
                      std::span<const std::byte>(&result, 1));
         return;
     }
 
+    telemetryCounter(kUnknownMethodCount).increment();
     AuditEntry rejected;
     rejected.timestamp = std::chrono::system_clock::now();
     rejected.source = inv.sourceComponent;
     rejected.command = inv.method;
     appendAudit(rejected);
+    foundation::logWarn("machine.unknown_method", {{"method", inv.method}});
     const auto reason = toBytes("unknown method: " + inv.method);
     sendResponse(inv.sourceComponent, MachineMethod::kError,
                  std::span<const std::byte>(reason));

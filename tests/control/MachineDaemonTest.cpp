@@ -8,6 +8,9 @@
 #include "theseed/control/machine/NodeReport.h"
 #include "theseed/control/machine/ProcessSupervisor.h"
 #include "theseed/control/ops/OpsControlCenter.h"
+#include "theseed/foundation/Logger.h"
+#include "theseed/foundation/Metrics.h"
+#include "theseed/foundation/Tracing.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
 
@@ -24,6 +27,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <variant>
 #include <vector>
 
 using theseed::control::machine::LocalHostProbe;
@@ -32,6 +36,7 @@ using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
 using theseed::control::machine::NodeReport;
 using theseed::control::ops::OpsControlCenter;
+namespace foundation = theseed::foundation;
 // 命名空间不能 using-declare，用别名
 namespace MachineMethod = theseed::control::machine::MachineMethod;
 using theseed::runtime::ComponentId;
@@ -135,6 +140,23 @@ std::uint32_t firstManagedPid(const std::string& json) {
     return static_cast<std::uint32_t>(
         std::strtoul(json.c_str() + pidKey + 6, nullptr, 10));
 }
+
+// 遥测联动测试用捕获假件：单线程 tick 上下文写日志，无需加锁
+// （与 daemon 审计同一线程假设）。
+class CapturingLogger final : public foundation::ILogger {
+public:
+    void log(foundation::LogRecord record) override {
+        records_.push_back(std::move(record));
+    }
+    void setLevel(foundation::LogLevel level) override { level_ = level; }
+    foundation::LogLevel level() const override { return level_; }
+
+    std::vector<foundation::LogRecord> drain() { return std::move(records_); }
+
+private:
+    foundation::LogLevel level_ = foundation::LogLevel::Debug;
+    std::vector<foundation::LogRecord> records_;
+};
 
 }  // namespace
 
@@ -397,6 +419,81 @@ int main() {
         PASS();
     }
 
+    TEST("telemetry linkage: metrics, logs, and traced execute");
+    {
+        // 指标为进程级单例：跨用例累积，按增量断言
+        auto& accepted = foundation::MetricsRegistry::instance().counter(
+            "machine_execute_accepted_count");
+        auto& rejected = foundation::MetricsRegistry::instance().counter(
+            "machine_execute_rejected_count");
+        auto& durations = foundation::MetricsRegistry::instance().histogram(
+            "machine_execute_duration_ms", {});
+        const auto accepted0 = accepted.value();
+        const auto rejected0 = rejected.value();
+        const auto durationCount0 = durations.snapshot().count;
+
+        const auto captured = std::make_shared<CapturingLogger>();
+        auto previousLogger = foundation::takeGlobalLogger();
+        foundation::setGlobalLogger(captured);
+        // 捕获容器挂 shared_ptr：即便后续 FAIL 早退，发射器也不悬垂
+        const auto spans = std::make_shared<std::vector<foundation::Span>>();
+        foundation::setSpanEmitter(
+            [spans](const foundation::Span& span) { spans->push_back(span); });
+
+        RuntimeInvocation resp;
+        // accepted 但执行失败（未知 pid）：不遗留子进程，ok=false 可观测
+        if (!client.request(MachineMethod::kExecute,
+                            executePayload("restart", "4000007"), daemonTick,
+                            resp))
+            FAIL("no response to traced execute");
+        // rejected（非白名单命令）：拒绝同入指标/日志/trace
+        if (!client.request(MachineMethod::kExecute,
+                            executePayload("halt", "now"), daemonTick, resp))
+            FAIL("no response to rejected execute");
+
+        if (accepted.value() != accepted0 + 1) FAIL("accepted counter +1");
+        if (rejected.value() != rejected0 + 1) FAIL("rejected counter +1");
+        if (durations.snapshot().count != durationCount0 + 1)
+            FAIL("execute duration observed once");
+
+        if (spans->size() != 2) FAIL("one span per execute (accepted + rejected)");
+        if ((*spans)[0].name != "machine.execute") FAIL("span name");
+        if (!(*spans)[0].context.isValid()) FAIL("span carries trace context");
+        bool sawOkFalse = false;
+        for (const auto& attr : (*spans)[0].attrs) {
+            if (attr.key == "ok" && std::get<bool>(attr.value) == false)
+                sawOkFalse = true;
+        }
+        if (!sawOkFalse) FAIL("accepted span must carry ok=false here");
+        bool sawRejected = false;
+        for (const auto& attr : (*spans)[1].attrs) {
+            if (attr.key == "accepted" && std::get<bool>(attr.value) == false)
+                sawRejected = true;
+        }
+        if (!sawRejected) FAIL("rejected span must mark accepted=false");
+
+        // 日志与 trace 自动关联：拒绝/执行日志各带其 span 的 traceId
+        const auto records = captured->drain();
+        const foundation::LogRecord* okLog = nullptr;
+        const foundation::LogRecord* rejectLog = nullptr;
+        for (const auto& record : records) {
+            if (record.message == "machine.execute" && okLog == nullptr)
+                okLog = &record;
+            if (record.message == "machine.execute.rejected" &&
+                rejectLog == nullptr)
+                rejectLog = &record;
+        }
+        if (okLog == nullptr || okLog->traceId != (*spans)[0].context.traceId)
+            FAIL("execute log must correlate with its span");
+        if (rejectLog == nullptr ||
+            rejectLog->traceId != (*spans)[1].context.traceId)
+            FAIL("rejection log must correlate with its span");
+
+        foundation::setSpanEmitter(nullptr);
+        foundation::setGlobalLogger(std::move(previousLogger));
+        PASS();
+    }
+
     TEST("audit ring evicts oldest beyond capacity");
     {
         LocalHostProbe probe;
@@ -457,6 +554,8 @@ int main() {
         silentClient.settle(silentTick);
 
         RuntimeInvocation resp;
+        // 遥测联动用例在其之前已追加过转发：按增量断言
+        const auto forwarded0 = auditCenter.auditCount();
         if (!silentClient.request(MachineMethod::kExecute,
                                   executePayload("restart", "4000009"),
                                   silentTick, resp))
@@ -465,7 +564,7 @@ int main() {
             FAIL("no response to audit");
         if (payloadToString(resp) != "[]") FAIL("disabled audit must be empty");
         if (!silentDaemon.auditLog().empty()) FAIL("local audit must stay empty");
-        if (auditCenter.auditCount() != 9)
+        if (auditCenter.auditCount() != forwarded0 + 1)
             FAIL("local capacity 0 must not gate center forwarding");
         silentDaemon.stop();
         PASS();

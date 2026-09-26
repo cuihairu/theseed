@@ -1,9 +1,40 @@
 #include "theseed/control/ops/OpsControlCenter.h"
 
+#include "theseed/foundation/Logger.h"
+#include "theseed/foundation/Metrics.h"
+
 #include <algorithm>
 #include <utility>
 
 namespace theseed::control::ops {
+
+namespace {
+
+// 中心侧遥测（05-telemetry MVP 聚合面切片）：节点名册与审计环形的水位
+// 用 gauge 暴露，丢审计/掉线摘除用 counter 累计——审计有损与节点抖动
+// 是 ops 决策信号。命名与 machine 侧同族（snake_case + _count）。
+constexpr const char* kNodesRegistered = "ops_nodes_registered";
+constexpr const char* kAuditEntries = "ops_audit_entries";
+constexpr const char* kNodesPrunedCount = "ops_nodes_pruned_count";
+constexpr const char* kAuditDroppedCount = "ops_audit_dropped_count";
+
+foundation::Gauge& telemetryGauge(const char* name) {
+    return foundation::MetricsRegistry::instance().gauge(name);
+}
+
+foundation::Counter& telemetryCounter(const char* name) {
+    return foundation::MetricsRegistry::instance().counter(name);
+}
+
+void syncNodeGauge(std::size_t nodes) {
+    telemetryGauge(kNodesRegistered).set(static_cast<std::int64_t>(nodes));
+}
+
+void syncAuditGauge(std::size_t entries) {
+    telemetryGauge(kAuditEntries).set(static_cast<std::int64_t>(entries));
+}
+
+}  // namespace
 
 OpsControlCenter::OpsControlCenter() : OpsControlCenter(Config{}) {}
 
@@ -20,10 +51,12 @@ void OpsControlCenter::registerNode(
         iter->second.nodeId = nodeId;
         insertionOrder_.push_back(nodeId);  // 注册即入接入序（与首报同口径）
         evictOldestIfFull();
+        foundation::logInfo("ops.node.registered", {{"node_id", nodeId}});
     }
     // 已知节点：注册退化为心跳——只续 lastSeen，不碰已有快照。
     // （新节点若被逐出也只可能是别的节点：新接入者排接入序队尾。）
     iter->second.timestamp = now;
+    syncNodeGauge(nodes_.size());
 }
 
 bool OpsControlCenter::deregister(const std::string& nodeId) {
@@ -33,6 +66,8 @@ bool OpsControlCenter::deregister(const std::string& nodeId) {
     // 与 pruneStale 同一清理纪律：摘节点同时清接入序残留，避免容量
     // 逐出瞄准已不存在的节点。
     std::erase(insertionOrder_, nodeId);
+    syncNodeGauge(nodes_.size());
+    foundation::logInfo("ops.node.deregistered", {{"node_id", nodeId}});
     return true;
 }
 
@@ -45,6 +80,7 @@ void OpsControlCenter::publish(const machine::NodeReport& report) {
     if (inserted) {
         insertionOrder_.push_back(report.nodeId);
         evictOldestIfFull();
+        syncNodeGauge(nodes_.size());  // 首报即接入名册（与注册同口径）
     } else {
         iter->second = report;  // 后到覆盖：中心只留每节点最新快照
     }
@@ -62,6 +98,7 @@ void OpsControlCenter::evictOldestIfFull() {
         insertionOrder_.erase(insertionOrder_.begin());
         nodes_.erase(oldest);
     }
+    syncNodeGauge(nodes_.size());
 }
 
 bool OpsControlCenter::latest(const std::string& nodeId,
@@ -112,6 +149,10 @@ std::size_t OpsControlCenter::pruneStale(std::chrono::milliseconds ttl,
                                return nodes_.find(nodeId) == nodes_.end();
                            }),
             insertionOrder_.end());
+        syncNodeGauge(nodes_.size());
+        telemetryCounter(kNodesPrunedCount).increment(pruned);
+        foundation::logWarn("ops.nodes.pruned",
+                            {{"count", static_cast<std::int64_t>(pruned)}});
     }
     return pruned;
 }
@@ -122,8 +163,11 @@ void OpsControlCenter::publish(const machine::NodeAuditEntry& entry) {
     }
     if (auditEntries_.size() == config_.maxAuditEntries) {
         auditEntries_.erase(auditEntries_.begin());  // 环形：满后丢最旧
+        telemetryCounter(kAuditDroppedCount).increment();
+        foundation::logWarn("ops.audit.dropped", {{"node_id", entry.nodeId}});
     }
     auditEntries_.push_back(entry);
+    syncAuditGauge(auditEntries_.size());
 }
 
 std::vector<machine::NodeAuditEntry> OpsControlCenter::auditTrail() const {

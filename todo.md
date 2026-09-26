@@ -1,5 +1,30 @@
 # TODO
 
+## Telemetry 联动：控制面三路遥测（2026-09-26）
+
+对齐 05-telemetry-and-debug MVP（结构化 logs + 基础 metrics + 关键 traces）
+的控制面切片，与 OpsControlPlane 注册/审计闭环衔接：
+
+1. **MachineDaemon 侧**：五计数器（snapshot/audit/execute_accepted/
+   execute_rejected/unknown_method，进程级 MetricsRegistry，snake_case 同族
+   口径）+ `machine_execute_duration_ms` 直方图（分桶沿用 DBApp 先例）；
+   execute 全臂包 `SpanScope("machine.execute")`——拒绝也入 span
+   （accepted=false + reason 属性）；接受/拒绝/未知方法/生命周期四类结构化
+   日志，日志在 span 上下文内自动带 traceId/spanId（Logger 既有机制）。
+2. **OpsControlCenter 侧**：`ops_nodes_registered` 水位 gauge（注册/首报/
+   注销/摘除/TTL 全变异点同步）、`ops_audit_entries` 水位、
+   `ops_nodes_pruned_count` 与 `ops_audit_dropped_count` 累计——审计有损
+   与节点抖动成为 ops 决策信号；注册/注销/摘除/丢审计结构化日志。
+3. **实现纪律**：多行调用表达式会把 gcc 覆盖计数错归因到续行（与旧
+   `<<` 链问题同族）——遥测属性一律命名变量单行化。
+4. **测试**（MachineDaemonTest 17→18、OpsControlCenterTest 23→24）：真实
+   TCP 双请求（接受但失败 + 策略拒绝）断言计数增量、直方图采样数、span
+   逐请求且属性可辨、日志与对应 span 的 traceId 关联、中心 gauge/计数增量
+   与摘除/丢审计联动；指标为进程单例，全部按增量断言。
+
+验证口径：gcc-coverage 113/113 全绿、gcovr 100%（10131/10131）；clang 21
+树零警告、113/113 全绿。
+
 ## 审计对接：execute 审计汇入 OpsControlCenter 可查询审计环形（2026-09-26）
 
 对齐 todo 遗留「与 Ops Control Plane 的注册、上报和审计对接」之审计侧
@@ -288,8 +313,12 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 - Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
 - ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon
   TCP 端点；控制面中心注册待 Ops Control Plane 对接时一并做）
-- 与 `Ops Control Plane` 的注册、上报和审计对接
-- 与 `Telemetry` 的指标、日志、trace 联动
+- ~~与 `Ops Control Plane` 的注册、上报和审计对接~~（2026-09-26 完成：
+  生命周期注册/注销 + pruneStale 掉线摘除自洽；execute 审计（含拒绝）
+  汇入中心可查询审计环形）
+- ~~与 `Telemetry` 的指标、日志、trace 联动~~（2026-09-26 完成控制面切片：
+  machine/ops 双侧计数与水位仪表、结构化审计与生命周期日志、
+  execute SpanScope + 日志自动 trace 关联；OTel 导出器仍开放）
 - 更完整的单元测试与跨平台 CI 构建矩阵
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）

@@ -5,6 +5,7 @@
 #include "theseed/control/machine/MachineDaemon.h"
 #include "theseed/control/machine/NodeReport.h"
 #include "theseed/control/ops/OpsControlCenter.h"
+#include "theseed/foundation/Metrics.h"
 
 #include <chrono>
 #include <cstdint>
@@ -27,6 +28,7 @@ using theseed::control::machine::NodeReport;
 using theseed::control::machine::NodeSummary;
 using theseed::control::machine::ProcessSummary;
 using theseed::control::ops::OpsControlCenter;
+namespace foundation = theseed::foundation;
 
 int testsPassed = 0;
 int testsFailed = 0;
@@ -440,6 +442,43 @@ int main() {
 
         center.pruneStale(std::chrono::seconds{60}, baseTime);
         EXPECT(center.auditCount() == 1, "pruning leaves audit intact");
+        PASS();
+    }
+
+    TEST("center telemetry: node gauge, prune and audit-drop counters");
+    {
+        // 指标为进程级单例：跨用例累积，按增量断言
+        auto& nodeGauge = foundation::MetricsRegistry::instance().gauge(
+            "ops_nodes_registered");
+        auto& pruned = foundation::MetricsRegistry::instance().counter(
+            "ops_nodes_pruned_count");
+        auto& dropped = foundation::MetricsRegistry::instance().counter(
+            "ops_audit_dropped_count");
+        const auto gauge0 = nodeGauge.value();
+        const auto pruned0 = pruned.value();
+        const auto dropped0 = dropped.value();
+
+        OpsControlCenter::Config config;
+        config.maxAuditEntries = 1;
+        OpsControlCenter center(config);
+        center.registerNode("node-a", baseTime);
+        EXPECT(nodeGauge.value() == gauge0 + 1, "gauge tracks registration");
+        center.publish(makeReport("node-a", 1.0, baseTime));
+        EXPECT(nodeGauge.value() == gauge0 + 1, "upsert keeps roster size");
+        center.publish(makeAudit("node-a", "one"));
+        center.publish(makeAudit("node-a", "two"));
+        EXPECT(dropped.value() == dropped0 + 1, "ring overflow counted");
+
+        center.publish(makeReport("node-b", 2.0,
+                                  baseTime - std::chrono::seconds{120}));
+        EXPECT(nodeGauge.value() == gauge0 + 2,
+               "first report joins the roster");
+        center.pruneStale(std::chrono::seconds{60}, baseTime);
+        EXPECT(pruned.value() == pruned0 + 1, "prune counter incremented");
+        EXPECT(nodeGauge.value() == gauge0 + 1, "gauge reflects the prune");
+
+        center.deregister("node-a");
+        EXPECT(nodeGauge.value() == gauge0, "gauge tracks deregistration");
         PASS();
     }
 
