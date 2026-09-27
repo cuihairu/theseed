@@ -1,8 +1,11 @@
 // LocalHostProbe 的 CPU 采样稳定化与网络流量聚合测试。
 // CPU 分支用脚本化 CpuTickQuery 驱动（确定性），网络走注入透传 +
-// 默认探针在真实 /proc/net/dev 上的单调性（累计计数器只增不减）。
+// 默认探针在真实平台计数器上的单调性（累计计数器只增不减）。
+// probe_detail 纯函数（tick 拆分 / 网卡聚合 / 占比换算）由本测试在 Linux
+// 上直接驱动全分支——它们是 macOS 胶合复用的同一份口径逻辑。
 #include "theseed/control/machine/HostProbe.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -13,6 +16,7 @@
 
 using theseed::control::machine::HostSummary;
 using theseed::control::machine::LocalHostProbe;
+namespace probe_detail = theseed::control::machine::probe_detail;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -185,21 +189,104 @@ static void testZeroWindowNoPriming() {
     else FAIL("first=" + std::to_string(first.cpuUsage) + " second=" + std::to_string(second.cpuUsage));
 }
 
-// 默认探针（真实 /proc）：网络累计计数器只增不减，两次采样单调。
-// CPU 值在 [0,100]；平台/主机名非空。
+// aggregate/accumulateLinkCounters：回环排除 + 多网卡求和（Linux "lo" 与
+// macOS IFF_LOOPBACK 共用的同一份口径；流式臂是 Linux 解析器的生产路径）。
+static void testAggregateLinkCounters() {
+    TEST("aggregate/accumulateLinkCounters excludes loopback and sums nics");
+
+    bool ok = true;
+    // 流式累积（Linux 逐行路径同函数）：物理行计入、回环行不计入、可对
+    // 非零 total 续加。
+    probe_detail::LinkCounters stream{};
+    probe_detail::accumulateLinkCounters(stream, {false, 5, 6});
+    probe_detail::accumulateLinkCounters(stream, {true, 100, 200});
+    probe_detail::accumulateLinkCounters(stream, {false, 1, 2});
+    ok = ok && stream.rxBytes == 6 && stream.txBytes == 8;
+
+    // 空表：恒 {0,0}（循环不进入臂）
+    const auto empty = probe_detail::aggregateLinkCounters({});
+    ok = ok && empty.first == 0 && empty.second == 0;
+
+    // 全回环：逐行命中排除臂，合计仍为 0
+    const std::array<probe_detail::LinkCounters, 2> loopbacks{
+        probe_detail::LinkCounters{true, 111, 222}, probe_detail::LinkCounters{true, 333, 444}};
+    const auto loopOnly = probe_detail::aggregateLinkCounters(loopbacks);
+    ok = ok && loopOnly.first == 0 && loopOnly.second == 0;
+
+    // 混合：物理网卡求和、lo 不计（含 rx≠tx 的非对称行）
+    const std::array<probe_detail::LinkCounters, 3> rows{probe_detail::LinkCounters{true, 1000, 2000},
+                                                         probe_detail::LinkCounters{false, 7, 9},
+                                                         probe_detail::LinkCounters{false, 3, 1}};
+    const auto mixed = probe_detail::aggregateLinkCounters(rows);
+    ok = ok && mixed.first == 10 && mixed.second == 10;
+
+    // NSDMI 默认构造：三字段零值/非回环
+    const probe_detail::LinkCounters defaults{};
+    ok = ok && !defaults.loopback && defaults.rxBytes == 0 && defaults.txBytes == 0;
+
+    if (ok) PASS();
+    else FAIL("empty rx=" + std::to_string(empty.first) + " mixed rx=" + std::to_string(mixed.first) +
+                  " tx=" + std::to_string(mixed.second));
+}
+
+// splitCpuTicksApple：busy=user+nice+system、idle 单列、total=busy+idle
+// （macOS HOST_CPU_LOAD_INFO 四态读数进此纯函数，采样差值逻辑不变）。
+static void testSplitCpuTicksApple() {
+    TEST("splitCpuTicksApple busy/idle partition");
+
+    bool ok = true;
+    const auto [idle, total] = probe_detail::splitCpuTicksApple(100, 50, 25, 825);
+    ok = ok && idle == 825 && total == 1000;  // nice 计入忙侧
+
+    const auto [fullIdle, fullTotal] = probe_detail::splitCpuTicksApple(500, 0, 500, 0);
+    ok = ok && fullIdle == 0 && fullTotal == 1000;  // 满载臂
+
+    const auto [zeroIdle, zeroTotal] = probe_detail::splitCpuTicksApple(0, 0, 0, 0);
+    ok = ok && zeroIdle == 0 && zeroTotal == 0;  // 全零退化读数
+
+    if (ok) PASS();
+    else FAIL("idle=" + std::to_string(idle) + " total=" + std::to_string(total));
+}
+
+// usagePercent：分母防护与线性换算（Linux sysinfo、macOS vm 统计共用；
+// CPU/磁盘之外的占比臂也在此直测）。
+static void testUsagePercent() {
+    TEST("usagePercent guards zero total and scales linearly");
+
+    bool ok = true;
+    ok = ok && probe_detail::usagePercent(0, 0) == 0.0;   // 分母防护臂
+    ok = ok && probe_detail::usagePercent(5, 0) == 0.0;   // 防护臂对非零分子同样成立
+    ok = ok && near(probe_detail::usagePercent(3, 4), 75.0, 1e-9);
+    ok = ok && near(probe_detail::usagePercent(1, 3), 100.0 / 3.0, 1e-9);
+    ok = ok && near(probe_detail::usagePercent(3, 2), 150.0, 1e-9);  // 异常读数不裁剪（文档口径）
+    ok = ok && probe_detail::usagePercent(0, 100) == 0.0;            // 零用量 ≠ 分母防护，走正常臂
+
+    if (ok) PASS();
+    else FAIL("zero-total arm or linear conversion mismatch");
+}
+
+// 默认探针（真实平台计数器源）：网络累计计数器只增不减，两次采样单调；
+// CPU/内存/磁盘读数在合法区间、平台串可辨。断言全平台中立——Linux/macOS
+// （CI macos job 首验 Apple 胶合）/Windows 上同一条测试都必须成立。
 static void testRealProcSources() {
-    TEST("default probe reads real /proc monotonic");
+    TEST("default probe reads real platform counters monotonic");
 
     LocalHostProbe probe;
     const auto first = probe.sample();
     const auto second = probe.sample();
 
-    bool ok = !first.hostname.empty() && !first.platform.empty();
+    bool ok = !first.hostname.empty();
+    ok = ok && (first.platform == "linux" || first.platform == "macos" || first.platform == "windows");
     ok = ok && first.cpuUsage >= 0.0 && first.cpuUsage <= 100.0;
+    ok = ok && first.memoryUsage > 0.0 && first.memoryUsage <= 100.0;
+    ok = ok && first.diskUsage > 0.0 && first.diskUsage <= 100.0;
+    ok = ok && first.loadAverage >= 0.0;
     ok = ok && second.networkRxBytes >= first.networkRxBytes;
     ok = ok && second.networkTxBytes >= first.networkTxBytes;
     if (ok) PASS();
-    else FAIL("rx: " + std::to_string(first.networkRxBytes) + "->" + std::to_string(second.networkRxBytes));
+    else FAIL("platform=" + first.platform + " mem=" + std::to_string(first.memoryUsage) +
+                  " disk=" + std::to_string(first.diskUsage) + " rx: " +
+                  std::to_string(first.networkRxBytes) + "->" + std::to_string(second.networkRxBytes));
 }
 
 int main() {
@@ -211,6 +298,9 @@ int main() {
     testQueryFailureKeepsReading();
     testClampBounds();
     testZeroWindowNoPriming();
+    testAggregateLinkCounters();
+    testSplitCpuTicksApple();
+    testUsagePercent();
     testRealProcSources();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

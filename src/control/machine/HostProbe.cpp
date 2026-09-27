@@ -6,10 +6,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -18,10 +20,56 @@
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/sysinfo.h>
+#elif defined(__APPLE__)
+// macOS 探针胶合所需的系统头：顺序按 BSD 惯例（sys/types → sys/socket →
+// ifaddrs/net/if），乱序会触发「storage size unknown」类编译错误。
+// cstdlib 显式给 getloadavg、sys/socket 显式给 AF_LINK，不依赖传递包含。
+#include <cstdlib>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <ifaddrs.h>
+#include <mach/mach.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <netinet/in.h>
 #endif
 #endif
 
 namespace theseed::control::machine {
+
+namespace probe_detail {
+
+void accumulateLinkCounters(LinkCounters& total, const LinkCounters& row) {
+    if (row.loopback) {
+        return;  // 回环流量不计入物理口径（Linux "lo" / macOS IFF_LOOPBACK）
+    }
+    total.rxBytes += row.rxBytes;
+    total.txBytes += row.txBytes;
+}
+
+std::pair<std::uint64_t, std::uint64_t> aggregateLinkCounters(std::span<const LinkCounters> rows) {
+    LinkCounters total{};
+    for (const auto& row : rows) {
+        accumulateLinkCounters(total, row);
+    }
+    return {total.rxBytes, total.txBytes};
+}
+
+std::pair<std::uint64_t, std::uint64_t> splitCpuTicksApple(std::uint64_t user, std::uint64_t nice,
+                                                           std::uint64_t system, std::uint64_t idle) {
+    const std::uint64_t busyTicks = user + nice + system;
+    return {idle, busyTicks + idle};
+}
+
+double usagePercent(std::uint64_t used, std::uint64_t total) {
+    if (total == 0) {
+        return 0.0;  // 分母防护：读数未就绪时不产生 NaN/inf
+    }
+    return static_cast<double>((static_cast<long double>(used) / static_cast<long double>(total)) * 100.0L);
+}
+
+}  // namespace probe_detail
 
 namespace {
 
@@ -103,10 +151,31 @@ double queryMemoryUsage() {
 #if defined(__linux__)
     struct sysinfo info{};
     if (sysinfo(&info) == 0 && info.totalram != 0) {  // LCOV_EXCL_BR_LINE Linux 下 sysinfo 恒成功且 totalram 恒非零，fallback 臂不可达
-        const auto total = static_cast<long double>(info.totalram) * info.mem_unit;
-        const auto free = static_cast<long double>(info.freeram) * info.mem_unit;
-        return static_cast<double>(((total - free) / total) * 100.0L);
+        const auto total = static_cast<std::uint64_t>(info.totalram) * info.mem_unit;
+        const auto used = static_cast<std::uint64_t>(info.totalram - info.freeram) * info.mem_unit;
+        return probe_detail::usagePercent(used, total);
     }
+#elif defined(__APPLE__)
+    // 口径与活动监视器一致：占用 = (active + wired + compressor) 页 × 页大小，
+    // 总量取 hw.memsize；纯比值走 probe_detail::usagePercent（Linux 单测覆盖）。
+    vm_statistics64_data_t vmStats{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    host_t host = mach_host_self();
+    const kern_return_t status =
+        host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<integer_t*>(&vmStats), &count);
+    mach_port_deallocate(mach_task_self(), host);
+    std::uint64_t totalBytes = 0;
+    std::size_t sizeOfTotal = sizeof(totalBytes);
+    if (status == KERN_SUCCESS &&  // LCOV_EXCL_BR_LINE macOS 胶合在 Linux 上不参编，臂由 CI macos job 运行
+        ::sysctlbyname("hw.memsize", &totalBytes, &sizeOfTotal, nullptr, 0) == 0 &&  // LCOV_EXCL_BR_LINE
+        totalBytes != 0) {  // LCOV_EXCL_BR_LINE
+        const auto pageSize = static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
+        const std::uint64_t usedPages = static_cast<std::uint64_t>(vmStats.active_count) +
+                                        static_cast<std::uint64_t>(vmStats.wire_count) +
+                                        static_cast<std::uint64_t>(vmStats.compressor_page_count);
+        return probe_detail::usagePercent(usedPages * pageSize, totalBytes);
+    }
+    return 0.0;  // LCOV_EXCL_LINE macOS 系统调用失败兜底，Linux 覆盖率不可见
 #endif
 
     // LCOV_EXCL_START sysinfo 在 Linux 恒成功，sysconf fallback 不可达
@@ -147,6 +216,25 @@ bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {
     idleTicks = idle + iowait;
     totalTicks = user + nice + system + idle + iowait + irq + softirq + steal;
     return true;
+#elif defined(__APPLE__)
+    // HOST_CPU_LOAD_INFO 给出四态累计 ticks；拆接口径走
+    // probe_detail::splitCpuTicksApple（Linux 单测直接驱动该纯函数）。
+    host_cpu_load_info_data_t cpuInfo{};
+    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+    host_t host = mach_host_self();
+    const kern_return_t status =
+        host_statistics(host, HOST_CPU_LOAD_INFO, reinterpret_cast<integer_t*>(&cpuInfo), &count);
+    // mach_host_self 返回 send right，必须归还，否则每采样泄漏一个端口引用。
+    mach_port_deallocate(mach_task_self(), host);
+    if (status != KERN_SUCCESS) {  // LCOV_EXCL_BR_LINE macOS 胶合在 Linux 上不参编，由 CI macos job 运行
+        return false;              // LCOV_EXCL_LINE
+    }
+    const auto& ticks = cpuInfo.cpu_ticks;
+    const auto [idle, total] = probe_detail::splitCpuTicksApple(
+        ticks[CPU_STATE_USER], ticks[CPU_STATE_NICE], ticks[CPU_STATE_SYSTEM], ticks[CPU_STATE_IDLE]);
+    idleTicks = idle;
+    totalTicks = total;
+    return true;
 #else
     idleTicks = 0;
     totalTicks = 0;
@@ -173,8 +261,7 @@ double queryLoadAverage() {
 // 行格式 "iface: rxBytes packets errs drop fifo frame compressed multicast
 // txBytes packets errs drop fifo colls carrier compressed"；表头两行含 '|'。
 void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t& txBytes) {
-    rxBytes = 0;
-    txBytes = 0;
+    probe_detail::LinkCounters total{};
 
     std::string line;
     while (std::getline(input, line)) {
@@ -190,9 +277,6 @@ void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t&
             continue;                          // LCOV_EXCL_LINE
         }
         name = name.substr(nameBegin, name.find_last_not_of(" \t") - nameBegin + 1);
-        if (name == "lo") {
-            continue;
-        }
 
         std::uint64_t rx = 0;
         std::uint64_t tx = 0;
@@ -210,9 +294,13 @@ void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t&
         }
         // LCOV_EXCL_STOP
 
-        rxBytes += rx;
-        txBytes += tx;
+        // 回环只打标记、不在此处跳过——排除判据与求和走 macOS 共用的
+        // probe_detail::accumulateLinkCounters 单份实现。
+        probe_detail::accumulateLinkCounters(total, {name == "lo", rx, tx});
     }
+
+    rxBytes = total.rxBytes;
+    txBytes = total.txBytes;
 }
 #endif
 
@@ -228,8 +316,31 @@ std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
     std::uint64_t txBytes = 0;
     sumNetworkBytes(input, rxBytes, txBytes);
     return {rxBytes, txBytes};
+#elif defined(__APPLE__)
+    // AF_LINK 项即每网卡的链路计数器；回环以 IFF_LOOPBACK 标志识别，
+    // 聚合口径与 Linux 共用 probe_detail::aggregateLinkCounters。
+    std::vector<probe_detail::LinkCounters> rows;
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) {  // LCOV_EXCL_BR_LINE macOS 胶合在 Linux 上不参编，由 CI macos job 运行
+        return {0, 0};                   // LCOV_EXCL_LINE
+    }
+    for (const ifaddrs* entry = interfaces; entry != nullptr; entry = entry->ifa_next) {
+        if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_LINK) {
+            continue;  // IPv4/IPv6 地址项等，链路计数只在 AF_LINK 项上
+        }
+        // 内核在 AF_LINK 项挂 64 位版 if_data64（旧 if_data 的 u_char 计数
+        // 会回绕；node_exporter 等工具同款读法）。
+        const auto* counters = reinterpret_cast<const if_data64*>(entry->ifa_data);
+        if (counters == nullptr) {  // LCOV_EXCL_BR_LINE AF_LINK 项 ifa_data 恒非空，防御臂
+            continue;               // LCOV_EXCL_LINE
+        }
+        rows.push_back({(entry->ifa_flags & IFF_LOOPBACK) != 0, counters->ifi_ibytes,
+                        counters->ifi_obytes});
+    }
+    freeifaddrs(interfaces);
+    return probe_detail::aggregateLinkCounters(rows);
 #else
-    // Windows/macOS 的等价探针暂缺（todo 遗留：跨平台主机探针完整实现）
+    // Windows 的等价网络探针仍缺（遗留事项 940 只承诺 Linux/macOS 等价探针）
     return {0, 0};
 #endif
 }

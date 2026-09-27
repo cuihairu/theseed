@@ -1,5 +1,56 @@
 # TODO
 
+## macOS 等价主机探针 + CI 矩阵补 macOS（遗留 940 / 949 矩阵部分，2026-09-27）
+
+闭环遗留第 940 条（主机探针缺 macOS）与第 949 条的矩阵部分：LocalHostProbe
+补 Apple 胶合，跨平台 CI 矩阵新增 macos-latest job。
+
+1. **macOS 缺口清单（探针分项逐一核对）**：CPU 使用率（Linux `/proc/stat`
+   有、macOS 缺 → `host_statistics(HOST_CPU_LOAD_INFO)` 四态 ticks）；网络
+   流量（Linux `/proc/net/dev` 有、macOS 缺 → `getifaddrs` AF_LINK 项，
+   `IFF_LOOPBACK` 识别回环，读 64 位版 `if_data64` 计数——旧 `if_data` 的
+   u_char 计数会回绕，node_exporter 同款读法）；内存使用率（Linux `sysinfo`
+   有、macOS 原落 sysconf 存疑尾 → 显式 `host_statistics64(HOST_VM_INFO64)`
+   的 active+wire+compressor 页 × 页大小 ÷ `hw.memsize`，与活动监视器同
+   口径）；负载（getloadavg 本含 `__APPLE__`）、主机名（gethostname）、
+   磁盘（filesystem::space）、平台串（detectPlatform→"macos"）、进程枚举
+   （enumerateMacProcesses 走 popen ps 已有）均无缺口。端口占用扫描的
+   macOS 实现属第 939 条既有边界（Windows/macOS 留空），本批不扩。
+2. **口径单份：probe_detail 纯函数面（全平台编译）**：tick 拆分
+   （splitCpuTicksApple）、回环排除与求和（流式 accumulateLinkCounters +
+   批量 aggregateLinkCounters，排除判据只实现一份）、占比换算与分母防护
+   （usagePercent）从胶合层抽出为平台无关纯函数，Linux 单测直接驱动全
+   分支（覆盖门不破）；Linux 既有路径同步改走同一份函数（网络解析逐行
+   走流式累积、sysinfo 内存比值走 usagePercent），行为零变化。刻意不给
+   Linux 解析路径引入 std::vector——push_back 内联的增长/复用 STL 边在
+   接口数少的主机上单臂可达，会新破 CI 分支 100% 门；流式累积只有用户
+   侧双臂且真实 /proc/net/dev 恒同时命中两臂。macOS 胶合只剩 syscall
+   读数搬运，`mach_host_self` 的 send right 每采样 `mach_port_deallocate`
+   归还（不泄漏端口引用）。
+3. **验证边界（如实）**：本机 Linux——macOS 胶合编译期隔离（`#if
+   defined(__APPLE__)`），运行时未在本机验证过、也不声称验证过；由 CI 新增
+   macos-latest job 首验（HostProbe 的真实源测试断言改为全平台中立：平台
+   串 ∈ {linux,macos,windows}、内存/磁盘 ∈ (0,100]、网络单调不减，macOS
+   runner 上即真实执行 Apple 胶合）。Linux 可测部分（聚合/拆分/占比/差值
+   分支逻辑）新增三个纯函数直测用例。
+4. **CI 矩阵（949 矩阵部分）**：linux(gcc-debug/clang-debug/gcc-sanitize)
+   + coverage 门 + windows(msvc-debug) 之外新增 macos-clang-debug——复用
+   既有 clang-debug preset（裸 clang++ + Ninja，macOS runner 原生满足），
+   缺依赖的测试沿仓库既有环境门控自跳（MySQL 无 toolchain → 编译期回退
+   FileEntityStore，与 linux/windows 同口径）。
+
+**边界与遗留（如实记录）**：
+- Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存
+  本已有 GlobalMemoryStatusEx/GetSystemTimes 实现）。
+- macOS 侧 `if_data64` 字段布局、`HOST_VM_INFO64` 口径、页大小换算均为
+  文档/通行实现口径，本机不可运行验证，以 CI macos job 首跑为准。
+- 内存占用不含 unloaded/file-backed 页（与活动监视器"已用内存"同近似，
+  非精确账单）。
+
+验证口径：gcc-coverage 与 clang 双树 cmake --build + ctest 全绿；
+gcovr 行/函数 100%（口径含带理由 LCOV_EXCL，门禁见各批记录）；
+CI 四平台 job 以 push 后 gh run watch 为准。
+
 ## db 腿运行期韧性：断链退避重连 + 登录查询自愈（04 §8，2026-09-27）
 
 把上批遗留的「db 腿传输仍是静态单次连接」闭环：LoginApp 对 DBApp 的
@@ -937,7 +988,10 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
   / machine.terminate RPC、ProcessGovernPolicy 独立策略、全动作审计入
   中心环形）
 - ~~端口占用扫描与二进制版本探测~~（2026-09-26 完成，Linux；Windows/macOS 留空）
-- Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）
+- ~~Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）~~
+  （2026-09-27 完成 macOS 实现：CPU/内存/网络 Apple 胶合 + probe_detail
+  共用口径（Linux 单测直测）；Linux 运行时本机已验，macOS 运行时由 CI
+  macos-latest job 首验。Windows 网络探针仍缺，本条只承诺 Linux/macOS）
 - ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon
   TCP 端点；控制面中心注册待 Ops Control Plane 对接时一并做）
 - ~~与 `Ops Control Plane` 的注册、上报和审计对接~~（2026-09-26 完成：
@@ -946,7 +1000,9 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 - ~~与 `Telemetry` 的指标、日志、trace 联动~~（2026-09-26 完成控制面切片：
   machine/ops 双侧计数与水位仪表、结构化审计与生命周期日志、
   execute SpanScope + 日志自动 trace 关联；OTel 导出器仍开放）
-- 更完整的单元测试与跨平台 CI 构建矩阵
+- 更完整的单元测试与跨平台 CI 构建矩阵（矩阵部分 2026-09-27 落地：
+  新增 macos-latest job（复用 clang-debug preset），矩阵成
+  linux 三连 + coverage 门 + windows + macos；「更完整的单元测试」仍开放）
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 

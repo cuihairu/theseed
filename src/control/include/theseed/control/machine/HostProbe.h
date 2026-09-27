@@ -3,10 +3,42 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <utility>
 
 namespace theseed::control::machine {
+
+// 探针的平台无关纯计算面：Linux/macOS 的 syscall 胶合层把原始读数整理后
+// 汇入这里，聚合口径只有一份。全平台编译——Linux 单测直接调用驱动全分支
+// （macOS 胶合本身本机不可运行，由 CI macos job 端到端首验）。
+namespace probe_detail {
+
+// 单个网卡的累计计数器（胶合层从 /proc/net/dev 或 getifaddrs 提取）。
+struct LinkCounters {
+    bool loopback = false;
+    std::uint64_t rxBytes = 0;
+    std::uint64_t txBytes = 0;
+};
+
+// 单行累加：非回环才计入 total。回环排除判据只在此实现一份，
+// 流式（Linux 逐行解析）与批量（macOS 全表遍历）两种消费形态共用。
+void accumulateLinkCounters(LinkCounters& total, const LinkCounters& row);
+
+// 聚合除回环外的全部网卡流量 (rx 合计, tx 合计)——Linux 以接口名 "lo"、
+// macOS 以 IFF_LOOPBACK 标志置位 loopback，同一份求和与排除逻辑。
+std::pair<std::uint64_t, std::uint64_t> aggregateLinkCounters(std::span<const LinkCounters> rows);
+
+// Apple host_cpu_load_info 的四态 ticks 拆成 (idle, total)：忙 =
+// user+system+nice、idle = CPU_STATE_IDLE（与活动监视器同口径）。
+std::pair<std::uint64_t, std::uint64_t> splitCpuTicksApple(std::uint64_t user, std::uint64_t nice,
+                                                           std::uint64_t system, std::uint64_t idle);
+
+// used/total 百分比（0-100 线性）；total==0 返回 0（内存/磁盘共用的
+// 分母防护）。used>total 的异常读数不裁剪——上层展示按 [0,100] 处理。
+double usagePercent(std::uint64_t used, std::uint64_t total);
+
+}  // namespace probe_detail
 
 struct HostSummary {
     std::string hostname;

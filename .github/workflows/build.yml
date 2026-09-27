@@ -81,3 +81,22 @@ jobs:
 
       - name: Test
         run: ctest --preset msvc-debug
+
+  # macOS 等价主机探针（HostProbe 的 CPU/内存/网络 Apple 胶合）在 Linux
+  # 开发机上无法运行期验证，由本 job 首验：clang-debug preset 只用裸
+  # clang++ + Ninja，macOS runner（Apple clang、Ninja 预装）直接复用；
+  # MySQL 等缺依赖的测试沿仓库既有环境门控自跳，不在此硬编码。
+  macos:
+    name: macos-clang-debug
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake --preset clang-debug
+
+      - name: Build
+        run: cmake --build --preset clang-debug
+
+      - name: Test
+        run: ctest --preset clang-debug
