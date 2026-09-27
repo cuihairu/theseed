@@ -31,7 +31,10 @@ namespace {
 bool extractJsonStringField(const std::vector<std::byte>& payload,
                             const char* key,
                             std::string& out) {
-    const std::string text(payload.begin(), payload.end());
+    // byte→char 按位重解释（std::string(迭代器区间) 走 char_traits::assign
+    // 在 gcc-13 libstdc++ 上对 std::byte 直接编译失败；新 libstdc++ 的
+    // 按位拷贝快速路径语义与此完全一致）。
+    const std::string text(reinterpret_cast<const char*>(payload.data()), payload.size());
     const std::string needle = std::string("\"") + key + "\":\"";
     const std::size_t pos = text.find(needle);
     if (pos == std::string::npos) {
@@ -483,7 +486,8 @@ void LoginApp::handleInvocation(const runtime::RuntimeInvocation& inv) {
         return;
     }
     if (inv.method == control::machine::MachineMethod::kError) {
-        const std::string reason(inv.payload.begin(), inv.payload.end());
+        const std::string reason(reinterpret_cast<const char*>(inv.payload.data()),
+                                 inv.payload.size());
         const foundation::LogAttribute reasonAttr = {"reason", reason};
         foundation::logWarn("login.machine.probe.rejected", {reasonAttr});
         return;

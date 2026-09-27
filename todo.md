@@ -38,6 +38,16 @@
    既有 clang-debug preset（裸 clang++ + Ninja，macOS runner 原生满足），
    缺依赖的测试沿仓库既有环境门控自跳（MySQL 无 toolchain → 编译期回退
    FileEntityStore，与 linux/windows 同口径）。
+5. **随批修复：Build and Test 的既有红基线（push 后如实暴露）**：本批
+   push 时该 workflow 已连续数提交全 job 红（本地双树绿属盲区——本地无
+   libpq/MSVC/macOS）。逐一根因修复：LoginApp 两处 std::byte 迭代区间
+   构造 std::string（gcc-13 libstdc++ 走 char_traits::assign 直接编译
+   失败，新版库的按位拷贝快速路径语义与显式 reinterpret 一致）；
+   SessionStore 的 zrange 裸 -1 字面量（MSVC C4245，改 size_t 哨兵，
+   与 RedisProvider.cpp 既有惯例同款）；tests 侧 -Wno-missing-field-
+   initializers 未按编译器分流（MSVC D8021，加 NOT MSVC 守卫）；
+   TransportHub.h 缺 #include <memory>（libstdc++ 经 unordered_map 传递
+   引入，Apple libc++ 不引，全仓头文件扫描确认仅此一处）。
 
 **边界与遗留（如实记录）**：
 - Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存

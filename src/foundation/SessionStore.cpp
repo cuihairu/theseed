@@ -71,7 +71,10 @@ std::vector<SessionView> SessionStore::listSessions() {
     std::vector<SessionView> views;
     // 索引与会话键是两次写、无法原子：枚举顺路清账（过期/损坏条目在这里
     // 摘除），保证吐出的每一行都对应一条活着且可解码的会话。
-    for (const auto& member : redis_->zrange(std::string(kIndexKey), 0, -1)) {
+    // stop 用 size_t 哨兵表示"直到末尾"（实现内 min 截断；与
+    // RedisProvider.cpp 同款写法——裸 -1 字面量在 MSVC 触发 C4245）。
+    for (const auto& member :
+         redis_->zrange(std::string(kIndexKey), 0, static_cast<std::size_t>(-1))) {
         const auto& token = member.first;
         auto blob = redis_->get(std::string(kSessionKeyPrefix) + token);
         if (!blob) {

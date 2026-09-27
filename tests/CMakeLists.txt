@@ -3,7 +3,9 @@
 # 用法：测试目标按序链接 `theseed_project_options theseed_test_options`——
 # 顺序保证豁免落在 -Wextra 之后生效。
 add_library(theseed_test_options INTERFACE)
-target_compile_options(theseed_test_options INTERFACE -Wno-missing-field-initializers)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(theseed_test_options INTERFACE -Wno-missing-field-initializers)
+endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(
         theseed_test_options INTERFACE -Wno-missing-designated-field-initializers)

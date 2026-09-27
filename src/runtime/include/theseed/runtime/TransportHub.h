@@ -3,6 +3,7 @@
 #include "theseed/runtime/RuntimeTransport.h"
 
 #include <cstddef>
+#include <memory>  // libstdc++ 经 unordered_map 传递引入 shared_ptr，libc++ 不引——显式包含
 #include <mutex>
 #include <unordered_map>
 #include <vector>
