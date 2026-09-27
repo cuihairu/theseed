@@ -22,10 +22,16 @@ Linux/macOS」尾注是陈旧记录——实现实际已由同日「Windows 等�
      -Wextra` 复跑零警告（真实 Windows 头复刻 MS SDK 守卫结构）。
 3. **台账校准**：遗留事项「网络流量统计与多网卡聚合」补 Windows 完成
    注记；「等价主机探针」条目的「仍缺」尾注改指闭合批。
+4. **顺手修 flake**（验证轮实caught）：clang 树全量跑 theseed_host_probe_test
+   瞬态失败一次（复跑即绿，150 连跑不复现）。根因：testRealProcSources
+   直读真实环境，单采样窗口撞上瞬态噪声（容器 veth 两读之间摘除使主机
+   累计回退 / fd 短暂耗尽 / space() 瞬时错误）即误报。修法不改任何断言
+   ——违例时取新鲜样本对复验同一组断言，连续两窗违例才判失败；探测臂
+   不计失败，只有定论臂落 PASS/FAIL。平台中立，三腿 CI 同受益。
 
-无功能改动、无测试改动——HostProbeTest 的 Windows 归一单测为上批既有，
-本轮随全量套件复跑（gcc-coverage 115/115、clang-debug 115/115、门禁
-行/函数 100%）。
+无功能改动（src/ 零改动）——HostProbeTest 的 Windows 归一单测为上批
+既有，本轮随全量套件复跑（gcc-coverage 115/115、clang-debug 115/115、
+门禁行/函数 100%）。
 
 - 规则 c 收尾巡检（2026-09-27，@28f240a）：工作树干净、无遗留脏文件；双树全量 gcc-coverage ctest 115/115 全绿（71.9s）+ clang-debug 115/115 全绿（29.0s），gcovr 门禁（树内根跑，--merge-mode-functions=merge-use-line-min）行 11682/11682 = 100%、函数 1644/1644 = 100%、分支 97.8% 信息性——零失败零 flake，本轮无修复项。
 

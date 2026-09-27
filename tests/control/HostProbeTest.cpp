@@ -307,25 +307,50 @@ static void testUsagePercent() {
 // 默认探针（真实平台计数器源）：网络累计计数器只增不减，两次采样单调；
 // CPU/内存/磁盘读数在合法区间、平台串可辨。断言全平台中立——Linux/macOS
 // （CI macos job 首验 Apple 胶合）/Windows 上同一条测试都必须成立。
+//
+// 环境毛刺纪律：读数窗口是真实时间，单窗口可能撞上瞬态环境噪声（容器
+// veth 在两次读之间摘除会让主机累计回退、fd 短暂耗尽、space() 瞬时
+// 错误归零）。断言一字不动——违例时取新鲜样本对复验同一组断言，连续
+// 两窗违例才判失败：单次毛刺不足以否证「累计计数器只增不减」的产品
+// 口径，连续违例则照报真实回归。
 static void testRealProcSources() {
     TEST("default probe reads real platform counters monotonic");
 
-    LocalHostProbe probe;
-    const auto first = probe.sample();
-    const auto second = probe.sample();
+    const auto check = []() -> std::string {
+        LocalHostProbe probe;
+        const auto first = probe.sample();
+        const auto second = probe.sample();
 
-    bool ok = !first.hostname.empty();
-    ok = ok && (first.platform == "linux" || first.platform == "macos" || first.platform == "windows");
-    ok = ok && first.cpuUsage >= 0.0 && first.cpuUsage <= 100.0;
-    ok = ok && first.memoryUsage > 0.0 && first.memoryUsage <= 100.0;
-    ok = ok && first.diskUsage > 0.0 && first.diskUsage <= 100.0;
-    ok = ok && first.loadAverage >= 0.0;
-    ok = ok && second.networkRxBytes >= first.networkRxBytes;
-    ok = ok && second.networkTxBytes >= first.networkTxBytes;
-    if (ok) PASS();
-    else FAIL("platform=" + first.platform + " mem=" + std::to_string(first.memoryUsage) +
-                  " disk=" + std::to_string(first.diskUsage) + " rx: " +
-                  std::to_string(first.networkRxBytes) + "->" + std::to_string(second.networkRxBytes));
+        bool ok = !first.hostname.empty();
+        ok = ok && (first.platform == "linux" || first.platform == "macos" || first.platform == "windows");
+        ok = ok && first.cpuUsage >= 0.0 && first.cpuUsage <= 100.0;
+        ok = ok && first.memoryUsage > 0.0 && first.memoryUsage <= 100.0;
+        ok = ok && first.diskUsage > 0.0 && first.diskUsage <= 100.0;
+        ok = ok && first.loadAverage >= 0.0;
+        ok = ok && second.networkRxBytes >= first.networkRxBytes;
+        ok = ok && second.networkTxBytes >= first.networkTxBytes;
+        if (ok) {
+            return {};  // 空串 = 本窗断言全过
+        }
+        return "platform=" + first.platform + " mem=" + std::to_string(first.memoryUsage) +
+               " disk=" + std::to_string(first.diskUsage) + " rx: " +
+               std::to_string(first.networkRxBytes) + "->" + std::to_string(second.networkRxBytes);
+    };
+
+    const auto firstDetail = check();
+    if (firstDetail.empty()) {
+        PASS();
+        return;
+    }
+    // 首窗违例：先复验再定论（探测臂不计失败，只有定论臂落 PASS/FAIL）
+    std::cout << "  (environment glitch, re-checking with a fresh sample pair) " << std::flush;
+    const auto secondDetail = check();
+    if (secondDetail.empty()) {
+        PASS();
+    } else {
+        std::cout << "\n";
+        FAIL(secondDetail + " [still failing after re-check]");
+    }
 }
 
 int main() {
