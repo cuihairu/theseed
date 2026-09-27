@@ -370,7 +370,7 @@ int main() {
             CHECK(admin.execute("CREATE VIEW _account_index AS SELECT 1"),
                   "create trap view");
             PostgreSQLEntityStore::Config trap;
-            trap.pg = cfg;
+            trap.pg = adminCfg;
             {
                 PostgreSQLEntityStore store(std::move(trap));
                 CHECK(!store.init(), "init fails when _account_index is a view");
@@ -379,7 +379,7 @@ int main() {
             }
             CHECK(admin.execute("DROP VIEW _account_index"), "drop trap view");
             PostgreSQLEntityStore::Config repair;
-            repair.pg = cfg;
+            repair.pg = adminCfg;
             PostgreSQLEntityStore store(std::move(repair));
             CHECK(store.init(), "repair schema after view trap");
         }
@@ -387,7 +387,7 @@ int main() {
         // 同名但缺列的表：CREATE TABLE IF NOT EXISTS 静默跳过，而
         // CREATE INDEX ... (entity_id) 因列不存在报错
         {
-            theseed::db::PostgreSQLConnection admin(cfg);
+            theseed::db::PostgreSQLConnection admin(adminCfg);
             CHECK(admin.connect(), "admin connect (index trap)");
             admin.execute("DROP INDEX IF EXISTS idx_account_entity_id");
             admin.execute("DROP TABLE IF EXISTS idx_account_entity_id");
@@ -398,7 +398,7 @@ int main() {
                       "  password BYTEA NOT NULL)"),
                   "create entity_id-less trap table");
             PostgreSQLEntityStore::Config trap;
-            trap.pg = cfg;
+            trap.pg = adminCfg;
             PostgreSQLEntityStore store(std::move(trap));
             CHECK(!store.init(), "init fails when index column missing");
             // createSchema 的 index 分支前缀是 "create _account_index index failed"
@@ -406,7 +406,7 @@ int main() {
                   "error mentions index step");
             CHECK(admin.execute("DROP TABLE _account_index"), "drop trap table");
             PostgreSQLEntityStore::Config repair;
-            repair.pg = cfg;
+            repair.pg = adminCfg;
             PostgreSQLEntityStore repaired(std::move(repair));
             CHECK(repaired.init(), "repair schema after index trap");
         }
@@ -414,7 +414,7 @@ int main() {
         // 同名但缺 updated_at 列的实体表：save 走 ensureTable 的
         // CREATE INDEX ON (updated_at) 失败
         {
-            theseed::db::PostgreSQLConnection admin(cfg);
+            theseed::db::PostgreSQLConnection admin(adminCfg);
             CHECK(admin.connect(), "admin connect (ensureTable trap)");
             admin.execute("DROP TABLE IF EXISTS \"idx_updated_tbl_Cov\"");
             admin.execute("DROP TABLE IF EXISTS \"tbl_Cov\"");
@@ -424,7 +424,7 @@ int main() {
                       "  data BYTEA NOT NULL)"),
                   "create updated_at-less trap table");
             PostgreSQLEntityStore::Config trap;
-            trap.pg = cfg;
+            trap.pg = adminCfg;
             PostgreSQLEntityStore store(std::move(trap));
             CHECK(store.init(), "init ok before ensureTable trap");
             EntityData cov;
