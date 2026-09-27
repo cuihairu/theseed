@@ -21,6 +21,16 @@ struct LinkCounters {
     std::uint64_t txBytes = 0;
 };
 
+// RFC 2863 / IANA ifType 的软件回环接口类型号。Windows MIB_IF_ROW2.Type
+// 与 SDK 的 IF_TYPE_SOFTWARE_LOOPBACK 同值（Windows 胶合里有 static_assert
+// 对照 SDK 宏），Linux 单测对本字面量钉死，防止无意识改动漂移。
+inline constexpr std::uint32_t kIfTypeSoftwareLoopback = 24;
+
+// Windows 胶合的行归一：MIB_IF_ROW2.Type → 回环标记（判据常量上方单份），
+// 64 位八位组计数原样透传；Linux 单测直测驱动 true/false 两臂。
+LinkCounters windowsLinkCounters(std::uint32_t ifType, std::uint64_t rxBytes,
+                                 std::uint64_t txBytes);
+
 // 单行累加：非回环才计入 total。回环排除判据只在此实现一份，
 // 流式（Linux 逐行解析）与批量（macOS 全表遍历）两种消费形态共用。
 void accumulateLinkCounters(LinkCounters& total, const LinkCounters& row);

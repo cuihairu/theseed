@@ -229,6 +229,45 @@ static void testAggregateLinkCounters() {
                   " tx=" + std::to_string(mixed.second));
 }
 
+// windowsLinkCounters：MIB_IF_ROW2.Type → 回环归一（ifType 24 判据）+
+// 64 位计数透传（Windows 胶合的行构造面在 Linux 直测全分支；求和排除
+// 仍走 aggregate/accumulate 共用口径）。
+static void testWindowsLinkCounters() {
+    TEST("windowsLinkCounters maps ifType 24 to loopback and passes counters");
+
+    bool ok = true;
+    // 软件回环臂：RFC 2863 ifType 24 → 排除
+    const auto loop = probe_detail::windowsLinkCounters(probe_detail::kIfTypeSoftwareLoopback, 100, 200);
+    ok = ok && loop.loopback && loop.rxBytes == 100 && loop.txBytes == 200;
+
+    // 常量钉死 IANA 值（Windows 胶合另有 static_assert 对照 SDK 宏）
+    ok = ok && probe_detail::kIfTypeSoftwareLoopback == 24;
+
+    // 物理网卡臂：以太网(6)/其他(1)/保留(0) 均不判回环，计数原样透传
+    const auto eth = probe_detail::windowsLinkCounters(6, 7, 9);
+    ok = ok && !eth.loopback && eth.rxBytes == 7 && eth.txBytes == 9;
+    const auto other = probe_detail::windowsLinkCounters(1, 3, 1);
+    ok = ok && !other.loopback;
+    const auto zero = probe_detail::windowsLinkCounters(0, 0, 0);
+    ok = ok && !zero.loopback && zero.rxBytes == 0 && zero.txBytes == 0;
+
+    // 64 位大数透传（32 位 dwInOctets 会回绕的口径点）
+    const auto wide = probe_detail::windowsLinkCounters(6, 0xFFFFFFFFFFFFFFFFULL, 0x8000000000000000ULL);
+    ok = ok && !wide.loopback && wide.rxBytes == 0xFFFFFFFFFFFFFFFFULL &&
+        wide.txBytes == 0x8000000000000000ULL;
+
+    // 归一进聚合：回环行不计入、物理行求和（与 Linux/macOS 同一份求和）
+    const std::array<probe_detail::LinkCounters, 3> rows{
+        probe_detail::windowsLinkCounters(probe_detail::kIfTypeSoftwareLoopback, 1000, 2000),
+        probe_detail::windowsLinkCounters(6, 7, 9),
+        probe_detail::windowsLinkCounters(234, 3, 1)};
+    const auto mixed = probe_detail::aggregateLinkCounters(rows);
+    ok = ok && mixed.first == 10 && mixed.second == 10;
+
+    if (ok) PASS();
+    else FAIL("loop arm or counter passthrough mismatch");
+}
+
 // splitCpuTicksApple：busy=user+nice+system、idle 单列、total=busy+idle
 // （macOS HOST_CPU_LOAD_INFO 四态读数进此纯函数，采样差值逻辑不变）。
 static void testSplitCpuTicksApple() {
@@ -299,6 +338,7 @@ int main() {
     testClampBounds();
     testZeroWindowNoPriming();
     testAggregateLinkCounters();
+    testWindowsLinkCounters();
     testSplitCpuTicksApple();
     testUsagePercent();
     testRealProcSources();

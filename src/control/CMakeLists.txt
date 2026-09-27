@@ -14,6 +14,11 @@ target_link_libraries(
     PUBLIC theseed_core
     PUBLIC theseed_runtime)
 
+if(WIN32)
+    # HostProbe 的网络探针走 IP Helper API（GetIfTable2）
+    target_link_libraries(theseed_control PUBLIC iphlpapi)
+endif()
+
 target_include_directories(
     theseed_control
     PUBLIC

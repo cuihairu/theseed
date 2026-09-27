@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <string>
 #include <system_error>
@@ -16,6 +17,7 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#include <iphlpapi.h>  // GetIfTable2/FreeMibTable：MIB_IF_ROW2 的 64 位八位组计数
 #else
 #include <unistd.h>
 #if defined(__linux__)
@@ -56,6 +58,13 @@ std::pair<std::uint64_t, std::uint64_t> aggregateLinkCounters(std::span<const Li
     return {total.rxBytes, total.txBytes};
 }
 
+LinkCounters windowsLinkCounters(std::uint32_t ifType, std::uint64_t rxBytes,
+                                 std::uint64_t txBytes) {
+    // 回环以 RFC 2863 ifType 判据（SDK IF_TYPE_SOFTWARE_LOOPBACK 同值，
+    // Windows 胶合处 static_assert 对照）；排除与求和仍走单份 accumulate。
+    return {ifType == kIfTypeSoftwareLoopback, rxBytes, txBytes};
+}
+
 std::pair<std::uint64_t, std::uint64_t> splitCpuTicksApple(std::uint64_t user, std::uint64_t nice,
                                                            std::uint64_t system, std::uint64_t idle) {
     const std::uint64_t busyTicks = user + nice + system;
@@ -72,6 +81,13 @@ double usagePercent(std::uint64_t used, std::uint64_t total) {
 }  // namespace probe_detail
 
 namespace {
+
+#ifdef _WIN32
+// GetIfTable2 的表必须以 FreeMibTable 归还；RAII 包装保证早退路径不漏。
+struct FreeMibTableDeleter {
+    void operator()(MIB_IF_TABLE2* table) const noexcept { FreeMibTable(table); }
+};
+#endif
 
 std::string detectPlatform() {
 #if defined(_WIN32)
@@ -345,8 +361,28 @@ std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
     }
     freeifaddrs(interfaces);
     return probe_detail::aggregateLinkCounters(rows);
+#elif defined(_WIN32)
+    // GetIfTable2 给 MIB_IF_ROW2 的 64 位八位组计数（旧 MIB_IFROW 的 32 位
+    // dwInOctets 会回绕）；回环以 RFC 2863 ifType 判据（常量与 SDK 宏在此
+    // 编译期对照），归一与聚合口径与 Linux/macOS 共用 probe_detail 单份实现。
+    // Windows 胶合在 Linux 上不参编，由 CI windows leg 编译并端到端首验。
+    static_assert(probe_detail::kIfTypeSoftwareLoopback == IF_TYPE_SOFTWARE_LOOPBACK,
+                  "shared loopback ifType must match the SDK constant");
+    MIB_IF_TABLE2* rawTable = nullptr;
+    if (GetIfTable2(&rawTable) != NO_ERROR || rawTable == nullptr) {
+        return {0, 0};  // 查询失败兜底：读数未就绪不产生异常值
+    }
+    std::unique_ptr<MIB_IF_TABLE2, FreeMibTableDeleter> table(rawTable);
+
+    std::vector<probe_detail::LinkCounters> rows;
+    rows.reserve(static_cast<std::size_t>(table->NumberOfEntries));
+    for (ULONG index = 0; index < table->NumberOfEntries; ++index) {
+        const MIB_IF_ROW2& row = table->TableEntry[index];
+        rows.push_back(probe_detail::windowsLinkCounters(row.Type, row.InOctets, row.OutOctets));
+    }
+    return probe_detail::aggregateLinkCounters(rows);
 #else
-    // Windows 的等价网络探针仍缺（遗留事项 940 只承诺 Linux/macOS 等价探针）
+    // 矩阵外其他平台兜底（Linux/macOS/Windows 之外的平台组合）
     return {0, 0};
 #endif
 }

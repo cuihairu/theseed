@@ -114,10 +114,22 @@
    （544e6ee）、TcpConnection recv 真实错误臂豁免（85712fa）、BaseApp
    SpaceId C4244（575fec0）、Linux 专用测试按 `UNIX AND NOT APPLE`
    门控（a2dfc91）。
+10. **Windows 等价网络流量探针补齐（2026-09-27）**：胶合走 IP Helper
+   API `GetIfTable2`（`MIB_IF_ROW2` 的 64 位 InOctets/OutOctets，旧
+   32 位 dwInOctets 会回绕；表以 `FreeMibTableDeleter` RAII 归还），
+   回环判据以 RFC 2863 ifType=24（`probe_detail::
+   kIfTypeSoftwareLoopback`，Windows 胶合处 `static_assert` 对照 SDK
+   宏 `IF_TYPE_SOFTWARE_LOOPBACK`）；行归一 `windowsLinkCounters` 与
+   聚合口径 `aggregateLinkCounters` 全平台单份，Linux 单测直测全分支
+   （回环/物理/大数透传/归一入聚合）。链接：WIN32 下 theseed_control
+   链 iphlpapi（对齐 theseed_runtime 的 ws2_32 先例）。
 
 **边界与遗留（如实记录）**：
-- Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存
-  本已有 GlobalMemoryStatusEx/GetSystemTimes 实现）。
+- ~~Windows 网络等价探针仍缺~~：**已补齐**（item 10）。Windows 胶合
+  本机不可编译验证，沿用 macOS 批次口径：纯函数 Linux 单测全分支直测
+  已过，胶合由 CI windows leg 编译并端到端首验。
+- Windows 侧 GetIfTable2 失败兜底返回 {0,0}（与 macOS getifaddrs 失败
+  臂同口径），系统调用失败臂 CI 不可定向注入。
 - macOS 侧 `if_data64` 字段布局、`HOST_VM_INFO64` 口径、页大小换算均为
   文档/通行实现口径，本机不可运行验证，以 CI macos job 首跑为准。
 - 内存占用不含 unloaded/file-backed 页（与活动监视器"已用内存"同近似，
