@@ -83,6 +83,7 @@ jobs:
           gcovr --filter src/ --exclude-throw-branches \
             --exclude-unreachable-branches \
             --fail-under-line 100 --fail-under-function 100 \
+            --gcov-executable gcov-14 \
             --gcov-ignore-errors=no_working_dir_found \
             --print-summary
 

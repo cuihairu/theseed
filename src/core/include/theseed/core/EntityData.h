@@ -46,8 +46,8 @@ struct EntityData {
     std::string entityType;
     std::vector<PropertyData> properties;
 
-    PropertyData* findProperty(PropertyId id);
-    const PropertyData* findProperty(PropertyId id) const;
+    PropertyData* findProperty(PropertyId propertyId);
+    const PropertyData* findProperty(PropertyId propertyId) const;
     PropertyData* findPropertyByName(const std::string& name);
     const PropertyData* findPropertyByName(const std::string& name) const;
 };

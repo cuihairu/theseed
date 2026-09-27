@@ -31,16 +31,16 @@ bool PropertyData::isVariableSized(DataType type) {
     return type == DataType::String || type == DataType::Blob;
 }
 
-PropertyData* EntityData::findProperty(PropertyId id) {
+PropertyData* EntityData::findProperty(PropertyId propertyId) {
     for (auto& prop : properties) {
-        if (prop.id == id) return &prop;
+        if (prop.id == propertyId) return &prop;
     }
     return nullptr;
 }
 
-const PropertyData* EntityData::findProperty(PropertyId id) const {
+const PropertyData* EntityData::findProperty(PropertyId propertyId) const {
     for (const auto& prop : properties) {
-        if (prop.id == id) return &prop;
+        if (prop.id == propertyId) return &prop;
     }
     return nullptr;
 }
