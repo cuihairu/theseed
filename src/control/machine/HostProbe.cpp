@@ -15,9 +15,22 @@
 #include <vector>
 
 #ifdef _WIN32
+// GetIfTable2 是 Vista 起 API：显式声明版本下限。声明本职在
+// <netioapi.h>（MIB_IF_TABLE2/GetIfTable2/FreeMibTable），iphlpapi.h
+// 是否含它取决于 NTDDI 判定，显式包含 + 版本宏双保险。
+#ifndef WINVER
+#define WINVER 0x0600
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#ifndef NTDDI_VERSION
+#define NTDDI_VERSION 0x06000000  // NTDDI_VISTA
+#endif
 #define NOMINMAX
 #include <windows.h>
-#include <iphlpapi.h>  // GetIfTable2/FreeMibTable：MIB_IF_ROW2 的 64 位八位组计数
+#include <iphlpapi.h>
+#include <netioapi.h>
 #else
 #include <unistd.h>
 #if defined(__linux__)
