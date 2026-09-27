@@ -2,6 +2,7 @@
 
 #include "theseed/foundation/Logger.h"
 #include "theseed/foundation/Metrics.h"
+#include "theseed/runtime/RuntimeTransport.h"  // mintRequestId（中心本地动作的发起方铸造）
 
 #include <algorithm>
 #include <utility>
@@ -273,6 +274,10 @@ std::vector<machine::NodeProfileEntry> OpsControlCenter::queryProfiles(
     machine::AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = requester;
+    // §6.2 requestId：中心本地动作是发起方——每次尝试（含拒绝）铸一个
+    // id，拒绝/接受臂共用（一次尝试一条记录）。当前无 Gateway 层调用方
+    // 上下文（04 §4.2 OpsCommandContext），接入后改由调用方供给。
+    entry.requestId = runtime::mintRequestId();
     entry.command = kCenterProfileQueryCommand;
     entry.args = describeQuery(query);
 
@@ -341,6 +346,9 @@ bool OpsControlCenter::downloadProfileArtifact(runtime::ComponentId requester,
     machine::AuditEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.source = requester;
+    // §6.2 requestId：同 queryProfiles——中心本地动作发起方铸造，
+    // 拒绝/接受臂共用一次尝试的一个 id。
+    entry.requestId = runtime::mintRequestId();
     entry.command = kCenterProfileDownloadCommand;
     entry.args = nodeId + ":" + std::to_string(handle);
 
@@ -388,6 +396,18 @@ std::vector<machine::NodeAuditEntry> OpsControlCenter::auditTrail(
     trail.reserve(auditEntries_.size());
     for (const auto& entry : auditEntries_) {
         if (entry.nodeId == nodeId) {
+            trail.push_back(entry);
+        }
+    }
+    return trail;
+}
+
+std::vector<machine::NodeAuditEntry> OpsControlCenter::auditTrail(
+    std::uint64_t requestId) const {
+    std::vector<machine::NodeAuditEntry> trail;
+    trail.reserve(auditEntries_.size());
+    for (const auto& entry : auditEntries_) {
+        if (entry.entry.requestId == requestId) {
             trail.push_back(entry);
         }
     }

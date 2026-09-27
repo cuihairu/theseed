@@ -2,6 +2,7 @@
 
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -72,5 +73,18 @@ private:
     std::deque<RuntimeInvocation> invocations_;
     TransportStats stats_;
 };
+
+// §6.2 关联 id 铸造（发起方边界用）：进程内单调递增、逐请求唯一；0 恒
+// 不返回（0 = 未携带的哨兵值，见 RuntimeInvocation::requestId）。唯一性
+// 口径沿用规格注记「逐请求唯一是发起方责任」——跨进程/跨重启唯一性由
+// 部署方保证（当前唯一生产发起方是单进程组件：LoginApp 注册探针与
+// 中心本地动作；审计环形容量有界，进程内唯一已覆盖对账窗口）。
+// 注：置于全部类定义之后——插在类间会移动 IRuntimeTransport 析构克隆
+// 的 gcov 行归属点（不同 TU 记到不同行），触发 gcovr 严格合并断言
+//（CI 覆盖率腿同雷）。
+inline std::uint64_t mintRequestId() {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 }  // namespace theseed::runtime

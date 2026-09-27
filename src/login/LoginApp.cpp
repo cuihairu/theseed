@@ -260,10 +260,12 @@ void LoginApp::attemptMachineLink() {
     machineTransport_ = std::move(transport);
     // 注册探针 = §8 只读探活语义的 machine.snapshot：既向 daemon 自报
     // 身份（推送通道的注册面），也验证策略接线（应答 ok / error 经
-    // handleInvocation 记录联动状态）。
+    // handleInvocation 记录联动状态）。§6.2：探针是 daemon 审计面视角的
+    // 客户端请求——由发起方在此铸造关联 id，daemon 侧只透传入审计条目。
     runtime::RuntimeInvocation probe;
     probe.sourceComponent = config_.localComponentId;
     probe.targetComponent = config_.machineComponentId;
+    probe.requestId = runtime::mintRequestId();
     probe.method = control::machine::MachineMethod::kSnapshot;
     if (hub_->send(std::move(probe)) != runtime::SendResult::Accepted) {
         // 探针都发不出（对端 transport 报 NotConnected）：本次尝试未

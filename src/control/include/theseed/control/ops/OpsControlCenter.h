@@ -106,6 +106,12 @@ public:
     std::vector<machine::NodeAuditEntry> auditTrail() const;
     std::vector<machine::NodeAuditEntry> auditTrail(
         const std::string& nodeId) const;
+    // §6.2 请求级关联：按 requestId 取同一请求在环形里的全部记录
+    //（跨节点聚合——同一请求经 daemon 落账与中心本地动作可共用一个 id
+    // 对账；0 = 未携带，按哨兵语义查询只会命中未携带帧的记录）。时间
+    // 升序，与追加序一致。
+    std::vector<machine::NodeAuditEntry> auditTrail(
+        std::uint64_t requestId) const;
     std::size_t auditCount() const;
 
     // 中心侧剖面查询（04 §7"按 entity / entity type / process 查询当前

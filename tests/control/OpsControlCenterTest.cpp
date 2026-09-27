@@ -79,6 +79,14 @@ NodeAuditEntry makeAudit(const std::string& nodeId, const std::string& command) 
     return entry;
 }
 
+// 带 §6.2 关联 id 的假件：请求级关联查询的驱动面。
+NodeAuditEntry makeAudit(const std::string& nodeId, const std::string& command,
+                         std::uint64_t requestId) {
+    NodeAuditEntry entry = makeAudit(nodeId, command);
+    entry.entry.requestId = requestId;
+    return entry;
+}
+
 // 固定 hostname 的探针假件：验证 nodeId 取自快照 hostname。
 class FixedHostProbe final : public IHostProbe {
 public:
@@ -401,6 +409,28 @@ int main() {
                "per-node filter keeps order");
         EXPECT(center.auditTrail("ghost").empty(),
                "unknown node has no trail");
+        PASS();
+    }
+
+    TEST("audit trail correlates a request across records by requestId");
+    {
+        OpsControlCenter center;
+        // §6.2 请求级关联：同一请求（id=4242）在两个节点的 daemon 落账
+        // 记录，环形按 id 取回且保持追加序；未携带帧（0 = 哨兵）按同
+        // 一过滤语义命中；未知 id 空。
+        center.publish(makeAudit("node-a", "start", 4242));
+        center.publish(makeAudit("node-a", "stop"));
+        center.publish(makeAudit("node-b", "restart", 4242));
+
+        const auto correlated = center.auditTrail(std::uint64_t{4242});
+        EXPECT(correlated.size() == 2 && correlated[0].nodeId == "node-a" &&
+                   correlated[1].nodeId == "node-b",
+               "same-request records across nodes correlate in append order");
+        const auto carried = center.auditTrail(std::uint64_t{0});
+        EXPECT(carried.size() == 1 && carried[0].entry.command == "stop",
+               "sentinel 0 queries records without a request id");
+        EXPECT(center.auditTrail(std::uint64_t{7}).empty(),
+               "unknown request id has no trail");
         PASS();
     }
 

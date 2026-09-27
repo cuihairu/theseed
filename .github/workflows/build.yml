@@ -82,10 +82,15 @@ jobs:
         run: |
           gcovr --filter src/ --exclude-throw-branches \
             --exclude-unreachable-branches \
+            --merge-mode-functions=merge-use-line-min \
             --fail-under-line 100 --fail-under-function 100 \
             --gcov-executable gcov-14 \
             --gcov-ignore-errors=no_working_dir_found \
             --print-summary
+        # merge-use-line-min：gcovr 8 起默认 strict——头文件里 =default 析构
+        # （IRuntimeTransport 等）的隐式克隆按 TU 记到不同行（声明行 vs 实例化
+        # 行），strict 合并直接抛 GcovrMergeAssertionError。该析构是 LCOV 豁免
+        # 的平凡空体，取最小行合并即可；分支/行计数不受影响。
 
   windows:
     name: windows-msvc-debug

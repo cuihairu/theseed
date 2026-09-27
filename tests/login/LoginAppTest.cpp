@@ -904,6 +904,8 @@ int main() {
                 transport->probe.sourceComponent != kLocalComponent ||
                 transport->probe.targetComponent != kMachineComponent)
                 FAIL("registration probe must be machine.snapshot from self to daemon");
+            if (transport->probe.requestId == 0)
+                FAIL("registration probe must carry a minted request id (04 §6.2)");
             app.tick();  // ack 应答排空（link ready 路由）
             if (transport->pendingCount() != 0)
                 FAIL("snapshot ack must be drained by tick");

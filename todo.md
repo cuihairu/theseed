@@ -1,5 +1,46 @@
 # TODO
 
+## §6.2 requestId 全链路关联：发起方铸造 + 中心环形按请求查询（2026-09-27）
+
+巡检派发项。协议帧字段与 daemon 透传已由「Phase 2 余项」批落地，
+本批补齐剩余半边——发起方铸造与请求级关联查询：
+
+1. **铸造助手（协议层）**：RuntimeTransport.h +`mintRequestId()`——
+   进程内单调递增、逐请求唯一，0 恒不返回（0 = 未携带哨兵）。唯一性
+   口径沿用规格注记「逐请求唯一是发起方责任」；跨进程/跨重启唯一性
+   由部署方保证（当前生产发起方均为单进程组件，审计环形容量有界，
+   进程内唯一已覆盖对账窗口——假设已注明）。
+2. **LoginApp 注册探针铸造**（生产侧唯一的 daemon 客户端帧）：探针
+   machine.snapshot 发出前铸造 id，经 hub → daemon 审计条目透传
+   （daemon 侧纪律不变：只透传不铸造）。snapshot 接受臂照旧不留审计
+   （只读噪声纪律），拒绝臂与 machine.audit 面均携带该 id。
+3. **中心本地动作铸造**：OpsControlCenter 的 queryProfiles /
+   downloadProfileArtifact 每次尝试（含拒绝）铸一个 id 入审计条目
+   （拒绝/接受臂共用）。当前无 Gateway 层调用方上下文（04 §4.2
+   OpsCommandContext），接入后改由调用方供给——假设已注明。
+4. **中心环形按请求查询**：OpsControlCenter::auditTrail(requestId)
+   重载——按 §6.2 关联 id 取回同一请求在环形里的全部记录（跨节点
+   聚合，追加序）；0 按哨兵语义命中未携带帧的记录（查询自然语义，
+   非特殊分支——0 是可查询值）；未知 id 空。
+5. **测试**：LoginAppTest 断言探针携带非零 id；OpsControlCenterTest
+   补假件 id 重载 + 跨节点同 id 关联查询 + 哨兵 0 语义 + 未知 id 空。
+   daemon 透传链（帧→审计条目→machine.audit JSON）既有 4242 用例
+   不变。
+6. **台账校准**：本文件多处「requestId 仍缺」为闭合前的陈旧记录，
+   逐处改为指向闭合批，消除自相矛盾。
+7. **CI 覆盖率腿加固**：build.yml Coverage gate 加
+   `--merge-mode-functions=merge-use-line-min`——gcovr 8 起函数合并默认
+   strict，头文件 `=default` 析构的隐式克隆按 TU 记到不同行直接抛
+   GcovrMergeAssertionError（pipx 未钉版本会随上游升级踩雷）；该析构是
+   LCOV 豁免的平凡空体，取最小行合并即可，行/分支计数不受影响。
+
+- 字段形态假设：04 §6.2 只列字段名；§4.2 OpsCommandContext.requestId
+  （string）是尚不存在的 Gateway 层上下文——沿用既有落地口径 u64 帧
+  字段（04 落地对照、RuntimeTransport.h 注释同口径），不另设形态。
+- 遗留：应答帧不带 requestId（规格未定义应答关联语义；LoginApp 以
+  入站即链路活性判定，不依赖 ack↔request 对账）——Gateway 层接入时
+  如需请求-应答对账再评审。
+
 ## macOS 等价主机探针 + CI 矩阵补 macOS（遗留 940 / 949 矩阵部分，2026-09-27）
 
 闭环遗留第 940 条（主机探针缺 macOS）与第 949 条的矩阵部分：LocalHostProbe
@@ -478,7 +519,8 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
 3. **§6.2 口径沿用上一批**：operatorId ≙ AuditEntry.source 组件 id、
    result=rejected ≙ accepted=false、args=key=value、三对新增成对计数
    （machine_{kick,drain,shutdown}_{accepted,rejected}_count）；
-   requestId 仍缺（沿既有记录，不编造）。
+   requestId 当时仍缺（沿既有记录，不编造）；已由「Phase 2 余项」批
+   补帧字段与透传、2026-09-27「requestId 全链路关联」批补铸造与查询。
 4. **测试**（MachineDaemonTest 29→30）：三角色 × 三命令正反矩阵，
    拒绝臂全覆盖（角色位/策略位/载荷畸形/未知令牌），真实效果断言
    （kick 后 SessionStore 里令牌不复可查、排水位中心 latest 同步翻转、
@@ -495,7 +537,9 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
   独立 LoginApp 组件——仓库无 LoginApp，跨进程语义由 redis 共享存储
   承载（同一 IRedisProvider 即同两会话视图），完整登录运维归 §8
   Phase 2（「更完整的登录与会话运维命令」）。
-- requestId 仍缺（沿既有记录）；Gateway 限流边界沿用上一批记录。
+- requestId 已由后续批次闭合（「Phase 2 余项」批补帧字段与透传，
+  2026-09-27「requestId 全链路关联」批补铸造与查询）；Gateway 限流
+  边界沿用上一批记录。
 
 ## 权限分级 + 配置热改限制：04 §6 安全模型落地（2026-09-26）
 
@@ -523,7 +567,8 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
 3. **§6.2 审计映射（如实对齐，无新口径）**：operatorId ≙ 既有
    AuditEntry.source 组件 id（绑定表就是按组件 id 查角色，不另设操作者
    命名空间）；result=rejected ≙ accepted=false；command/args/timestamp
-   同既有条目形状。requestId 字段仍缺（沿用既有边界记录）。
+   同既有条目形状。requestId 字段当时仍缺（沿用既有边界记录；已由
+   「Phase 2 余项」+ 2026-09-27「requestId 全链路关联」两批闭合）。
 4. **§6.3 配置热改**（machine.config.apply，Admin 级，新方法）：载荷
    key NUL value（与 execute 同 NUL 约定）。**禁改四类先行指认**——键
    前缀命中协议定义（protocol.*）/ 持久化 schema（persistence.*）/
@@ -559,7 +604,9 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
   是控制面 RPC 与中心剖面读入口，宿主内嵌调用属信任边界内侧。
 - RateLimiter 未接（理由见上 5）；Gateway 层（正式鉴权/限流/超时）
   整体沿用既有边界记录。
-- requestId 字段仍缺（§6.2 七字段之六已对齐，沿既有记录）。
+- requestId 字段当时仍缺（§6.2 七字段之六已对齐）；「Phase 2 余项」
+  批已补帧字段与透传，2026-09-27「requestId 全链路关联」批补铸造
+  与中心环形查询。
 - 白名单可调项仅 ops.report_interval_ms 一项：其余运行时可调项（如
   诊断阈值 slow_threshold）目前只进产物统计（05 边界），需要热改时
   逐项评审入白名单。
@@ -666,8 +713,9 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
   （单窗口进行中 + 产物环形容量）；Gateway 限流/超时未做。
 - §6.1 权限分级（ReadOnly/Operator/Admin）简化为 canTrigger/canAccess
   两个独立授权位，角色模型未引入（触发⊇访问的组合角色用并集表达）。
-- §6.2 审计字段的 requestId（请求关联 id）协议层仍缺，审计条目暂无
-  请求级唯一标识。
+- §6.2 审计字段的 requestId（请求关联 id）当时协议层仍缺；已由
+  「Phase 2 余项」批补帧字段与透传、2026-09-27「requestId 全链路
+  关联」批补铸造与中心环形按请求查询。
 - 阈值/窗口为构造期配置；04「采样、阈值、限流」的在线配置热改未做。
 - 产物仅存 agent 本地，跨机器回传中心的通道未做（当前下载即控制面
   RPC 直读 agent）。
@@ -804,7 +852,8 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
 1. **AuditEntry.h 上提**（与 NodeReport.h 同法）：AuditEntry 自
    MachineDaemon.h 独立成共享头——daemon 生产与中心聚合共用同一数据形状；
    §6.2 映射口径写在头注释（operatorId ≙ source 组件 id、target ≙ 聚合侧
-   nodeId、result ≙ accepted+ok；requestId 待协议层支持后补）。
+   nodeId、result ≙ accepted+ok；requestId 当时待协议层支持——「Phase
+   2 余项」批已补帧字段与透传，2026-09-27 批补铸造与查询）。
 2. **INodeAuditSink + NodeAuditEntry**：审计上报出口接缝（daemon 只依赖
    接口）；NodeAuditEntry = nodeId 归属 + 条目；审计是历史事实——节点
    注销/掉线摘除不清审计，存储上界由中心环形容量约束。
