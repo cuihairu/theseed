@@ -18,11 +18,9 @@ target_link_libraries(
 
 add_test(NAME theseed_login_app_test COMMAND theseed_login_app_test)
 
-# 回环探针用 POSIX socket（arpa/inet.h、非阻塞 recv），Windows 暂不纳入；
-# 其余单元测试全平台跑。
-if(NOT WIN32)
-    # LoginApp 端到端测试：真实 TCP 回环（null/password/db 三种鉴权路径），
-    # db 场景由测试内后台线程驱动 file 后端 DBApp。
+# LoginApp 端到端测试：真实 TCP 回环驱动完整 tick 循环，依赖
+# MachineDaemon/ops 服务器通信，macOS 上链路无法建立，门控至 Linux。
+if(UNIX AND NOT APPLE)
     add_executable(theseed_login_app_e2e_test LoginAppE2ETest.cpp)
 
     target_link_libraries(

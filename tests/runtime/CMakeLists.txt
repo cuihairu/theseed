@@ -8,6 +8,7 @@ target_link_libraries(
 
 add_test(NAME theseed_runtime_framework_test COMMAND theseed_runtime_framework_test)
 
+if(UNIX AND NOT APPLE)
 add_executable(theseed_tcp_connection_test TcpConnectionTest.cpp)
 
 target_link_libraries(
@@ -16,6 +17,7 @@ target_link_libraries(
     PRIVATE theseed_runtime)
 
 add_test(NAME theseed_tcp_connection_test COMMAND theseed_tcp_connection_test)
+endif()
 
 add_executable(theseed_entity_core_test EntityCoreTest.cpp)
 
@@ -217,6 +219,7 @@ target_link_libraries(
 
 add_test(NAME theseed_network_transport_test COMMAND theseed_network_transport_test)
 
+if(UNIX AND NOT APPLE)
 add_executable(theseed_tcp_transport_test TcpTransportTest.cpp)
 
 target_link_libraries(
@@ -226,6 +229,7 @@ target_link_libraries(
     PRIVATE theseed_core)
 
 add_test(NAME theseed_tcp_transport_test COMMAND theseed_tcp_transport_test)
+endif()
 
 add_executable(theseed_transport_hub_test TransportHubTest.cpp)
 
