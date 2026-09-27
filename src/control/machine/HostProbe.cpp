@@ -15,9 +15,12 @@
 #include <vector>
 
 #ifdef _WIN32
-// GetIfTable2 是 Vista 起 API：显式声明版本下限。声明本职在
-// <netioapi.h>（MIB_IF_TABLE2/GetIfTable2/FreeMibTable），iphlpapi.h
-// 是否含它取决于 NTDDI 判定，显式包含 + 版本宏双保险。
+// GetIfTable2 是 Vista 起 API：显式声明版本下限（#ifndef 不覆盖调用方
+// 既定值）。MIB_IF_TABLE2/GetIfTable2/FreeMibTable 声明本职在
+// <netioapi.h>，其类型块整体套在 _WS2IPDEF_（ws2ipdef.h 的包含守卫）
+// 之下——先 iphlpapi.h 时 netioapi 走 __IPHLPAPI_H__ 捷径分支、跳过
+// ws2ipdef.h 自包含，类型块即被整段跳过。规范序：winsock2（先于
+// windows.h 防 winsock 冲突）→ ws2tcpip → windows → iphlpapi → netioapi。
 #ifndef WINVER
 #define WINVER 0x0600
 #endif
@@ -27,7 +30,11 @@
 #ifndef NTDDI_VERSION
 #define NTDDI_VERSION 0x06000000  // NTDDI_VISTA
 #endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
@@ -388,9 +395,9 @@ std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
     std::unique_ptr<MIB_IF_TABLE2, FreeMibTableDeleter> table(rawTable);
 
     std::vector<probe_detail::LinkCounters> rows;
-    rows.reserve(static_cast<std::size_t>(table->NumberOfEntries));
-    for (ULONG index = 0; index < table->NumberOfEntries; ++index) {
-        const MIB_IF_ROW2& row = table->TableEntry[index];
+    rows.reserve(static_cast<std::size_t>(table->NumEntries));
+    for (ULONG index = 0; index < table->NumEntries; ++index) {
+        const MIB_IF_ROW2& row = table->Table[index];
         rows.push_back(probe_detail::windowsLinkCounters(row.Type, row.InOctets, row.OutOctets));
     }
     return probe_detail::aggregateLinkCounters(rows);

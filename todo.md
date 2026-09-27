@@ -122,7 +122,13 @@
    宏 `IF_TYPE_SOFTWARE_LOOPBACK`）；行归一 `windowsLinkCounters` 与
    聚合口径 `aggregateLinkCounters` 全平台单份，Linux 单测直测全分支
    （回环/物理/大数透传/归一入聚合）。链接：WIN32 下 theseed_control
-   链 iphlpapi（对齐 theseed_runtime 的 ws2_32 先例）。
+   链 iphlpapi（对齐 theseed_runtime 的 ws2_32 先例）。胶合验证升级：
+   本机装 mingw-w64 交叉编译器对真实 Windows 头离线编译该 TU（而非
+   纯盲写等 CI）——实证根因：netioapi.h 类型块整体套在 _WS2IPDEF_
+   守卫下，先含 iphlpapi.h 走 `__IPHLPAPI_H__` 捷径跳过 ws2ipdef.h
+   自包含即整段缺声明；规范序 winsock2→ws2tcpip→windows→iphlpapi→
+   netioapi 后 `-Wall -Wextra` 零警告通过（成员名 NumEntries/Table、
+   InOctets/OutOctets 均经真实头核对）。
 
 **边界与遗留（如实记录）**：
 - ~~Windows 网络等价探针仍缺~~：**已补齐**（item 10）。Windows 胶合
