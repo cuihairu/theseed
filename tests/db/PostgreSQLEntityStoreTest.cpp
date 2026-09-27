@@ -1,6 +1,8 @@
 // MSVC 将 getenv 标记为不安全（C4996），需静默。
+// 变量遮蔽（C4456）为测试内多轮迭代自然产生，静默处理。
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
+#pragma warning(disable:4456)
 #endif
 #include "theseed/core/EntityData.h"
 #include "theseed/db/PostgreSQLEntityStore.h"
@@ -288,12 +290,12 @@ int main() {
     // --- config.connection 注入 + 表锁超时路径 ---
     // 注入连接设 lock_timeout=1s：被 ACCESS EXCLUSIVE 锁阻塞的语句 1 秒即报错。
     {
-        auto cfg = pgConfigFromEnv();
-        auto conn = std::make_shared<theseed::db::PostgreSQLConnection>(cfg);
+        auto connCfg = pgConfigFromEnv();
+        auto conn = std::make_shared<theseed::db::PostgreSQLConnection>(connCfg);
         CHECK(conn->connect(), "shared conn connect");
         conn->execute("SET lock_timeout = '1s'");
         PostgreSQLEntityStore::Config injCfg;
-        injCfg.pg = cfg;
+        injCfg.pg = connCfg;
         injCfg.autoCreateSchema = false;
         injCfg.connection = conn;
         PostgreSQLEntityStore injected(std::move(injCfg));
@@ -305,7 +307,7 @@ int main() {
         lt.entityType = "Lt";
         CHECK(injected.save(12, lt), "injected save Lt");
 
-        theseed::db::PostgreSQLConnection locker(cfg);
+        theseed::db::PostgreSQLConnection locker(connCfg);
         CHECK(locker.connect(), "locker connect");
 
         // save：tbl_Lt 被锁 → INSERT 等锁超时
@@ -356,12 +358,12 @@ int main() {
 
     // --- createSchema / ensureTable 失败路径：用同名对象占位拦截 DDL ---
     {
-        auto cfg = pgConfigFromEnv();
+        auto adminCfg = pgConfigFromEnv();
 
         // 同名 view 占住 _account_index：CREATE TABLE IF NOT EXISTS 遇到
         // 非表对象会直接报错（IF NOT EXISTS 只对同型对象跳过）
         {
-            theseed::db::PostgreSQLConnection admin(cfg);
+            theseed::db::PostgreSQLConnection admin(adminCfg);
             CHECK(admin.connect(), "admin connect (view trap)");
             admin.execute("DROP VIEW IF EXISTS _account_index");
             admin.execute("DROP TABLE IF EXISTS _account_index");

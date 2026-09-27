@@ -4,8 +4,10 @@
 // 无法 SQL-only 注入（超长标识符被截断而非报错，与 MySQL 不同），不在此列。
 // 需要 THESEED_PG_HOST 等环境变量，未设置时整体跳过。
 // MSVC 将 getenv 标记为不安全（C4996），需静默。
+// 变量遮蔽（C4456）为测试内多轮迭代自然产生，静默处理。
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
+#pragma warning(disable:4456)
 #endif
 #include "theseed/core/EntityData.h"
 #include "theseed/db/PostgreSQLEntityStore.h"
