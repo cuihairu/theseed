@@ -119,43 +119,19 @@ void LoginApp::init() {
         hub_->connectPeer(config_.dbComponentId, transport);
     }  // LCOV_EXCL_BR_LINE 函数尾汇合伪边归因本行（gcc 布局伪影，非业务条件）
 
-    // 控制面通知腿（04 §8 踢人联动生产接线）：出站连 MachineDaemon 并发
-    // 一条 machine.snapshot 注册探针自报身份——daemon 侧 hub 由首条请求
-    // 的 sourceComponent 注册（attachServerTransport seam），此后
-    // machine.session.revoked 推送沿该连接入站（tick → drainInvocations →
-    // handleInvocation）。连接建立不了只告警跳过，不阻断登录面：联动是
-    // best-effort 增益，登录是主职责（与 db 腿的失败即弃不同）。
+    // 控制面通知腿（04 §8 踢人联动生产接线 + 运行期韧性）：出站连
+    // MachineDaemon 并发一条 machine.snapshot 注册探针自报身份——daemon
+    // 侧 hub 由首条请求的 sourceComponent 注册（attachServerTransport
+    // seam），此后 machine.session.revoked 推送沿该连接入站（tick →
+    // drainInvocations → handleInvocation）。首次尝试失败不阻断登录面
+    //（联动是 best-effort 增益，与 db 腿的失败即弃不同）：转入监督状态
+    // 机，tick 里按退避自动重连并重发探针（daemon 重启后订阅自愈，
+    // 无需人工重启 LoginApp）。
     if (machineLeg) {
-        std::shared_ptr<runtime::IRuntimeTransport> machineTransport;
-        if (config_.machineTransportFactory) {
-            machineTransport =
-                config_.machineTransportFactory(config_.machineHost,
-                                                config_.machinePort);
-        } else {
-            auto conn = runtime::TcpConnection::create();
-            if (conn->connect(config_.machineHost, config_.machinePort)) {
-                machineTransport =
-                    std::make_shared<runtime::NetworkTransport>(conn);
-            } else {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（与 db 腿同理由）
-                // LCOV_EXCL_START inet_pton 无 DNS：坏主机名解析为 0.0.0.0 同样 EINPROGRESS，本臂不可达
-                foundation::logWarn("login.machine.link.refused", {});
-                // LCOV_EXCL_STOP
-            }
-        }
-        if (machineTransport) {
-            hub_->connectPeer(config_.machineComponentId, machineTransport);
-            // 注册探针 = §8 只读探活语义的 machine.snapshot：既向 daemon
-            // 自报身份（推送通道的注册面），也验证策略接线（应答 ok /
-            // error 经 handleInvocation 记录联动状态）。
-            runtime::RuntimeInvocation probe;
-            probe.sourceComponent = config_.localComponentId;
-            probe.targetComponent = config_.machineComponentId;
-            probe.method = control::machine::MachineMethod::kSnapshot;
-            if (hub_->send(std::move(probe)) != runtime::SendResult::Accepted) {
-                foundation::logWarn("login.machine.probe.unsent", {});
-            }
-            hub_->flush();
-        }
+        machineRetryDelay_ = config_.machineReconnectBaseDelay;
+        machineLinkState_ = MachineLinkState::Backoff;
+        machineRetryAt_ = runtime::Clock::now();  // 首次尝试立即进行
+        attemptMachineLink();
     }
 
     if (config_.ops.enabled) {
@@ -188,8 +164,11 @@ void LoginApp::tick() {
     if (hub_) {
         hub_->tick();
         // 排空发到本组件的入站 invocation（控制面推送与探针应答）；
-        // 与 DBApp::processMessages 同款循环，放在 hub 泵之后。
+        // 与 DBApp::processMessages 同款循环，放在 hub 泵之后。监督放
+        // 在排空之后：本 tick 到达的应答/推送先升级活性，再判断链，
+        // 不误伤刚恢复的链路。
         drainInvocations();
+        superviseMachineLink();
     }
     acceptConnections();
     for (auto& session : sessions_) {
@@ -221,6 +200,8 @@ void LoginApp::tick() {
 
 void LoginApp::stop() {
     sessions_.clear();
+    machineTransport_.reset();
+    machineLinkState_ = MachineLinkState::Backoff;
     hub_.reset();
     listener_.close();
 }
@@ -244,7 +225,117 @@ void LoginApp::drainInvocations() {
     }
 }
 
+// 通知腿监督状态机（04 §8 运行期韧性）。活性以「看到入站流量」为准：
+// Linux 非阻塞 connect 恒 EINPROGRESS（连到死端口也"成功"），唯一可靠
+// 证据是 daemon 的应答/推送真正到达，以及 hub 泵 socket 后 transport
+// 报死（对端 EOF 由 TcpConnection::pump 的 recv==0 转为 isConnected
+// 假——NetworkTransport 委托 pipe 实况）。
+void LoginApp::attemptMachineLink() {
+    std::shared_ptr<runtime::IRuntimeTransport> transport;
+    if (config_.machineTransportFactory) {
+        transport = config_.machineTransportFactory(config_.machineHost,
+                                                    config_.machinePort);
+    } else {
+        auto conn = runtime::TcpConnection::create();
+        if (conn->connect(config_.machineHost, config_.machinePort)) {
+            transport = std::make_shared<runtime::NetworkTransport>(conn);
+        } else {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（与 db 腿同理由）
+            // LCOV_EXCL_START inet_pton 无 DNS：坏主机名解析为 0.0.0.0 同样 EINPROGRESS，本臂不可达
+            foundation::logWarn("login.machine.link.refused", {});
+            // LCOV_EXCL_STOP
+        }
+    }
+    if (!transport) {
+        // 拿不到 transport（注入 seam 返空）：只告警排重试，登录面无感。
+        foundation::logWarn("login.machine.link.no-transport", {});
+        scheduleMachineRetry();
+        return;
+    }
+    // connectPeer 覆盖旧注册：重连路径以新 transport 顶替死腿，daemon
+    // 侧对新连接的注册经探针自报重新建立（attachServerTransport seam）。
+    hub_->connectPeer(config_.machineComponentId, transport);
+    machineTransport_ = std::move(transport);
+    // 注册探针 = §8 只读探活语义的 machine.snapshot：既向 daemon 自报
+    // 身份（推送通道的注册面），也验证策略接线（应答 ok / error 经
+    // handleInvocation 记录联动状态）。
+    runtime::RuntimeInvocation probe;
+    probe.sourceComponent = config_.localComponentId;
+    probe.targetComponent = config_.machineComponentId;
+    probe.method = control::machine::MachineMethod::kSnapshot;
+    if (hub_->send(std::move(probe)) != runtime::SendResult::Accepted) {
+        // 探针都发不出（对端 transport 报 NotConnected）：本次尝试未
+        // 接通，摘除死 peer 退避重试——不留会持续丢推送的僵尸注册。
+        foundation::logWarn("login.machine.probe.unsent", {});
+        hub_->disconnectPeer(config_.machineComponentId);
+        machineTransport_.reset();
+        scheduleMachineRetry();
+        return;
+    }
+    hub_->flush();
+    machineLinkState_ = MachineLinkState::PendingAck;
+    machineAckDeadline_ = runtime::Clock::now() + config_.machineProbeAckTimeout;
+}
+
+void LoginApp::scheduleMachineRetry() {
+    machineLinkState_ = MachineLinkState::Backoff;
+    machineRetryAt_ = runtime::Clock::now() + machineRetryDelay_;
+    const auto doubled = machineRetryDelay_ * 2;
+    machineRetryDelay_ = std::min(doubled, config_.machineReconnectMaxDelay);
+}
+
+void LoginApp::confirmMachineLinkUp() {
+    if (machineLinkState_ != MachineLinkState::PendingAck) {
+        return;  // Up 幂等；Backoff 下入站属理论外形态，不误升级
+    }
+    machineLinkState_ = MachineLinkState::Up;
+    machineRetryDelay_ = config_.machineReconnectBaseDelay;  // 链路恢复，退避复位
+    foundation::logInfo("login.machine.link.up", {});
+    theseed::foundation::MetricsRegistry::instance()
+        .counter("login_machine_link_up_count",
+                 "machine notify link establishments confirmed by inbound from daemon")
+        .increment();
+}
+
+void LoginApp::markMachineLinkDown(const char* cause) {
+    const std::string causeText = cause;
+    const foundation::LogAttribute causeAttr = {"cause", causeText};
+    foundation::logWarn("login.machine.link.down", {causeAttr});
+    theseed::foundation::MetricsRegistry::instance()
+        .counter("login_machine_link_down_count",
+                 "machine notify link losses detected by LoginApp supervision")
+        .increment();
+    hub_->disconnectPeer(config_.machineComponentId);
+    machineTransport_.reset();
+    scheduleMachineRetry();
+}
+
+void LoginApp::superviseMachineLink() {
+    if (config_.machineHost.empty() || !hub_) return;  // 未接线/已 stop：无监督
+    const auto now = runtime::Clock::now();
+    switch (machineLinkState_) {
+        case MachineLinkState::PendingAck: {
+            const bool alive = machineTransport_ && machineTransport_->isConnected();
+            if (alive && now < machineAckDeadline_) break;  // 应答仍宽限
+            markMachineLinkDown(alive ? "probe-ack-timeout" : "transport-lost");
+            break;
+        }
+        case MachineLinkState::Up:
+            if (machineTransport_ && machineTransport_->isConnected()) break;
+            markMachineLinkDown("transport-lost");
+            break;
+        case MachineLinkState::Backoff:
+            if (now < machineRetryAt_) break;
+            attemptMachineLink();  // 成败皆迁移状态：接通 PendingAck，未接通重排 Backoff
+            break;
+    }
+}
+
 void LoginApp::handleInvocation(const runtime::RuntimeInvocation& inv) {
+    // daemon 方向任何入站（探针应答或推送）都证实出站链路活性：监督
+    // 状态机据此把 PendingAck 升级为 Up——订阅通道真正可用的事实点。
+    if (inv.sourceComponent == config_.machineComponentId) {
+        confirmMachineLinkUp();
+    }
     if (inv.method == control::machine::MachineMethod::kSessionRevoked) {
         std::string account, realm;
         if (!extractJsonStringField(inv.payload, "account", account) ||
@@ -265,9 +356,10 @@ void LoginApp::handleInvocation(const runtime::RuntimeInvocation& inv) {
                             {accountAttr, realmAttr, closedAttr});
         return;
     }
-    // 注册探针应答：snapshot.ok = 联动腿接通（运维可见）；machine.error =
-    // 策略拒绝（daemon 侧已审计，这里仅告警不回重试——探针是启动期一次性
-    // 事件，失败即联动腿不可用，运维据审计排查）。
+    // 注册探针应答：snapshot.ok = 联动腿接通且被信任（运维可见）；
+    // machine.error = 探针被策略拒绝——两者都经 confirmMachineLinkUp
+    // 证实链路活性（注册在传输层，与策略门独立：推送通道照常可用），
+    // 拒绝本身不重试，运维据 daemon 侧审计排查接线。
     if (inv.method == control::machine::MachineMethod::kSnapshotOk) {
         foundation::logInfo("login.machine.link.ready", {});
         return;

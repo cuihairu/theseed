@@ -1,5 +1,56 @@
 # TODO
 
+## 通知腿运行期韧性：断链退避重连 + 订阅自愈（04 §8，2026-09-27）
+
+把上批遗留的第 1 条（hub 无重连/心跳，daemon 重启后 LoginApp 要人工重启
+才恢复订阅）闭环：
+
+1. **监督状态机（LoginApp 私有面）**：PendingAck（已连已发探针，等首个
+   入站证实）→ Up（活性证实）→ Backoff（断链/超时，退避到点重连）。
+   活性判定两条腿：**transport 实况**（IRuntimeTransport 补
+   isConnected 虚接口——缺省真（内存实现无断开概念），NetworkTransport
+   按 socket 实况 override：对端 EOF 由 hub 泵转假、TCP 层既有 30s
+   心跳让无 EOF 的半开随读写错误收敛）+ **入站证实**（daemon 方向
+   任何入站——探针应答或推送——都把 PendingAck 升级为 Up；注册在传输层，
+   与策略门独立，machine.error 应答同样证明推送通道可用）。**connect
+   返回不作数**：Linux 非阻塞 connect 恒 EINPROGRESS（连到死端口也
+   "成功"），故每尝试带 machineProbeAckTimeout 应答窗，超窗判未接通。
+2. **退避与 best-effort 语义**：断链即摘除死 peer（不留会持续丢推送的
+   僵尸注册）+ logWarn(cause=transport-lost/probe-ack-timeout) + 计数
+   login_machine_link_down_count；重连窗口 base 起步、每次翻倍封顶
+   max、链路恢复复位（Config 三参数 machineReconnectBaseDelay 1s /
+   machineReconnectMaxDelay 30s / machineProbeAckTimeout 5s，无魔数）。
+   重连 = 重新调用 machineTransportFactory（与 db 腿同款注入 seam——
+   每次尝试独立铸造，桩可脚本化失败序列）或新建 TcpConnection →
+   connectPeer 覆盖注册 → 重发 machine.snapshot 探针 → daemon 侧 hub
+   经首请求自报重新注册订阅。恢复计 login_machine_link_up_count。
+   断连期间登录面照常（通知丢失按既有 best-effort 语义只由 daemon 侧
+   丢弃告警兜底）。
+3. **失败尝试 ≠ 断链事件**：seam 返空 / 探针发不出（Closed）只告警排
+   重试、不重复计 down；探针发不出的尝试还须摘除刚注册的死 peer。
+4. **测试**：LoginAppTest 桩面新增韧性块五臂——Up 断链→退避重连→探针
+   重发→应答恢复（恢复后不再重连）、ack 超时臂（活性真不应答两连击）、
+   重连遇 seam 返空、重连遇发不出 transport、恢复后 revoked 推送照常
+   关闭活登录（功能面而非计数面验收）；接口缺省活性断言（内存 transport
+   恒真）。**场景 G（真实 TCP）**：daemon 下线 → 监督检出（down 计数）
+   → 同端口重启（SO_REUSEADDR）→ LoginApp 无人工干预自动重连重注册
+   （up 计数）→ 运维单踢沿恢复的订阅送达 → 匹配连接被关闭、双端计数、
+   不匹配者无感。既有桩面（探针四臂/分发/畸形/未知、联动、选领域回写）
+   与场景 A–F 零回退。
+5. **选型记录**：不做订阅补发协议（吊销事实以存储为准，list-sessions
+   对账仍是漏送兜底——重连恢复的是订阅不是历史）；db 腿同款监督未做
+   （同性质扩面，dbRequest 自带超时降级，非订阅面，风险口径不同）。
+
+**边界与遗留（如实记录）**：
+- 断链窗口内 daemon 推的通知不可恢复（无补发/重放），仅告警计数；
+  运行期运维对账仍走 machine.list-sessions。
+- 心跳是 NetworkTransport 层既有 30s 控制通道消息，非应用层探活：
+  半开链路靠 socket 错误收敛，无独立心跳超时参数。
+- db 腿传输仍是静态单次连接（见上 5 选型）。
+
+验证口径：gcc-coverage 与 clang 双树 cmake --build + ctest 全绿；
+gcovr 行/函数 100%（口径含带理由 LCOV_EXCL，门禁见各批记录）。
+
 ## 通知通道的 LoginApp 生产接线（04 §8 Phase 2 收尾，2026-09-27）
 
 把上一批遗留的第 1 条（推送只到 daemon 为止，LoginApp 侧只有落点）接通，

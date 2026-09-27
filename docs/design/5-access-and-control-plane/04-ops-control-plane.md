@@ -485,14 +485,26 @@ Phase 2 已落地切片（会话运维命令面，2026-09-26）：
     通知的 realm 取自存储行、绑定的 realm 取自本地选择，联动对真实
     "登录后已选领域"的客户端会漏关；同时 list-sessions 的 realm 字段
     恒为空。修正后 list-sessions 的领域与踢人通知同源可用。
+  - 通知腿运行期韧性（2026-09-27，闭环）：LoginApp 在 tick 里监督出站
+    腿——活性以 transport 实况（IRuntimeTransport::isConnected，对端 EOF
+    由 socket 泵转为假；TCP 层 30s 心跳使无 EOF 的半开也随读写错误收敛，
+    内存实现缺省为真）+ daemon 方向任一入站证实（探针应答或推送皆可，
+    注册在传输层与策略门独立）。断链或探针应答超窗（machineProbeAckTimeout
+    ——connect 返回不作数，Linux 非阻塞 connect 恒 EINPROGRESS）即摘除
+    死 peer、按指数退避重连（machineReconnectBaseDelay 起步、翻倍封顶
+    machineReconnectMaxDelay、恢复复位）并重发 machine.snapshot 注册
+    探针，daemon 侧 hub 经新连接自报重新注册订阅——daemon 重启后
+    LoginApp 无需人工重启，吊销通知继续送达（真实 TCP 端到端可证）。
+    断连期间照旧 best-effort：只 logWarn + 计数
+    （login_machine_link_{down,up}_count），不阻断登录面。
 
 Phase 2 仍开放：
   - 转发聚合 / entity-type diagnostics；
   - 更完整的登录与会话运维命令其余部分（clear temporary bans 仍因
     无封禁存储前置不做，沿既有边界）；
-  - 通知腿的运行期韧性：hub 无重连/心跳，daemon 重启后 LoginApp 需重启
-    才能恢复订阅；补发/对账（订阅丢失时的状态同步）未做，当前靠
-    list-sessions 人工对账。
+  - 断链期间漏送的通知不补发（无对账协议）——重连恢复的是订阅而非
+    历史事实；吊销以存储为准，运维经 list-sessions 对账。db 腿传输
+    仍为静态单次连接（同款监督属同性质扩面，未做）。
 ```
 
 ---

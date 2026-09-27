@@ -7,6 +7,7 @@
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/InMemoryBytePipe.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
@@ -19,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 using namespace theseed::login;
 using namespace theseed::runtime;
@@ -160,16 +162,20 @@ private:
 // 模拟 MachineDaemon 通知腿的 IRuntimeTransport：捕获注册探针并按模式
 // 入队应答（Ack = snapshot.ok，Reject = machine.error，Silent = 吞掉，
 // Closed = send 拒绝）；测试可主动 enqueue 任意入站推送。单线程假设与
-// FakeDbTransport 同。
+// FakeDbTransport 同。alive 模拟链路活性（置假 = daemon 侧重启断连），
+// 监督面经 IRuntimeTransport::isConnected 读到它；sends 计数发出的探针。
 class FakeMachineTransport final : public theseed::runtime::IRuntimeTransport {
 public:
     enum class Mode { Ack, Reject, Silent, Closed };
 
     explicit FakeMachineTransport(Mode mode) : mode_(mode) {}
 
+    bool isConnected() const override { return alive; }
+
     theseed::runtime::SendResult send(
         theseed::runtime::RuntimeInvocation inv) override {
-        probe = inv;  // LoginApp 通知腿只会发一条注册探针
+        probe = inv;  // LoginApp 通知腿只会发注册探针
+        ++sends;
         if (mode_ == Mode::Closed) {
             return theseed::runtime::SendResult::NotConnected;
         }
@@ -213,6 +219,8 @@ public:
     void tick() override {}
 
     theseed::runtime::RuntimeInvocation probe;
+    std::size_t sends = 0;
+    bool alive = true;
 
 private:
     Mode mode_;
@@ -1018,6 +1026,221 @@ int main() {
                      std::to_string(malformedCounter.value() - malformed0));
             if (unknownCounter.value() != unknown0 + 1)
                 FAIL("unknown method must count once");
+        }
+    }
+    PASS();
+
+    // --- §8 通知腿运行期韧性的桩面：断链检测、退避重连、探针重发 ---
+    TEST("machine notify leg resilience: drop, backoff, reconnect, re-probe");
+    {
+        namespace MachineMethod = theseed::control::machine::MachineMethod;
+        using FMode = FakeMachineTransport::Mode;
+        constexpr theseed::runtime::ComponentId kLocalComponent = 20;
+        constexpr theseed::runtime::ComponentId kMachineComponent = 60;
+        auto& downCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_machine_link_down_count");
+        auto& upCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_machine_link_up_count");
+        // 接口缺省活性：内存 transport 无"断开"概念，恒真（监督面的
+        // 判定基线——只有 TCP 实现会按 socket 实况回答假）。
+        theseed::runtime::InMemoryRuntimeTransport alwaysLive;
+        if (!alwaysLive.isConnected()) FAIL("default transport liveness must be optimistic");
+        auto toBytes = [](const std::string& text) {
+            std::vector<std::byte> out(text.size());
+            for (std::size_t i = 0; i < text.size(); ++i)
+                out[i] = static_cast<std::byte>(text[i]);
+            return out;
+        };
+
+        // 铸造桩 transport 的记录工厂：按尝试序取模式脚本（末尾项重复
+        // 使用）；nullCalls 里的尝试序号返回 nullptr（seam 返空臂）。
+        struct Recording {
+            std::vector<std::shared_ptr<FakeMachineTransport>> made;
+            std::vector<FMode> modes;
+            std::vector<int> nullCalls;
+            int calls = 0;
+            std::function<std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                const std::string&, std::uint16_t)> factory() {
+                return [this](const std::string&, std::uint16_t)
+                           -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    const int idx = calls++;
+                    const auto mode = modes[std::min<std::size_t>(
+                        static_cast<std::size_t>(idx), modes.size() - 1)];
+                    if (std::find(nullCalls.begin(), nullCalls.end(), idx) !=
+                        nullCalls.end()) {
+                        return nullptr;
+                    }
+                    auto t = std::make_shared<FakeMachineTransport>(mode);
+                    made.push_back(t);
+                    return t;
+                };
+            }
+        };
+        auto resilienceConfig = [](std::function<
+            std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                const std::string&, std::uint16_t)> factory,
+            std::chrono::milliseconds ackTimeout) {
+            LoginAppConfig config;
+            config.listenHost = "127.0.0.1";
+            config.listenPort = 0;
+            config.authType = "null";
+            config.machineHost = "fake-machine";
+            config.machinePort = 7777;
+            config.machineTransportFactory = std::move(factory);
+            // 短退避：测试里毫秒级收敛（真实默认 1s/30s 会拖慢单测）。
+            config.machineReconnectBaseDelay = std::chrono::milliseconds{5};
+            config.machineReconnectMaxDelay = std::chrono::milliseconds{40};
+            config.machineProbeAckTimeout = ackTimeout;
+            return config;
+        };
+        // 泵 tick 直到谓词成立（有界，防呆死）。
+        auto pumpUntil = [](LoginApp& app,
+                            const std::function<bool()>& done) {
+            for (int i = 0; i < 1000; ++i) {
+                if (done()) return true;
+                app.tick();
+                usleep(2000);
+            }
+            return done();
+        };
+
+        // --- 臂 1：Up 活性转假 → 断链计数 → 退避到点重连 → 探针重发 →
+        //     应答恢复 Up；恢复的链路不再重连。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Ack};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();  // 排空首个探针应答 → Up
+            if (rec.calls != 1) FAIL("initial attempt must be exactly one call");
+            if (upCounter.value() != up0 + 1) FAIL("initial ack must count one link up");
+            rec.made[0]->alive = false;  // 模拟 daemon 侧重启断连
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("dead link must reconnect and recover");
+            if (rec.calls != 2) FAIL("recovery must take exactly one retry once acked");
+            if (downCounter.value() != down0 + 1) FAIL("the drop must count one link down");
+            if (rec.made[1]->sends != 1 ||
+                rec.made[1]->probe.method != MachineMethod::kSnapshot)
+                FAIL("reconnect must re-send the registration probe");
+            if (rec.made[1]->probe.sourceComponent != kLocalComponent ||
+                rec.made[1]->probe.targetComponent != kMachineComponent)
+                FAIL("re-registration probe must carry the same identity");
+            // 链路已 Up：继续泵不再触发尝试。
+            for (int i = 0; i < 20; ++i) app.tick();
+            if (rec.calls != 2) FAIL("an up link must not keep reconnecting");
+        }
+
+        // --- 臂 2：探针始终无应答（transport 活性真）→ ack 超时断链，
+        //     退避重连仍无应答 → 再计一次 down（超时臂）。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Silent};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{20}));
+            app.init();
+            app.tick();  // PendingAck：无应答可排空、宽限未到
+            if (rec.calls != 1) FAIL("PendingAck must not retry before the deadline");
+            const bool timedOut = pumpUntil(app, [&] {
+                return downCounter.value() >= down0 + 2;
+            });
+            if (!timedOut) FAIL("probe without ack must time out and retry");
+            if (rec.calls < 2) FAIL("ack timeout must drive a reconnect attempt");
+            if (upCounter.value() != up0) FAIL("no inbound must not claim link up");
+        }
+
+        // --- 臂 3：断链后首次重连 seam 返空 → 告警退避（窗口翻倍）→
+        //     再试接通恢复。失败的尝试不是第二次断链。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Ack};
+            rec.nullCalls = {1};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+            rec.made[0]->alive = false;
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("reconnect must recover after a failed attempt");
+            if (rec.calls != 3) FAIL("expected exactly: link, null, recovery");
+            if (downCounter.value() != down0 + 1)
+                FAIL("a failed attempt is not a second link down");
+        }
+
+        // --- 臂 4：重连拿到发不出的 transport（Closed）→ 探针未发出 →
+        //     摘除死 peer 退避，下一次尝试接通恢复（不残留僵尸注册）。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Ack, FMode::Closed, FMode::Ack};
+            const auto up0 = upCounter.value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+            rec.made[0]->alive = false;
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("closed transport retry must fall back and recover");
+            if (rec.calls != 3) FAIL("expected exactly: link, closed, recovery");
+        }
+
+        // --- 臂 5：断链期间的 revoked 推送经恢复后的新 transport 到达，
+        //     联动落点照常工作（恢复的是功能面不是计数面）。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Ack};
+            const auto up0 = upCounter.value();
+            const auto revoked0 = theseed::foundation::MetricsRegistry::instance()
+                                      .counter("login_session_revoked_count")
+                                      .value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+
+            // 先登记一个活登录（绑定表定位面）。
+            MockClient client;
+            ClientSession session(client.serverPipe);
+            session.setMessageCallback([&app, &session](ClientMessageType type,
+                                                         std::span<const std::byte> payload) {
+                app.handleClientMessage(&session, type, payload);
+            });
+            auto payload = encodeLoginPayload("zoe", "pw");
+            client.sendToServer(ClientMessageType::Login,
+                                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+
+            rec.made[0]->alive = false;
+            if (!pumpUntil(app, [&] { return upCounter.value() >= up0 + 2; }))
+                FAIL("link must recover before the push test");
+
+            theseed::runtime::RuntimeInvocation push;
+            push.sourceComponent = kMachineComponent;
+            push.targetComponent = kLocalComponent;
+            push.method = MachineMethod::kSessionRevoked;
+            const std::string notice =
+                R"json({"account":"zoe","realm":"","session":"session(len=3)","reason":"operator.kick"})json";
+            push.payload = toBytes(notice);
+            rec.made[1]->enqueue(std::move(push));
+            app.tick();
+            if (session.isConnected()) FAIL("push after recovery must still close the login");
+            if (theseed::foundation::MetricsRegistry::instance()
+                    .counter("login_session_revoked_count")
+                    .value() != revoked0 + 1)
+                FAIL("recovered delivery must count once");
         }
     }
     PASS();

@@ -779,6 +779,161 @@ int main() {
         daemon.stop();
     }
 
+    // ------------------------------------------------------------------
+    // 场景 G：通知腿运行期韧性（04 §8）——daemon 下线后原端口重启，
+    // LoginApp 监督面按退避自动重连并重发注册探针恢复订阅（无需重启
+    // LoginApp），吊销通知继续送达匹配的活跃登录。真实 TCP 全链路。
+    // ------------------------------------------------------------------
+    {
+        const std::uint16_t machinePort = freePort();
+        const std::uint16_t listenPort = freePort();
+        if (machinePort == 0 || listenPort == 0) FAIL("cannot find free ports");
+
+        auto redis = std::make_shared<InMemoryRedisProvider>();
+        auto store = std::make_shared<SessionStore>(redis);
+
+        MachineAgent agent(std::make_unique<LocalHostProbe>(),
+                           std::make_unique<LocalProcessSupervisor>());
+        MachineDaemon::Config mcfg;
+        mcfg.listenHost = "127.0.0.1";
+        mcfg.listenPort = machinePort;
+        mcfg.sessionStore = store.get();
+        mcfg.sessionNotifyComponent = kLoginComponent;
+        mcfg.nodeOpsPolicy.trustedComponents = {kOpsComponent};
+        mcfg.roleBindings = {{kOpsComponent, AccessRole::Operator},
+                             {kLoginComponent, AccessRole::ReadOnly}};
+
+        LoginAppConfig cfg;
+        cfg.listenHost = "127.0.0.1";
+        cfg.listenPort = listenPort;
+        cfg.authType = "null";
+        cfg.sessionStore = store;
+        cfg.realms.push_back(RealmInfo{"realm1", "一区", "smooth", "127.0.0.1", 30001});
+        cfg.localComponentId = kLoginComponent;
+        cfg.machineHost = "127.0.0.1";
+        cfg.machinePort = machinePort;
+        cfg.machineComponentId = kMachineComponent;
+        // 测试内短退避：重连在毫秒级收敛（生产默认 1s/30s）。
+        cfg.machineReconnectBaseDelay = std::chrono::milliseconds{20};
+        cfg.machineReconnectMaxDelay = std::chrono::milliseconds{200};
+
+        auto& downCounter = foundation::MetricsRegistry::instance().counter(
+            "login_machine_link_down_count");
+        auto& upCounter = foundation::MetricsRegistry::instance().counter(
+            "login_machine_link_up_count");
+        auto& notifyCounter = foundation::MetricsRegistry::instance().counter(
+            "machine_session_notify_count");
+        auto& revokedCounter = foundation::MetricsRegistry::instance().counter(
+            "login_session_revoked_count");
+
+        MachineDaemon daemon(mcfg, agent);
+        LoginApp app(std::move(cfg));
+        auto appTick = [&app, &daemon] {
+            app.tick();
+            daemon.tick();
+        };
+        TEST("daemon up, LoginApp auto-links, two live logins");
+        if (!daemon.start()) FAIL("machine daemon start failed");
+        app.init();
+        const auto up0 = upCounter.value();
+        for (int i = 0; i < 4000 && upCounter.value() < up0 + 1; ++i) {
+            appTick();
+            usleep(1000);
+        }
+        if (upCounter.value() < up0 + 1) FAIL("initial machine link never came up");
+
+        FrameClient gil;
+        if (!gil.connect(listenPort)) FAIL("gil connect failed");
+        FrameClient hector;
+        if (!hector.connect(listenPort)) FAIL("hector connect failed");
+        for (int i = 0; i < 40; ++i) {  // 等 accept
+            appTick();
+            gil.conn->pump();
+            hector.conn->pump();
+            usleep(2000);
+        }
+        ClientMessageType type;
+        std::vector<std::byte> payload;
+        ParsedLoginResponse lr;
+        std::string hectorToken;
+        const struct {
+            FrameClient* client;
+            const char* account;
+            std::string* token;
+        } logins[] = {{&gil, "gil", nullptr}, {&hector, "hector", &hectorToken}};
+        for (const auto& one : logins) {
+            if (!one.client->request(appTick, ClientMessageType::Login,
+                                     encodeLoginRequest(one.account, "pw"), type, payload))
+                FAIL(std::string("no response to Login(") + one.account + ")");
+            if (!decodeLoginResponse(payload, lr) || !lr.success)
+                FAIL(std::string(one.account) + " login failed: " + lr.error);
+            if (one.token) *one.token = lr.token;
+        }
+        PASS();
+
+        TEST("supervision detects the daemon going down");
+        const auto down0 = downCounter.value();
+        daemon.stop();  // hub 释放 → 对端连接关闭 → 本端泵 socket 见 EOF
+        for (int i = 0; i < 4000 && downCounter.value() < down0 + 1; ++i) {
+            app.tick();
+            usleep(1000);
+        }
+        if (downCounter.value() < down0 + 1)
+            FAIL("dead link must be detected by supervision (down counted)");
+        PASS();
+
+        TEST("daemon restart on same port: auto-reconnect, re-register, kick delivers");
+        // 原端口重启（TcpListener 的 SO_REUSEADDR 保证立即可重绑）。
+        MachineDaemon revived(mcfg, agent);
+        if (!revived.start()) FAIL("revived daemon start failed");
+        if (revived.localPort() != machinePort)
+            FAIL("revived daemon must rebind the same port");
+        auto mixedTick = [&app, &revived] {
+            app.tick();
+            revived.tick();
+        };
+        const auto up1 = upCounter.value();
+        for (int i = 0; i < 8000 && upCounter.value() < up1 + 1; ++i) {
+            mixedTick();
+            usleep(1000);
+        }
+        if (upCounter.value() < up1 + 1)
+            FAIL("LoginApp must reconnect to the revived daemon without restart");
+        // 重启后的 daemon 经新连接的探针自报重新注册了 LoginApp（活性
+        // 证实即应答到达）——运维客户端此刻单踢，通知应沿恢复的订阅送达。
+        const auto notify0 = notifyCounter.value();
+        const auto revoked0 = revokedCounter.value();
+        ControlClient ops;
+        if (!ops.connect(revived.localPort())) FAIL("ops connect failed after restart");
+        ops.settle(mixedTick);
+        RuntimeInvocation kickResp;
+        if (!ops.request(kOpsComponent, MachineMethod::kKickSession,
+                         toBytes(hectorToken), mixedTick, kickResp))
+            FAIL("no response to machine.kick-session after restart");
+        if (kickResp.method != MachineMethod::kKickSessionOk ||
+            kickResp.payload != std::vector<std::byte>{std::byte{0x01}})
+            FAIL("kick after restart must be accepted, got method=" + kickResp.method);
+        if (notifyCounter.value() != notify0 + 1)
+            FAIL("revived daemon must deliver the notification over the recovered link");
+        for (int i = 0; i < 400 && hector.conn->isConnected(); ++i) {
+            mixedTick();
+            hector.conn->pump();
+            gil.conn->pump();
+            usleep(2000);
+        }
+        if (hector.conn->isConnected())
+            FAIL("the revoked login must be closed via the recovered link");
+        if (!gil.conn->isConnected())
+            FAIL("a non-matching login must stay connected");
+        if (revokedCounter.value() != revoked0 + 1)
+            FAIL("LoginApp must count exactly one closed login after recovery");
+        if (store->load(hectorToken))
+            FAIL("the session row must be gone after the kick");
+        PASS();
+
+        revived.stop();
+    }
+
     std::cout << "\nAll LoginApp E2E tests passed!" << std::endl;
     return 0;
 }

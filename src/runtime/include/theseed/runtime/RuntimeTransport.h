@@ -37,6 +37,12 @@ public:
     virtual void flush() = 0;
     virtual TransportStats stats() const = 0;
 
+    // 链路活性查询。缺省为真：内存 transport 没有"断开"概念。TCP 实现
+    // 按 socket 实况回答（对端关闭/连接失败即假），供上层做断链监督与
+    // 重连决策（如 LoginApp 的通知腿）——hub 只持接口，活性判定必须走
+    // 这里而不是 downcast。
+    virtual bool isConnected() const { return true; }
+
     // 周期驱动：读管道入站、冲刷出站。TCP 子类在 tick 里 pump socket，
     // 内存实现为空操作。TransportHub::tick 借此驱动所有 peer 的入站——
     // 缺了这一环，服务端永远读不到 socket 上的请求。

@@ -48,7 +48,7 @@ public:
     void flush() override;
     TransportStats stats() const override;
 
-    bool isConnected() const;
+    bool isConnected() const override;
     void close();
     void tick() override;
 
