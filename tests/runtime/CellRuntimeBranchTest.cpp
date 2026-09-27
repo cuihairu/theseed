@@ -228,7 +228,7 @@ int main() {
     auto transport = std::make_shared<InMemoryRuntimeTransport>();
 
     auto makeSpace = [](SpaceId id, const char* name) {
-        auto topology = std::make_unique<SingleCellTopology>(static_cast<CellId>(id));
+        auto topology = std::make_unique<SingleCellTopology>(static_cast<std::uint32_t>(id));
         auto space = std::make_unique<Space>(id, name, std::move(topology));
         space->initialize(SpaceConfig{.name = name});
         return std::make_unique<SpaceRuntime>(std::move(space));

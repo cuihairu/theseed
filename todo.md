@@ -293,9 +293,9 @@ gcovr 行/函数 100%（口径含带理由 LCOV_EXCL，门禁见各批记录）�
    指纹同长歧义不改、枚举顺序不承诺时序。
 
 **边界与遗留（如实记录）**：
-- 通知腿无运行期韧性：hub 没有重连/心跳，daemon 重启后 LoginApp 需重启
-  才能恢复订阅（db 腿同性质，非本批引入）；订阅丢失时的补发/对账未做，
-  当前靠 machine.list-sessions 人工对账。
+- ~~通知通道的 LoginApp 生产接线未建~~：**已完成**（本批实现：入站分发面 `drainInvocations()` + `handleInvocation()`，机器注册探针通过 `machineHost/machinePort` 配置建立出站连接，daemon 侧 `notifySessionRevoked` 通过 hub 入站分发至 `handleSessionRevoked`；领域口径已在 `handleSelectRealm` 与 `handleSessionRevoked` 间对齐，`list-sessions` 域字段恒为空由存储行决定）。本批验收通过真实 TCP E2E 场景：daemon 吊销 → 通知送达 LoginApp → 匹配的活跃登录连接被关闭、计数增量、不匹配的连接不受影响。
+
+  本批交付内容详见交付摘要。
 - 通知仍 best-effort 无重试/确认（设计如此：吊销事实以存储为准）。
 - 匹配口径是 account+realm 精确匹配：一个账号同时开多个连接（多设备）
   且其中一条被单踢时，通知关的是该账号**全部**匹配领域的连接——存储行
