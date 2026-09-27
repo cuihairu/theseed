@@ -455,7 +455,7 @@ void BaseApp::onSpaceChanged(runtime::EntityId entityId, runtime::SpaceId spaceI
 
     login::SpaceChangeMsg msg;
     msg.entityId = entityId;
-    msg.spaceId = spaceId;
+    msg.spaceId = static_cast<std::uint32_t>(spaceId);
     msg.posX = position.x;
     msg.posY = position.y;
     msg.posZ = position.z;
