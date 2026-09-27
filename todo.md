@@ -103,6 +103,17 @@
    trim 四类空白字符臂、SessionStore/DBApp/HostProbe 单臂——集中于
    本系列早批代码，非本批引入。后续按文件分批补测试消化，消化完
    可升回分支硬门。
+9. **daemon 测试审计钉修复 + gcov 覆盖池恢复（2026-09-27 收尾轮）**：
+   profile "9z" 畸形句柄拒收臂入测后漏拨中心审计环钉（13→14 条，
+   `Expect[14]` 加第四条 `{"profiler.download", false}`，终止守卫臂
+   换 `4294967295x` 真实垃圾尾）；此前的 gcovr 95.2% 判定为失败测试
+   进程提前退出未 flush .gcda 的伪缺口（554/558 缺行全在
+   MachineDaemon.cpp），非真实回退——修后全量 `-j1` 重跑覆盖池恢复
+   行/函数 100%。随批外部提交：coverage 门 `--gcov-executable gcov-14`
+   （6879766）、macOS 非阻塞 connect 状态机 + 全链 TCP_NODELAY
+   （544e6ee）、TcpConnection recv 真实错误臂豁免（85712fa）、BaseApp
+   SpaceId C4244（575fec0）、Linux 专用测试按 `UNIX AND NOT APPLE`
+   门控（a2dfc91）。
 
 **边界与遗留（如实记录）**：
 - Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存
