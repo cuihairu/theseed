@@ -111,7 +111,9 @@ static void test_redis_zrem() {
     if (r.zrem("idx", "a")) { FAIL("zrem of removed member should be false"); return; }
     if (r.zrem("no-such-set", "a")) { FAIL("zrem on missing set should be false"); return; }
     if (r.zcard("idx") != 1) { FAIL("zcard should drop to 1 after zrem"); return; }
-    auto left = r.zrange("idx", 0, -1);
+    // stop 用 size_t 哨兵表示"直到末尾"（裸 -1 在 MSVC 触发 C4245；
+    // 与 SessionStore/RedisProvider.cpp 同款惯例）。
+    auto left = r.zrange("idx", 0, static_cast<std::size_t>(-1));
     if (left.size() != 1 || left[0].first != "b") { FAIL("wrong member left after zrem"); return; }
     PASS();
 }
@@ -357,7 +359,7 @@ static void test_redis_zrange_score_tie_break_by_member() {
     r.zadd("tie", "banana", 1.0);
     r.zadd("tie", "apple", 1.0);
     r.zadd("tie", "cherry", 0.5);
-    auto range = r.zrange("tie", 0, -1);
+    auto range = r.zrange("tie", 0, static_cast<std::size_t>(-1));
     bool ok = range.size() == 3;
     ok = ok && range[0].first == "cherry";   // 低分在前
     ok = ok && range[1].first == "apple";    // 同分按成员名字典序

@@ -74,7 +74,7 @@ struct PostgreSQLResult::Impl {
         columnCountVal = static_cast<std::size_t>(PQnfields(res));
         isByteaCol.assign(columnCountVal, false);
         for (std::size_t c = 0; c < columnCountVal; ++c) {
-            Oid type = PQftype(res, c);
+            Oid type = PQftype(res, static_cast<int>(c));
             isByteaCol[c] = (type == kByteaOid);
         }
         const int n = PQntuples(res);

@@ -91,6 +91,10 @@ public:
                            std::vector<std::byte> maxValue = {});
 
     static std::size_t fixedSizeOfType(PropertyType type);
+    // 定长属性的对齐要求：存储区偏移按此向上取整摆放。get<T>/set<T> 直接
+    // reinterpret 存储区，裸顺序 packing 会把 8 字节类型落在 4 mod 8 偏移
+    // 上（UBSan misaligned 捕获、ARM 类平台硬件陷阱）。
+    static std::size_t alignmentOfType(PropertyType type);
     static bool isVariableSized(PropertyType type);
     std::size_t propertyCount() const;
     std::size_t storageSize() const;

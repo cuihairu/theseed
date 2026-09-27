@@ -26,6 +26,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -33,9 +34,14 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <variant>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <libproc.h>  // proc_name：等待 fork 子进程完成 exec（见 waitForProcessName）
+#endif
 
 using theseed::control::machine::AccessRole;
 using theseed::control::machine::LocalHostProbe;
@@ -274,6 +280,38 @@ private:
     std::vector<std::string> delSuffixes_;
     std::vector<std::string> expireSuffixes_;
 };
+
+// fork→execl 与守护进程侧进程枚举之间存在固有竞态：exec 完成前，子进程
+// comm 仍是测试二进制名截 15 字符（恰为 "theseed_machine"），不在杀名单
+// 内，处置会被误拒（sanitize 下 fork/exec 变慢后实测踩中）。等待进程名
+// 落定为预期值后再发起处置。Linux 读 /proc/<pid>/comm；macOS 走 libproc
+// 的 proc_name（本机 Linux 无法运行期验证，由 CI macos job 首验）；其余
+// 平台无名字查询手段，不等待、保持既有行为。
+bool waitForProcessName(pid_t pid, const char* expected) {
+#if !defined(__linux__) && !defined(__APPLE__)
+    static_cast<void>(pid);
+    static_cast<void>(expected);
+    return true;
+#else
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+#if defined(__linux__)
+        std::ifstream comm("/proc/" + std::to_string(pid) + "/comm");
+        std::string name;
+        const bool matched = static_cast<bool>(comm >> name) && name == expected;
+#else
+        char buffer[256] = {};
+        const bool matched =
+            proc_name(pid, buffer, sizeof(buffer)) > 0 && std::string(buffer) == expected;
+#endif
+        if (matched) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+#endif
+}
 
 }  // namespace
 
@@ -977,6 +1015,8 @@ int main() {
             ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
             ::_exit(127);
         }
+        if (!waitForProcessName(sleeper, "sleep"))
+            FAIL("sleeper did not reach exec'd name in time");
         const auto sleeperPid = std::to_string(static_cast<std::uint32_t>(sleeper));
 
         RuntimeInvocation resp;
@@ -1716,6 +1756,8 @@ int main() {
             ::execl("/bin/sleep", "sleep", "30", static_cast<char*>(nullptr));
             ::_exit(127);
         }
+        if (!waitForProcessName(sleeper, "sleep"))
+            FAIL("sleeper did not reach exec'd name in time");
         if (!adm.request(MachineMethod::kTerminate,
                          payloadOf(std::to_string(static_cast<std::uint32_t>(
                              sleeper))),

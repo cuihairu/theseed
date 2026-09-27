@@ -178,6 +178,7 @@ double queryMemoryUsage() {
     return 0.0;  // LCOV_EXCL_LINE macOS 系统调用失败兜底，Linux 覆盖率不可见
 #endif
 
+#if defined(__linux__)
     // LCOV_EXCL_START sysinfo 在 Linux 恒成功，sysconf fallback 不可达
     const long totalPages = sysconf(_SC_PHYS_PAGES);
     const long availablePages = sysconf(_SC_AVPHYS_PAGES);
@@ -190,6 +191,11 @@ double queryMemoryUsage() {
          static_cast<long double>(totalPages)) *
         100.0L);
     // LCOV_EXCL_STOP
+#else
+    // sysconf(_SC_AVPHYS_PAGES) 是 Linux/glibc 扩展，Apple 头不提供；
+    // macOS 分支在上方已全路径 return，此处仅为矩阵外其他 POSIX 兜底。
+    return 0.0;
+#endif
 }
 
 bool queryCpuTicks(std::uint64_t& idleTicks, std::uint64_t& totalTicks) {

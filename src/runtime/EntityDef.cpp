@@ -7,6 +7,15 @@
 
 namespace theseed::runtime {
 
+namespace {
+
+// 向上取整到 alignment 的倍数；alignment 恒为类型对齐（2 的幂），无需防 0。
+std::size_t alignUp(std::size_t value, std::size_t alignment) {
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+}  // namespace
+
 EntityDef::EntityDef(std::string entityType) : entityType_(std::move(entityType)) {}
 
 const std::string& EntityDef::entityType() const {
@@ -30,7 +39,7 @@ bool EntityDef::mergeFrom(const EntityDef& parent) {
         }
         auto descriptor = prop;
         descriptor.id = static_cast<PropertyId>(properties_.size());
-        descriptor.offset = storageSize_;
+        descriptor.offset = alignUp(storageSize_, alignmentOfType(prop.type));
         properties_.push_back(std::move(descriptor));
         storageSize_ += prop.size;
     }
@@ -46,6 +55,26 @@ bool EntityDef::mergeFrom(const EntityDef& parent) {
 
     inherited_ = true;
     return true;
+}
+
+std::size_t EntityDef::alignmentOfType(PropertyType type) {
+    switch (type) {
+        case PropertyType::Int8:
+        case PropertyType::UInt8:
+        case PropertyType::Bool:    return 1;
+        case PropertyType::Int16:
+        case PropertyType::UInt16:  return 2;
+        case PropertyType::Int32:
+        case PropertyType::UInt32:
+        case PropertyType::Float32:
+        case PropertyType::Vector3: return 4;
+        case PropertyType::Int64:
+        case PropertyType::UInt64:
+        case PropertyType::Float64: return 8;
+        default:
+            // String/Blob 定长区不占字节（size=0），非法枚举值同样按 1 处理。
+            return 1;
+    }
 }
 
 std::size_t EntityDef::fixedSizeOfType(PropertyType type) {
@@ -87,7 +116,7 @@ PropertyId EntityDef::addProperty(std::string name, PropertyType type, std::size
     descriptor.id = static_cast<PropertyId>(properties_.size());
     descriptor.name = std::move(name);
     descriptor.type = type;
-    descriptor.offset = storageSize_;
+    descriptor.offset = alignUp(storageSize_, alignmentOfType(type));
     descriptor.flags = flags;
     descriptor.defaultValue = std::move(defaultValue);
     descriptor.minValue = std::move(minValue);

@@ -45,15 +45,20 @@ jobs:
       - name: Install gcovr
         run: pipx install gcovr
 
+      # ubuntu-24.04 镜像自带 libpq，find_package(PostgreSQL) 会自动点亮
+      # PG 后端——但 runner 上没有可连的 PG 服务器，测试自跳，PostgreSQL*
+      # 源码全量 0 覆盖进 gcovr 分母（实测行 96.4%/分支 92.6%）。显式禁用
+      # 该 find，保持与本地无 libpq 的开发树同一分母。gcc-debug/sanitize
+      # 不设门禁的 job 仍保留 PG 参编（真实 libpq 的编译验证在那两条腿）。
       - name: Configure
-        run: cmake --preset gcc-coverage
+        run: cmake --preset gcc-coverage -DCMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON
 
       - name: Build
         run: cmake --build --preset gcc-coverage
 
       # gcc-coverage testPreset 固定 jobs=1：并行跑测试会写坏共享库的 gcda。
-      # 无 vcpkg toolchain → THESEED_HAS_MYSQL=OFF，SQL 后端不编译，
-      # 分母为本地口径的子集，门禁阈值与本地一致。
+      # 无 vcpkg toolchain → THESEED_HAS_MYSQL=OFF，PG 亦显式禁用，
+      # SQL 后端不编译，分母为本地口径的子集，门禁阈值与本地一致。
       - name: Test
         run: ctest --preset gcc-coverage
 

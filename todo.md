@@ -48,6 +48,32 @@
    initializers 未按编译器分流（MSVC D8021，加 NOT MSVC 守卫）；
    TransportHub.h 缺 #include <memory>（libstdc++ 经 unordered_map 传递
    引入，Apple libc++ 不引，全仓头文件扫描确认仅此一处）。
+6. **随批修复之二：编译红修穿后各 job 首次跑到真实阶段，暴露五路既有
+   问题（2026-09-27 第二轮）**：(a) coverage 门分母破约——ubuntu-24.04
+   镜像自带 libpq，find_package 自动点亮 PG 后端，而 runner 无可连 PG
+   服务器、测试自跳，PostgreSQL* 源码全量 0 覆盖进 gcovr 分母（实测行
+   96.4%/分支 92.6%）；coverage job 显式
+   -DCMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON 恢复与本地同分母，非门禁
+   job 保留 PG 参编（真实 libpq 的跨编译器编译验证在 gcc-debug 腿，该腿
+   本轮实测 118/118 全绿）；(b) macOS：sysconf 兜底的 _SC_AVPHYS_PAGES
+   是 Linux/glibc 扩展、Apple 头不提供，且该兜底原在平台链 #endif 之后
+   全平台参编——收进 __linux__ 分支（Apple 分支本就全路径 return，行为
+   不变）；(c) tests 的 -Wno-missing-designated-field-initializers 守卫
+   方向写反（挂 Clang，实为 GCC 15 旗标；CI clang 18 对 -Wno-未知项直接
+   -Werror）——改 check_cxx_compiler_flag 正向探测（配 -Werror 的
+   CMAKE_REQUIRED_FLAGS；clang 对未知 -Wno- 只告警，负向探测不可靠）；
+   (d) sanitize 红一：EntityDef 定长属性裸顺序 packing 把 Int64 摆在
+   4 mod 8 偏移，PropertyBlock::get<T> 的 reinterpret 产生 misaligned
+   reference binding——新增 alignmentOfType 按类型对齐摆放偏移（alignUp），
+   两处 storageSize 硬编码断言均为自然紧凑布局、不受扰；线格式按
+   propertyId+字节长度走、不嵌偏移，兼容性无扰；(e) sanitize 红二：
+   fork→execl 与守护进程 /proc 枚举的固有竞态——exec 完成前子进程 comm
+   仍是测试二进制名截 15 字符（恰为 "theseed_machine"），杀名单误拒；
+   测试侧等待进程名落定再处置（Linux /proc/<pid>/comm 轮询；macOS
+   proc_name，本机不可验证、由 CI macos job 首验）；(f) MSVC 双警升错：
+   PostgreSQLConnection 的 PQftype size_t→int 实参（static_cast，本机无
+   libpq 编译不可验证）与 RedisProviderTest 两处 zrange 裸 -1（同款
+   size_t 哨兵）。
 
 **边界与遗留（如实记录）**：
 - Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存
@@ -59,7 +85,8 @@
 
 验证口径：gcc-coverage 与 clang 双树 cmake --build + ctest 全绿；
 gcovr 行/函数 100%（口径含带理由 LCOV_EXCL，门禁见各批记录）；
-CI 四平台 job 以 push 后 gh run watch 为准。
+CI 五平台六 job（linux×3 + coverage 门 + windows + macos）以 push 后
+gh run watch 为准。
 
 ## db 腿运行期韧性：断链退避重连 + 登录查询自愈（04 §8，2026-09-27）
 
