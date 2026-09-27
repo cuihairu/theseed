@@ -369,7 +369,9 @@ std::vector<ProcessSummary> LocalProcessSupervisor::listProcesses() const {
     // 版本探测：权限边界——只主动连接受管进程的端口，不触碰非受管进程。
     for (auto& process : processes) {
         if (process.managed && process.port != 0) {
-            process.version = probeProcessVersion(process.port);
+            // port 存储面加宽为 uint32，但取值恒来自端口扫描器的 uint16
+            // （bind/htons 语义），显式收缩无损；裸传在 MSVC 触发 C4244。
+            process.version = probeProcessVersion(static_cast<std::uint16_t>(process.port));
         }
     }
 

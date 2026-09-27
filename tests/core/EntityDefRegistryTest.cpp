@@ -2,6 +2,7 @@
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 
+#include <algorithm>  // std::sort（libc++ 不经传递包含引入）
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
