@@ -1,5 +1,58 @@
 # TODO
 
+## db 腿运行期韧性：断链退避重连 + 登录查询自愈（04 §8，2026-09-27）
+
+把上批遗留的「db 腿传输仍是静态单次连接」闭环：LoginApp 对 DBApp 的
+出站腿补与通知腿同款监督（登录数据面的传输层自愈，DBApp 重启后无需
+人工重启 LoginApp）。
+
+1. **复用同款监督（LoginApp 私有面）**：通知腿的三段状态机枚举更名
+   LinkState（PendingAck/Up/Backoff）供两腿共用；db 腿五函数与通知腿
+   一一对应（attempt/schedule/confirm/markDown/supervise）。断链即摘除
+   死 peer + logWarn(cause=transport-lost/probe-ack-timeout) + 计数
+   login_db_link_down_count；退避 base 起步、翻倍封顶 max、恢复复位
+   （Config 三参数 dbReconnectBaseDelay 1s / dbReconnectMaxDelay 30s /
+   dbProbeAckTimeout 5s，无魔数）；每次尝试独立重调 dbTransportFactory
+   （seam 语义更新：重连每次铸造新 transport，与 machine 腿同款）；
+   seam 返空/探针发不出只告警排重试、不重复计 down。init 里 db 腿首试
+   失败不再中断路径（旧代码 connect 失败直接 return，跳过 ops 接线）：
+   转入监督状态机运行期自愈。
+2. **探针选型：db.listTypes**（不是 queryAccount）：只读、DBApp 恒
+   应答；关键是其应答方法 "db.listTypes.ok" 不与任何登录请求的应答
+   匹配串重叠——迟到的探针应答绝不会被在途 dbRequest 误认作登录应答
+   （queryAccount 探针则与登录查询同串，存在错配窗口）。应答经
+   handleInvocation 消费并记 login.db.link.ready，不落入未知 method
+   计数。DBApp 侧对新连接的注册仍由其 hub 首请求 sourceComponent 自报
+   （与 attachServerTransport 同机制，零新协议）。
+3. **拉取式活性口径**：db 腿无推送面，Up 证实点有两处——排空面的探针
+   应答（tick → drainInvocations）与 dbRequest 等待循环里收到的任何
+   DBApp 应答（真实登录的应答本就是链路可用的最强证据，就地证实）。
+   断连窗口内 peer 已从 hub 摘除：dbRequest 立即 NotConnected → 既有
+   "database unavailable" 降级（计数口径不变），不阻塞 tick、不排队
+   重放——沿用请求-应答面的超时降级语义，非通知腿的 best-effort。
+4. **测试**：LoginAppTest 桩面新增 db 韧性块五臂（FakeDbTransport 补
+   isConnected/alive/sends/probe 观测面，探针经 createMode 维编排：
+   Canned=应答/Silent=吞/Closed=发不出）——Up 断链→退避重连→探针重发
+   →恢复、ack 超时臂、seam 返空臂（失败尝试≠断链）、探针发不出臂
+   （不残留空注册）、恢复后登录查询真的走通（功能面验收）；既有 db
+   桩面（hit/auto-register/超时/杂散/Closed/null seam）零回退。
+   **场景 H（真实 TCP）**：file 后端 DBApp 下线 → 监督检出（down 计数）
+   → 同端口重启 → 无人工干预自动重连重注册（up 计数）→ 同账号重登走
+   query-hit（存储行跨重启保留，应答沿恢复的双向链路回来）。场景 A–G
+   零回退。
+5. **计数命名口径**：派单写的是 db_link_down_count/db_link_up_count
+   简写，按仓库既有 login_<腿>_link_<事件>_count 家族落为
+   login_db_link_down_count / login_db_link_up_count（与通知腿成对）。
+
+**边界与遗留（如实记录）**：
+- 断连窗口内的登录请求直接失败（database unavailable），不排队重放
+  ——登录是同步请求-应答面，重试属客户端语义（与通知腿"漏送不补发"
+  同理：恢复的是链路不是历史）。
+- 心跳仍是 NetworkTransport 层 30s 控制通道消息，非应用层探活。
+
+验证口径：gcc-coverage 与 clang 双树 cmake --build + ctest 全绿；
+gcovr 行/函数 100%（口径含带理由 LCOV_EXCL，门禁见各批记录）。
+
 ## 通知腿运行期韧性：断链退避重连 + 订阅自愈（04 §8，2026-09-27）
 
 把上批遗留的第 1 条（hub 无重连/心跳，daemon 重启后 LoginApp 要人工重启

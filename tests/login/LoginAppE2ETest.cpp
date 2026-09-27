@@ -934,6 +934,131 @@ int main() {
         revived.stop();
     }
 
+    // ------------------------------------------------------------------
+    // 场景 H：db 腿运行期韧性（04 §8 同款）——DBApp 下线后原端口重启，
+    // LoginApp 监督面按退避自动重连、重发 db.listTypes 接通探针重新
+    // 注册（无需重启 LoginApp），登录查询恢复。真实 TCP 全链路；断/复
+    // 两端计数（down 检出与 up 恢复各自增量可查）。
+    // ------------------------------------------------------------------
+    {
+        const std::uint16_t dbListenPort = freePort();
+        const std::uint16_t listenPort = freePort();
+        if (dbListenPort == 0 || listenPort == 0) FAIL("cannot find free ports");
+        const std::string storeDir = "test_login_e2e_store_h";
+        std::filesystem::remove_all(storeDir);
+
+        // file 后端跨重启保留账号行：恢复后的二次登录走 query-hit 路径
+        // （found + 密码匹配），比 auto-register 更能证明查询真的通了。
+        auto makeDbCfg = [dbListenPort, &storeDir] {
+            DBApp::Config c;
+            c.listenPort = dbListenPort;
+            c.storePath = storeDir;
+            c.storeBackend = "file";
+            return c;
+        };
+
+        LoginAppConfig cfg;
+        cfg.listenHost = "127.0.0.1";
+        cfg.listenPort = listenPort;
+        cfg.authType = "db";
+        cfg.dbHost = "127.0.0.1";
+        cfg.dbPort = dbListenPort;
+        // 测试内短退避（生产默认 1s/30s）；探针应答窗也压到毫秒级，
+        // 让 DBApp 宕机期间的失败尝试快速收敛、不拖慢重启后的轮询。
+        cfg.dbReconnectBaseDelay = std::chrono::milliseconds{20};
+        cfg.dbReconnectMaxDelay = std::chrono::milliseconds{200};
+        cfg.dbProbeAckTimeout = std::chrono::milliseconds{200};
+
+        auto& downCounter = foundation::MetricsRegistry::instance().counter(
+            "login_db_link_down_count");
+        auto& upCounter = foundation::MetricsRegistry::instance().counter(
+            "login_db_link_up_count");
+
+        DBApp dbApp(makeDbCfg());
+        if (!dbApp.init()) FAIL("DBApp init failed for db-leg resilience");
+        std::atomic<bool> dbRunning{true};
+        std::thread dbThread([&dbApp, &dbRunning] {
+            while (dbRunning.load()) {
+                dbApp.tick();
+                usleep(1000);
+            }
+        });
+
+        LoginApp app(std::move(cfg));
+        TEST("DBApp up: db link auto-up, first login auto-registers");
+        const auto up0 = upCounter.value();
+        app.init();
+        for (int i = 0; i < 8000 && upCounter.value() < up0 + 1; ++i) {
+            app.tick();
+            usleep(1000);
+        }
+        if (upCounter.value() < up0 + 1) FAIL("initial db link never came up");
+
+        FrameClient iron;
+        if (!iron.connect(listenPort)) FAIL("iron connect failed");
+        for (int i = 0; i < 40; ++i) {  // 等 accept
+            app.tick();
+            iron.conn->pump();
+            usleep(2000);
+        }
+        ClientMessageType type;
+        std::vector<std::byte> payload;
+        ParsedLoginResponse lr;
+        if (!iron.request([&] { app.tick(); }, ClientMessageType::Login,
+                          encodeLoginRequest("iron", "secret"), type, payload))
+            FAIL("no response to first Login(iron)");
+        if (!decodeLoginResponse(payload, lr) || !lr.success)
+            FAIL("first db login failed: " + lr.error);
+        PASS();
+
+        TEST("supervision detects the DBApp going down");
+        const auto down0 = downCounter.value();
+        dbRunning.store(false);
+        dbThread.join();
+        dbApp.stop();  // hub 释放 → 对端连接关闭 → 本端泵 socket 见 EOF
+        for (int i = 0; i < 8000 && downCounter.value() < down0 + 1; ++i) {
+            app.tick();
+            usleep(1000);
+        }
+        if (downCounter.value() < down0 + 1)
+            FAIL("dead db link must be detected by supervision (down counted)");
+        PASS();
+
+        TEST("DBApp restart same port: auto-reconnect, re-register, query restored");
+        // 原端口重启（TcpListener 的 SO_REUSEADDR 保证立即可重绑）。
+        DBApp revived(makeDbCfg());
+        if (!revived.init()) FAIL("revived DBApp init failed");
+        std::atomic<bool> revivedRunning{true};
+        std::thread revivedThread([&revived, &revivedRunning] {
+            while (revivedRunning.load()) {
+                revived.tick();
+                usleep(1000);
+            }
+        });
+        const auto up1 = upCounter.value();
+        for (int i = 0; i < 16000 && upCounter.value() < up1 + 1; ++i) {
+            app.tick();
+            usleep(1000);
+        }
+        if (upCounter.value() < up1 + 1)
+            FAIL("LoginApp must reconnect to the revived DBApp without restart");
+        // 恢复的是功能面：同账号重登走 query-hit（file store 行跨重启
+        // 保留）——应答真的沿重连并重注册的双向链路回来了。
+        ParsedLoginResponse lr2;
+        if (!iron.request([&] { app.tick(); }, ClientMessageType::Login,
+                          encodeLoginRequest("iron", "secret"), type, payload))
+            FAIL("no response to Login(iron) after DBApp restart");
+        if (!decodeLoginResponse(payload, lr2) || !lr2.success)
+            FAIL("db query over recovered link must succeed, error=" + lr2.error);
+        if (downCounter.value() < down0 + 1)
+            FAIL("link-down counter must still reflect the detected drop");
+        revivedRunning.store(false);
+        revivedThread.join();
+        revived.stop();
+        std::filesystem::remove_all(storeDir);
+        PASS();
+    }
+
     std::cout << "\nAll LoginApp E2E tests passed!" << std::endl;
     return 0;
 }

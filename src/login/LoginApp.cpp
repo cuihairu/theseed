@@ -103,21 +103,18 @@ void LoginApp::init() {
         hub_ = std::make_shared<runtime::TransportHub>(config_.localComponentId);
     }
 
+    // db 腿（04 §8 同款运行期韧性）：不再是一次性静态连接——首次尝试
+    // 即走监督状态机（Backoff 排期零时点 = 立即尝试），其后的断链检测、
+    // 摘 peer、退避重连、探针重发全在 superviseDbLink 里闭环（DBApp
+    // 重启后无需人工重启 LoginApp）。首试失败同样不阻断 init：seam 返空
+    // 等形态只告警排重试。
     if (dbLeg) {
-        std::shared_ptr<runtime::IRuntimeTransport> transport;
-        if (config_.dbTransportFactory) {
-            transport = config_.dbTransportFactory(config_.dbHost, config_.dbPort);
-        } else {
-            auto conn = runtime::TcpConnection::create();
-            if (!conn->connect(config_.dbHost, config_.dbPort)) {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（见下方 EXCL 区同理由）
-                // LCOV_EXCL_START Linux 非阻塞 connect 对无服务端口恒返回 EINPROGRESS；inet_pton 无 DNS，坏主机名解析为 0.0.0.0 同样如此
-                return;
-                // LCOV_EXCL_STOP
-            }
-            transport = std::make_shared<runtime::NetworkTransport>(conn);
-        }  // LCOV_EXCL_BR_LINE 无 factory 臂必先经上方不可达 connect 失败，此汇合边不可达
-        hub_->connectPeer(config_.dbComponentId, transport);
-    }  // LCOV_EXCL_BR_LINE 函数尾汇合伪边归因本行（gcc 布局伪影，非业务条件）
+        dbLegEnabled_ = true;
+        dbRetryDelay_ = config_.dbReconnectBaseDelay;
+        dbLinkState_ = LinkState::Backoff;
+        dbRetryAt_ = runtime::Clock::now();  // 首次尝试立即进行
+        attemptDbLink();
+    }
 
     // 控制面通知腿（04 §8 踢人联动生产接线 + 运行期韧性）：出站连
     // MachineDaemon 并发一条 machine.snapshot 注册探针自报身份——daemon
@@ -129,7 +126,7 @@ void LoginApp::init() {
     // 无需人工重启 LoginApp）。
     if (machineLeg) {
         machineRetryDelay_ = config_.machineReconnectBaseDelay;
-        machineLinkState_ = MachineLinkState::Backoff;
+        machineLinkState_ = LinkState::Backoff;
         machineRetryAt_ = runtime::Clock::now();  // 首次尝试立即进行
         attemptMachineLink();
     }
@@ -169,6 +166,7 @@ void LoginApp::tick() {
         // 不误伤刚恢复的链路。
         drainInvocations();
         superviseMachineLink();
+        superviseDbLink();
     }
     acceptConnections();
     for (auto& session : sessions_) {
@@ -201,7 +199,9 @@ void LoginApp::tick() {
 void LoginApp::stop() {
     sessions_.clear();
     machineTransport_.reset();
-    machineLinkState_ = MachineLinkState::Backoff;
+    machineLinkState_ = LinkState::Backoff;
+    dbTransport_.reset();
+    dbLinkState_ = LinkState::Backoff;
     hub_.reset();
     listener_.close();
 }
@@ -272,22 +272,22 @@ void LoginApp::attemptMachineLink() {
         return;
     }
     hub_->flush();
-    machineLinkState_ = MachineLinkState::PendingAck;
+    machineLinkState_ = LinkState::PendingAck;
     machineAckDeadline_ = runtime::Clock::now() + config_.machineProbeAckTimeout;
 }
 
 void LoginApp::scheduleMachineRetry() {
-    machineLinkState_ = MachineLinkState::Backoff;
+    machineLinkState_ = LinkState::Backoff;
     machineRetryAt_ = runtime::Clock::now() + machineRetryDelay_;
     const auto doubled = machineRetryDelay_ * 2;
     machineRetryDelay_ = std::min(doubled, config_.machineReconnectMaxDelay);
 }
 
 void LoginApp::confirmMachineLinkUp() {
-    if (machineLinkState_ != MachineLinkState::PendingAck) {
+    if (machineLinkState_ != LinkState::PendingAck) {
         return;  // Up 幂等；Backoff 下入站属理论外形态，不误升级
     }
-    machineLinkState_ = MachineLinkState::Up;
+    machineLinkState_ = LinkState::Up;
     machineRetryDelay_ = config_.machineReconnectBaseDelay;  // 链路恢复，退避复位
     foundation::logInfo("login.machine.link.up", {});
     theseed::foundation::MetricsRegistry::instance()
@@ -313,19 +313,126 @@ void LoginApp::superviseMachineLink() {
     if (config_.machineHost.empty() || !hub_) return;  // 未接线/已 stop：无监督
     const auto now = runtime::Clock::now();
     switch (machineLinkState_) {
-        case MachineLinkState::PendingAck: {
+        case LinkState::PendingAck: {
             const bool alive = machineTransport_ && machineTransport_->isConnected();
             if (alive && now < machineAckDeadline_) break;  // 应答仍宽限
             markMachineLinkDown(alive ? "probe-ack-timeout" : "transport-lost");
             break;
         }
-        case MachineLinkState::Up:
+        case LinkState::Up:
             if (machineTransport_ && machineTransport_->isConnected()) break;
             markMachineLinkDown("transport-lost");
             break;
-        case MachineLinkState::Backoff:
+        case LinkState::Backoff:
             if (now < machineRetryAt_) break;
             attemptMachineLink();  // 成败皆迁移状态：接通 PendingAck，未接通重排 Backoff
+            break;
+    }
+}
+
+// db 腿监督（04 §8 同款韧性，登录数据面的传输层自愈）。与通知腿的差异：
+//   - 探针选 db.listTypes：只读、DBApp 恒应答，且应答方法
+//     "db.listTypes.ok" 不与任何登录请求（queryAccount/createAccount）
+//     的应答匹配串重叠——迟到的探针应答绝不会被在途 dbRequest 误认为
+//     登录应答（若用 queryAccount 探针则二者同串，存在错配窗口）。
+//   - db 腿是拉取式：Up 证实除排空面的探针应答外，dbRequest 等待循环里
+//     收到的任何 DBApp 应答（含真实登录的）也升级活性——链路真正可用
+//     的事实点本就在应答到达处。
+// 断链窗口内 peer 已从 hub 摘除：dbRequest 的 send 立即 NotConnected，
+// 登录按既有 "database unavailable" 语义失败，tick 不额外等待。
+void LoginApp::attemptDbLink() {
+    std::shared_ptr<runtime::IRuntimeTransport> transport;
+    if (config_.dbTransportFactory) {
+        transport = config_.dbTransportFactory(config_.dbHost, config_.dbPort);
+    } else {
+        auto conn = runtime::TcpConnection::create();
+        if (conn->connect(config_.dbHost, config_.dbPort)) {
+            transport = std::make_shared<runtime::NetworkTransport>(conn);
+        } else {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（与 machine 腿同理由）
+            // LCOV_EXCL_START inet_pton 无 DNS：坏主机名解析为 0.0.0.0 同样 EINPROGRESS，本臂不可达
+            foundation::logWarn("login.db.link.refused", {});
+            // LCOV_EXCL_STOP
+        }
+    }
+    if (!transport) {
+        // 拿不到 transport（注入 seam 返空）：只告警排重试，登录面无感。
+        foundation::logWarn("login.db.link.no-transport", {});
+        scheduleDbRetry();
+        return;
+    }
+    // connectPeer 覆盖旧注册：重连路径以新 transport 顶替死腿；DBApp 侧
+    // 对新连接的注册由其 hub 在探针首请求到达时自报完成（与 machine 腿
+    // attachServerTransport 同机制）。
+    hub_->connectPeer(config_.dbComponentId, transport);
+    dbTransport_ = std::move(transport);
+    runtime::RuntimeInvocation probe;
+    probe.sourceComponent = config_.localComponentId;
+    probe.targetComponent = config_.dbComponentId;
+    probe.method = db::DBMethod::kListTypes;
+    if (hub_->send(std::move(probe)) != runtime::SendResult::Accepted) {
+        // 探针都发不出（对端 transport 报 NotConnected）：本次尝试未
+        // 接通，摘除死 peer 退避重试——不留挂着空注册的链路。
+        foundation::logWarn("login.db.probe.unsent", {});
+        hub_->disconnectPeer(config_.dbComponentId);
+        dbTransport_.reset();
+        scheduleDbRetry();
+        return;
+    }
+    hub_->flush();
+    dbLinkState_ = LinkState::PendingAck;
+    dbAckDeadline_ = runtime::Clock::now() + config_.dbProbeAckTimeout;
+}
+
+void LoginApp::scheduleDbRetry() {
+    dbLinkState_ = LinkState::Backoff;
+    dbRetryAt_ = runtime::Clock::now() + dbRetryDelay_;
+    const auto doubled = dbRetryDelay_ * 2;
+    dbRetryDelay_ = std::min(doubled, config_.dbReconnectMaxDelay);
+}
+
+void LoginApp::confirmDbLinkUp() {
+    if (dbLinkState_ != LinkState::PendingAck) {
+        return;  // Up 幂等；Backoff 下入站属理论外形态，不误升级
+    }
+    dbLinkState_ = LinkState::Up;
+    dbRetryDelay_ = config_.dbReconnectBaseDelay;  // 链路恢复，退避复位
+    foundation::logInfo("login.db.link.up", {});
+    theseed::foundation::MetricsRegistry::instance()
+        .counter("login_db_link_up_count",
+                 "db link establishments confirmed by inbound from DBApp")
+        .increment();
+}
+
+void LoginApp::markDbLinkDown(const char* cause) {
+    const std::string causeText = cause;
+    const foundation::LogAttribute causeAttr = {"cause", causeText};
+    foundation::logWarn("login.db.link.down", {causeAttr});
+    theseed::foundation::MetricsRegistry::instance()
+        .counter("login_db_link_down_count",
+                 "db link losses detected by LoginApp supervision")
+        .increment();
+    hub_->disconnectPeer(config_.dbComponentId);
+    dbTransport_.reset();
+    scheduleDbRetry();
+}
+
+void LoginApp::superviseDbLink() {
+    if (!dbLegEnabled_ || !hub_) return;  // 未接线/已 stop：无监督
+    const auto now = runtime::Clock::now();
+    switch (dbLinkState_) {
+        case LinkState::PendingAck: {
+            const bool alive = dbTransport_ && dbTransport_->isConnected();
+            if (alive && now < dbAckDeadline_) break;  // 应答仍宽限
+            markDbLinkDown(alive ? "probe-ack-timeout" : "transport-lost");
+            break;
+        }
+        case LinkState::Up:
+            if (dbTransport_ && dbTransport_->isConnected()) break;
+            markDbLinkDown("transport-lost");
+            break;
+        case LinkState::Backoff:
+            if (now < dbRetryAt_) break;
+            attemptDbLink();  // 成败皆迁移状态：接通 PendingAck，未接通重排 Backoff
             break;
     }
 }
@@ -335,6 +442,17 @@ void LoginApp::handleInvocation(const runtime::RuntimeInvocation& inv) {
     // 状态机据此把 PendingAck 升级为 Up——订阅通道真正可用的事实点。
     if (inv.sourceComponent == config_.machineComponentId) {
         confirmMachineLinkUp();
+    }
+    // DBApp 方向入站同理（排空面看到的通常是接通探针的应答；登录应答
+    // 一般在 dbRequest 等待循环里就地证实，见该处 confirmDbLinkUp）。
+    // listTypes.ok 是探针应答：记接通就绪后消费掉，不落入未知 method
+    // 计数（探针是自家发起的，应答不是异常）。
+    if (inv.sourceComponent == config_.dbComponentId) {
+        confirmDbLinkUp();
+        if (inv.method == db::DBMethod::kListTypesOk) {
+            foundation::logInfo("login.db.link.ready", {});
+            return;
+        }
     }
     if (inv.method == control::machine::MachineMethod::kSessionRevoked) {
         std::string account, realm;
@@ -403,6 +521,11 @@ runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
     while (runtime::Clock::now() < deadline) {
         hub_->tick();
         if (hub_->receive(config_.localComponentId, &resp, 1) > 0) {
+            // db 腿拉取式的活性事实点在应答到达处：本循环直接消费的应答
+            // 不经排空面，这里补证实（PendingAck → Up，幂等；Up 下无操作）。
+            if (resp.sourceComponent == config_.dbComponentId) {
+                confirmDbLinkUp();
+            }
             if (resp.method == expect) return resp;
             // 非本请求的入站（machine 腿推送、过期 db 应答）：逐条分发
             handleInvocation(resp);

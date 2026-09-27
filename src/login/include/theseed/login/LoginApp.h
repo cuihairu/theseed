@@ -46,9 +46,27 @@ struct LoginAppConfig {
     // 避免 DBApp 失联时忙等挂死。
     std::chrono::milliseconds dbRequestTimeout{5000};
     // 测试/嵌入注入点：非空时跳过真实 TcpConnection，直接使用返回的 transport
-    //（返回 nullptr 时该 peer 缺席，dbRequest 立即按 NotConnected 失败）。
+    //（返回 nullptr = 本次尝试拿不到 transport：只告警排重试；链路未接通期间
+    // dbRequest 立即按 NotConnected 失败）。重连按退避重新调用本 seam 铸造新
+    // transport——与 machine 腿同款（每次尝试独立铸造，测试可脚本失败序列）。
     std::function<std::shared_ptr<runtime::IRuntimeTransport>(const std::string& host,
                                                               std::uint16_t port)> dbTransportFactory;
+    // db 腿运行期韧性（与通知腿同款监督模式，04 §8）：出站链路断开（DBApp
+    // 重启/掉线）或接通探针应答超窗后，tick 里的监督面按指数退避重连并重发
+    // db.listTypes 接通探针——复用 hub「首请求 sourceComponent 自报」注册
+    //（与 machine 腿探针同机制）。选 listTypes 而非 queryAccount：其 .ok
+    // 应答方法不与任何登录请求的应答匹配串重叠，迟到的探针应答不可能被
+    // 在途 dbRequest 误认作登录应答。断连窗口内的 db 请求照旧走 dbRequest
+    // 超时降级（发送即 NotConnected → "database unavailable"），不阻塞
+    // tick、不改变登录失败语义。
+    //   - 退避序列：base 起步，每次断链/失败尝试翻倍，封顶 max；
+    //     链路恢复（收到 DBApp 任一应答）复位为 base。
+    //   - ackTimeout：一次连接尝试后等待 DBApp 探针应答的上限，超时视为
+    //     该次尝试未接通——活性以收到流量为准，不以 connect 返回为准
+    //    （Linux 非阻塞 connect 恒 EINPROGRESS）。
+    std::chrono::milliseconds dbReconnectBaseDelay{1000};
+    std::chrono::milliseconds dbReconnectMaxDelay{30000};
+    std::chrono::milliseconds dbProbeAckTimeout{5000};
     // 控制面通知腿（04 §8 踢人联动生产接线）：MachineDaemon 地址。非空时
     // init 出站连 daemon（hub connectPeer）并发一条 machine.snapshot 注册
     // 探针——daemon 侧 hub 由首条请求的 sourceComponent 自报注册
@@ -141,14 +159,14 @@ private:
     // processMessages 同款）；由 tick 在 hub 泵后调用。
     void drainInvocations();
 
-    // 通知腿运行期韧性（04 §8）：出站链路的监督状态机。
-    //   PendingAck = 已连接已发探针，等 daemon 首个入站证实活性；
+    // 出站链路监督状态机（通知腿与 db 腿同款，04 §8 运行期韧性）。
+    //   PendingAck = 已连接已发探针，等对端首个入站证实活性；
     //   Up         = 活性已证实（应答或推送任一入站皆可）；
     //   Backoff    = 断链/超时，等退避窗口到期重连重探针。
     // 活性判定走 IRuntimeTransport::isConnected（对端 EOF 由 hub 泵
     // 触发 socket 读取转为假）+ 入站证实——不以 connect 返回为准
     //（Linux 非阻塞 connect 恒 EINPROGRESS，连到死端口也算"成功"）。
-    enum class MachineLinkState { PendingAck, Up, Backoff };
+    enum class LinkState { PendingAck, Up, Backoff };
     // 一次出站连接尝试：factory 或真实 TcpConnection 铸 transport →
     // connectPeer 覆盖注册 + 发 machine.snapshot 注册探针。失败（无
     // transport 或探针发不出）转入 Backoff 排期，不抛出、不阻断登录面。
@@ -166,9 +184,22 @@ private:
     // Backoff 到点重试。machineHost 为空（未接线）时不运行。
     void superviseMachineLink();
 
+    // db 腿运行期韧性（与上方通知腿监督同款，04 §8）：同一套三段状态机
+    // 与退避纪律，差异只在探针——发 db.listTypes（只读、必应答，且
+    // .ok 应答方法不与登录请求匹配串重叠），且 db 腿是拉取式：Up 证实
+    // 除探针应答外，任何 DBApp 方向的在途应答（含真实登录请求的）同样
+    // 升级。断链窗口内 dbRequest 因 peer 缺席立即 NotConnected 失败，
+    // 沿用既有超时降级语义。
+    void attemptDbLink();       // 一次出站连接尝试 + 发接通探针
+    void scheduleDbRetry();     // 转入 Backoff：窗口翻倍封顶 max
+    void confirmDbLinkUp();     // DBApp 方向入站证实：PendingAck → Up，退避复位
+    void markDbLinkDown(const char* cause);  // 断链处置：告警+计数+摘 peer+排重试
+    void superviseDbLink();     // tick 监督环；db 腿未接线时不运行
+
     // 向 DBApp 发起一次请求-应答。等待上限为 config_.dbRequestTimeout；
-    // 发送失败（NotConnected 等）、超时或杂散应答耗尽等待窗口时返回
-    // method 为空的 RuntimeInvocation（调用方按 method 校验判失败）。
+    // 发送失败（NotConnected 等，含断链退避窗口内 peer 缺席）、超时或杂散
+    // 应答耗尽等待窗口时返回 method 为空的 RuntimeInvocation
+    //（调用方按 method 校验判失败）。
     runtime::RuntimeInvocation dbRequest(const std::string& method,
                                           std::span<const std::byte> payload);
 
@@ -194,11 +225,21 @@ private:
     // 通知腿监督面状态（仅 machineHost 非空时演进，见 superviseMachineLink）。
     // machineTransport_ 只用于活性查询与生命周期持有；入站分发经 hub 排空，
     // 重连成功时 connectPeer 以新 transport 覆盖 hub 内旧注册。
-    MachineLinkState machineLinkState_ = MachineLinkState::Backoff;
+    LinkState machineLinkState_ = LinkState::Backoff;
     std::shared_ptr<runtime::IRuntimeTransport> machineTransport_;
     runtime::TimePoint machineAckDeadline_{};   // PendingAck 的应答超时点
     runtime::TimePoint machineRetryAt_{};       // Backoff 的下次尝试时点
     std::chrono::milliseconds machineRetryDelay_{0};  // 当前退避窗口（指数，封顶 max）
+
+    // db 腿监督面状态（仅 dbLegEnabled_ 为真时演进，见 superviseDbLink）。
+    // 与通知腿同款成员与纪律；dbLegEnabled_ 单独成旗是因为 db 腿的接线
+    // 判据是 authType=="db" 且 dbHost 非空的双条件，host 一维不够。
+    bool dbLegEnabled_ = false;
+    LinkState dbLinkState_ = LinkState::Backoff;
+    std::shared_ptr<runtime::IRuntimeTransport> dbTransport_;
+    runtime::TimePoint dbAckDeadline_{};
+    runtime::TimePoint dbRetryAt_{};
+    std::chrono::milliseconds dbRetryDelay_{0};
 
     std::unique_ptr<ops::OpsInspector> opsInspector_;
     std::unique_ptr<ops::OpsServer> opsServer_;

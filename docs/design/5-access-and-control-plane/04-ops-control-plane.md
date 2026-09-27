@@ -497,14 +497,27 @@ Phase 2 已落地切片（会话运维命令面，2026-09-26）：
     LoginApp 无需人工重启，吊销通知继续送达（真实 TCP 端到端可证）。
     断连期间照旧 best-effort：只 logWarn + 计数
     （login_machine_link_{down,up}_count），不阻断登录面。
+  - db 腿运行期韧性（2026-09-27，闭环）：登录数据面的 DBApp 出站链路
+    补同款监督——断链（transport 实况/接通探针应答超窗
+    dbProbeAckTimeout）摘除死 peer、指数退避重连
+    （dbReconnectBaseDelay 起步、翻倍封顶 dbReconnectMaxDelay、恢复
+    复位）并重发接通探针；探针选 db.listTypes（只读、恒应答，应答方法
+    不与登录请求的匹配串重叠——迟到的探针应答不会被在途 dbRequest 误
+    认作登录应答；DBApp 侧对新连接的注册仍由首请求 sourceComponent
+    自报，无需新协议）。db 腿是拉取式：任何 DBApp 应答（含真实登录的）
+    都证实活性。断连窗口内 peer 缺席使 dbRequest 立即 NotConnected，
+    沿用既有 "database unavailable" 超时降级语义，不阻塞 tick。计数
+    login_db_link_{down,up}_count；DBApp 重启后 LoginApp 无需人工重启、
+    登录查询恢复（真实 TCP 端到端可证）。
 
 Phase 2 仍开放：
   - 转发聚合 / entity-type diagnostics；
   - 更完整的登录与会话运维命令其余部分（clear temporary bans 仍因
     无封禁存储前置不做，沿既有边界）；
   - 断链期间漏送的通知不补发（无对账协议）——重连恢复的是订阅而非
-    历史事实；吊销以存储为准，运维经 list-sessions 对账。db 腿传输
-    仍为静态单次连接（同款监督属同性质扩面，未做）。
+    历史事实；吊销以存储为准，运维经 list-sessions 对账（db 腿传输
+    已补同款运行期韧性，见上；断连窗口内的登录请求按既有口径直接
+    失败，不排队重放）。
 ```
 
 ---

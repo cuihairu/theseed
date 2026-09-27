@@ -98,7 +98,11 @@ static std::vector<std::byte> encodeLoginPayload(const std::string& account,
 
 // 模拟 DBApp 的 IRuntimeTransport：send 时按请求 method 同步入队应答，
 // 让 dbRequest 的等待循环在单线程内立即拿到结果；Silent 模式吞掉请求
-// 以触发超时，Closed 模式让 send 直接 NotConnected。
+// 以触发超时，Closed 模式让 send 直接 NotConnected。method 路由：
+// queryAccount 走 queryMode_，其余（createAccount 与监督探针 listTypes）
+// 走 createMode_。alive/sends/probe 供 db 腿韧性监督测试：alive 模拟
+// 链路活性（置假 = DBApp 侧重启断连，监督面经 isConnected 读到），
+// sends 计数发出的请求，probe 捕获最近一条接通探针。
 class FakeDbTransport final : public theseed::runtime::IRuntimeTransport {
 public:
     enum class Mode { Canned, Silent, WrongMethod, Closed };
@@ -109,7 +113,13 @@ public:
         : queryMode_(queryMode), queryPayload_(std::move(queryPayload)),
           createMode_(createMode), createPayload_(std::move(createPayload)) {}
 
+    bool isConnected() const override { return alive; }
+
     theseed::runtime::SendResult send(theseed::runtime::RuntimeInvocation inv) override {
+        ++sends;
+        if (inv.method == theseed::db::DBMethod::kListTypes) {
+            probe = inv;  // db 腿接通探针（监督面重连时重发的那条）
+        }
         Mode mode = modeFor(inv.method);
         if (mode == Mode::Closed) {
             return theseed::runtime::SendResult::NotConnected;
@@ -144,8 +154,17 @@ public:
     theseed::runtime::TransportStats stats() const override { return {}; }
     void tick() override {}
 
+    // 韧性测试观测面：probe = 最近一条接通探针，sends = 发出的请求数，
+    // alive = 链路活性（置假模拟 DBApp 重启断连，监督面经 isConnected
+    // 读到）。与 FakeMachineTransport 同款。
+    theseed::runtime::RuntimeInvocation probe;
+    std::size_t sends = 0;
+    bool alive = true;
+
 private:
     Mode modeFor(const std::string& method) const {
+        // 探针（kListTypes）走 createMode_ 维：韧性臂用 createMode 编排
+        // 探针的应答形态（Canned=应答 / Silent=吞 / Closed=发不出）。
         return method == theseed::db::DBMethod::kQueryAccount ? queryMode_ : createMode_;
     }
     const std::vector<std::byte>& payloadFor(const std::string& method) const {
@@ -1241,6 +1260,189 @@ int main() {
                     .counter("login_session_revoked_count")
                     .value() != revoked0 + 1)
                 FAIL("recovered delivery must count once");
+        }
+    }
+    PASS();
+
+    TEST("db leg resilience: drop, backoff, reconnect, re-probe, query restored");
+    {
+        // db 腿韧性臂与通知腿同款编排：探针经 createMode 维路由
+        // （modeFor：非 queryAccount 一律 createMode_），Canned = 回
+        // db.listTypes.ok（接通证实），Silent = 吞探针（ack 超时臂），
+        // Closed = 探针发不出（摘死 peer 重试臂）。
+        using DMode = FakeDbTransport::Mode;
+        constexpr theseed::runtime::ComponentId kLocalComponent = 20;
+        constexpr theseed::runtime::ComponentId kDbComponent = 10;
+        auto& downCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_db_link_down_count");
+        auto& upCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_db_link_up_count");
+
+        struct DbRecording {
+            std::vector<std::shared_ptr<FakeDbTransport>> made;
+            std::vector<DMode> probeModes;  // 末尾项重复使用
+            std::vector<int> nullCalls;     // 这些尝试序号返回 nullptr
+            DMode queryMode = DMode::Canned;
+            std::vector<std::byte> queryPayload;  // 功能臂的登录查询落点
+            int calls = 0;
+            std::function<std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                const std::string&, std::uint16_t)> factory() {
+                return [this](const std::string&, std::uint16_t)
+                           -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    const int idx = calls++;
+                    const auto mode = probeModes[std::min<std::size_t>(
+                        static_cast<std::size_t>(idx), probeModes.size() - 1)];
+                    if (std::find(nullCalls.begin(), nullCalls.end(), idx) !=
+                        nullCalls.end()) {
+                        return nullptr;
+                    }
+                    auto t = std::make_shared<FakeDbTransport>(
+                        queryMode, queryPayload, mode);
+                    made.push_back(t);
+                    return t;
+                };
+            }
+        };
+        auto dbResilienceConfig = [](
+            std::function<std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                const std::string&, std::uint16_t)> factory,
+            std::chrono::milliseconds ackTimeout) {
+            LoginAppConfig config;
+            config.listenHost = "127.0.0.1";
+            config.listenPort = 0;
+            config.authType = "db";
+            config.dbHost = "fake-db";  // factory 注入时不真正 connect
+            config.dbPort = 7777;
+            config.dbRequestTimeout = std::chrono::milliseconds{20};
+            config.dbTransportFactory = std::move(factory);
+            // 短退避：测试里毫秒级收敛（真实默认 1s/30s 会拖慢单测）。
+            config.dbReconnectBaseDelay = std::chrono::milliseconds{5};
+            config.dbReconnectMaxDelay = std::chrono::milliseconds{40};
+            config.dbProbeAckTimeout = ackTimeout;
+            return config;
+        };
+        auto pumpUntil = [](LoginApp& app, const std::function<bool()>& done) {
+            for (int i = 0; i < 1000; ++i) {
+                if (done()) return true;
+                app.tick();
+                usleep(2000);
+            }
+            return done();
+        };
+
+        // --- 臂 1：Up 活性转假 → 断链计数 → 退避到点重连 → 探针重发 →
+        //     应答恢复 Up；恢复的链路不再重连。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Canned};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();  // 排空首个探针应答 → Up
+            if (rec.calls != 1) FAIL("initial attempt must be exactly one call");
+            if (upCounter.value() != up0 + 1) FAIL("initial ack must count one link up");
+            rec.made[0]->alive = false;  // 模拟 DBApp 侧重启断连
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("dead db link must reconnect and recover");
+            if (rec.calls != 2) FAIL("recovery must take exactly one retry once acked");
+            if (downCounter.value() != down0 + 1) FAIL("the drop must count one link down");
+            if (rec.made[1]->sends != 1 ||
+                rec.made[1]->probe.method != db::DBMethod::kListTypes)
+                FAIL("reconnect must re-send the liveness probe");
+            if (rec.made[1]->probe.sourceComponent != kLocalComponent ||
+                rec.made[1]->probe.targetComponent != kDbComponent)
+                FAIL("re-registration probe must carry the same identity");
+            for (int i = 0; i < 20; ++i) app.tick();
+            if (rec.calls != 2) FAIL("an up db link must not keep reconnecting");
+        }
+
+        // --- 臂 2：探针始终无应答（活性真）→ ack 超时断链，退避重连
+        //     仍无应答 → 再计一次 down（超时臂）。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Silent};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{20}));
+            app.init();
+            app.tick();  // PendingAck：无应答可排空、宽限未到
+            if (rec.calls != 1) FAIL("PendingAck must not retry before the deadline");
+            const bool timedOut = pumpUntil(app, [&] {
+                return downCounter.value() >= down0 + 2;
+            });
+            if (!timedOut) FAIL("probe without ack must time out and retry");
+            if (rec.calls < 2) FAIL("ack timeout must drive a reconnect attempt");
+            if (upCounter.value() != up0) FAIL("no inbound must not claim link up");
+        }
+
+        // --- 臂 3：断链后首次重连 seam 返空 → 告警退避（窗口翻倍）→
+        //     再试接通恢复。失败的尝试不是第二次断链。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Canned};
+            rec.nullCalls = {1};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+            rec.made[0]->alive = false;
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("db reconnect must recover after a failed attempt");
+            if (rec.calls != 3) FAIL("expected exactly: link, null, recovery");
+            if (downCounter.value() != down0 + 1)
+                FAIL("a failed attempt is not a second link down");
+        }
+
+        // --- 臂 4：重连拿到发不出的 transport（Closed）→ 探针未发出 →
+        //     摘除死 peer 退避，下一次尝试接通恢复（不残留空注册）。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Canned, DMode::Closed, DMode::Canned};
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+            rec.made[0]->alive = false;
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 2;
+            });
+            if (!recovered) FAIL("closed transport retry must fall back and recover");
+            if (rec.calls != 3) FAIL("expected exactly: link, closed, recovery");
+        }
+
+        // --- 臂 5：恢复后的链路功能面照常——登录查询经重连后的新
+        //     transport 得到应答（验收是查询恢复，不是计数）。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Canned};
+            rec.queryMode = DMode::Canned;
+            rec.queryPayload = db::DBProtocol::encodeQueryAccountResponse(true, 77, "pw");
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();
+            rec.made[0]->alive = false;
+            if (!pumpUntil(app, [&] { return upCounter.value() >= up0 + 2; }))
+                FAIL("db link must recover before the query test");
+            bool success = false;
+            std::string error, token;
+            if (!runLogin(app, "iron", "pw", success, error, token))
+                FAIL("no login response after recovery");
+            if (!success || token.empty())
+                FAIL("query over recovered link must log in, error=" + error);
+            if (rec.made[1]->sends < 2)
+                FAIL("recovered transport must serve both probe and login query");
         }
     }
     PASS();
