@@ -106,7 +106,11 @@ inline constexpr const char* kKickSessionsOk = "machine.kick-sessions.ok";
 //                     "session(len=N)","reason":"operator.kick" |
 //                     "operator.kick.batch"}——令牌原文不出进程，
 //                     account+realm 供接收方定位本地会话；送达不保证
-//                     （无重试/确认——吊销事实以存储为准，通知是联动提示）
+//                     （无重试/确认——吊销事实以存储为准，通知是联动提示）。
+//                     LoginApp 消费侧已接线：machineHost 非空时出站连本
+//                     daemon 并发 machine.snapshot 注册探针自报身份
+//                    （hub 按首条请求 sourceComponent 注册），推送经其
+//                    入站分发面落入 handleSessionRevoked。
 inline constexpr const char* kExtendSessions = "machine.extend-sessions";
 inline constexpr const char* kExtendSessionsOk = "machine.extend-sessions.ok";
 inline constexpr const char* kSessionRevoked = "machine.session.revoked";

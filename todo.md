@@ -1,5 +1,80 @@
 # TODO
 
+## 通知通道的 LoginApp 生产接线（04 §8 Phase 2 收尾，2026-09-27）
+
+把上一批遗留的第 1 条（推送只到 daemon 为止，LoginApp 侧只有落点）接通，
+并修出接通时暴露的两处口径缺陷：
+
+1. **LoginApp 的 hub 入站分发面**（此前只有 dbRequest 的出站面）：
+   - `drainInvocations()`：tick 里在 `hub_->tick()` 之后逐条排空发到本
+     组件的 RuntimeInvocation（与 DBApp::processMessages 同款循环）；
+   - `handleInvocation()`：machine.session.revoked → 解载荷
+     （account/realm）→ `handleSessionRevoked` 关匹配的活跃登录连接；
+     探针应答（machine.snapshot.ok / machine.error）记联动状态；其余
+     method **记日志 + 计数**（login_unknown_invocation_count）不静默
+     丢包，也不回 machine.error——回包会与 daemon 的未知方法臂互弹成环；
+   - 载荷解析：紧凑 JSON 取串，转义集与 control 侧 escapeJsonString
+     严格对齐（\\ \" \n \r \t），越集转义/未闭合/悬空转义一律按畸形拒收
+     （login_session_notify_malformed_count，宁拒不猜——通知是
+     best-effort，拒收有日志有计数，不会静默错配账号）；命中时记
+     login.session.revoked（account/realm/closed 三属性，无令牌原文）。
+2. **传输腿与注册（选型理由）**：LoginApp 出站连 daemon（hub
+   connectPeer）并发一条 **machine.snapshot 注册探针**自报身份——daemon
+   侧 hub 沿用既有 `attachServerTransport` 的「首条请求 sourceComponent
+   自报注册」接缝（与 DBApp 同机制），**不新增注册协议、不新增端口**。
+   探针本身即 §8 只读探活语义：应答 ok/error 顺带暴露策略接线状态。
+   machineHost 空 = 不接线（缺省安全，联动是增强不是登录前提）；连不上
+   只告警跳过不阻断登录面（与 db 腿的失败即弃不同：联动是 best-effort
+   增益，登录是主职责）。app 可用 `--machine-host/--machine-port` 打开。
+   注入 seam `machineTransportFactory` 与 dbTransportFactory 同款。
+3. **修出的缺陷一：领域口径两侧不一致（联动对真实客户端会漏关）**——
+   通知的 realm 取自 SessionStore 行，而登录只写基础会话（realm 空），
+   绑定的 realm 却在 SelectRealm 时补上了真实领域：真实客户端
+   「登录 → 选领域」后收到吊销通知，account 对上、realm 对不上
+   （空 vs 真实领域），连接不会被关。修法：选领域成功时把 realm 写回
+   同一会话行（先 load 再改写，**过期行不因选领域复活**；TTL 按
+   config_.sessionTtl 重写，进入领域即该领域会话起点，运维续期策略
+   extend-sessions 不受影响）。顺带修掉 list-sessions 的 realm 字段
+   恒为空的问题（该字段此前是空壳）。
+4. **修出的缺陷二**：apps/loginapp/main.cpp 在 `std::move(config)` 之后
+   打印 config.listenHost（移动后字符串成员为空，打印串首段恒空）——改为
+   move 前取局部副本，并补 machine-link=on/off 状态行。
+5. **测试**：
+   - LoginAppE2ETest **场景 F（真实 TCP 端到端，本批验收主线）**：真
+     MachineDaemon（真 LocalHostProbe + LocalProcessSupervisor）+ 真
+     LoginApp 出站连 daemon（注册探针 → daemon hub 注册 20）+ 两个真实
+     客户端登录并各选领域 realm1 → 运维客户端（Operator + NodeOpsPolicy
+     白名单）发 machine.kick-session → 断言：daemon 应答 kick-session.ok、
+     machine_session_notify_count +1、**erin 的连接被推送关掉**、
+     frank 的连接不受影响、login_session_revoked_count +1、会话行确已
+     消失（吊销事实以存储为准）；再发未知令牌 kick → machine.error 且
+     不关任何连接；最后 tick 清扫后绑定不再命中（无悬垂键）。
+   - LoginAppTest 桩面：探针四臂 + 工厂空臂（ack/reject/静默/连接被拒/
+     工厂返回 nullptr）、推送分发（全转义字符集账号 → 解析还原后精确
+     命中并关闭）、畸形载荷五臂 + 未知 method 臂的计数断言。
+   - LoginAppTest 选领域补写存储行：登录行 realm 空 → 选领域后同行为
+     realm1（list-sessions 同源可见）→ 未登录连接选领域不建行 → 过期行
+     不复活（advanceClock）。
+   - LoginAppTest 既有桩面用例（carl@default / amy@空领域 精确命中等）
+     未回退；场景 E（真实 TCP 生命周期清扫）未回退。
+6. **口径沿用不改**：clear temporary bans 不做（无封禁存储前置）、长度
+   指纹同长歧义不改、枚举顺序不承诺时序。
+
+**边界与遗留（如实记录）**：
+- 通知腿无运行期韧性：hub 没有重连/心跳，daemon 重启后 LoginApp 需重启
+  才能恢复订阅（db 腿同性质，非本批引入）；订阅丢失时的补发/对账未做，
+  当前靠 machine.list-sessions 人工对账。
+- 通知仍 best-effort 无重试/确认（设计如此：吊销事实以存储为准）。
+- 匹配口径是 account+realm 精确匹配：一个账号同时开多个连接（多设备）
+  且其中一条被单踢时，通知关的是该账号**全部**匹配领域的连接——存储行
+  按 token 区分、通知面按 account+realm 聚合（协议出口令牌只回显长度
+  指纹，不可逆，无法逐 token 定位）。属有意取舍，已在 §8 对照记明。
+- 会话续期策略值与 LoginApp 会话 TTL（config_.sessionTtl）仍是两处
+  策略：前者是运维续期上限（daemon 侧），后者是登录/进领域时签发的会话
+  寿命（LoginApp 侧）——统一为单一策略源属扩面，未做。
+- 畸形载荷拒收后不重试、不告警请求方（单向推送无回包语义），只记
+  日志与计数。
+
 ## Phase 2 余项：会话续期策略 + 踢人联动通知 + requestId（04 §8，2026-09-26）
 
 沿上一批的会话运维命令面继续，把简报 Phase 2 余项中前置已备的三件
@@ -50,10 +125,10 @@
 5. **口径沿用不改**：clear temporary bans 不做（无封禁存储前置）、
    长度指纹同长歧义不改、枚举顺序不承诺时序。
 
-**边界与遗留（如实记录）**：
-- 通知通道的 LoginApp 生产接线未建：client 面是 ClientProtocol（非
-  RuntimeInvocation 分发面），LoginApp 的 hub 入站分发面建好后推送即
-  接 handleSessionRevoked（落点已备，本轮测试直接驱动该落点）。
+**边界与遗留（已于 2026-09-27 下一批收敛，见上）**：
+- ~~通知通道的 LoginApp 生产接线未建~~：本批测试直接驱动落点；该遗留项
+  在「通知通道的 LoginApp 生产接线」批次完成（入站分发面 + 注册探针
+  传输腿 + 领域口径修正），此处按当时口径留档。
 - 通知 best-effort 无重试/确认（设计如此：吊销以存储为准）。
 - 会话续期策略值与 LoginApp 会话 TTL（config_.sessionTtl）是两处
   策略：前者是运维续期上限（daemon 侧），后者是登录签发时的会话寿命

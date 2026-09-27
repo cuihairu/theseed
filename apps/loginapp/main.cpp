@@ -6,7 +6,9 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <iostream>
+#include <string>
 #include <thread>
 
 static volatile bool g_running = true;
@@ -43,6 +45,13 @@ int main(int argc, char** argv) {
             config.authType = argv[++i];
         } else if (arg == "--no-redis") {
             enableRedis = false;
+        } else if (arg == "--machine-host" && i + 1 < argc) {
+            // 控制面通知腿（04 §8 踢人联动）：出站连 MachineDaemon，
+            // 接收 machine.session.revoked 并关掉匹配的活跃登录连接。
+            // 不给即不接线（缺省安全：联动是增强，不是登录前提）。
+            config.machineHost = argv[++i];
+        } else if (arg == "--machine-port" && i + 1 < argc) {
+            config.machinePort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         }
     }
 
@@ -57,12 +66,17 @@ int main(int argc, char** argv) {
     }
 
     theseed::runtime::TickScheduler scheduler;
+    // 打印用的监听信息在 move 之前取好（config 移动后其字符串成员为空）。
+    const std::string listenHost = config.listenHost;
+    const std::uint16_t listenPort = config.listenPort;
+    const bool machineLink = !config.machineHost.empty();
     theseed::login::LoginApp app(std::move(config));
 
     app.init();
 
-    std::cout << "LoginApp listening on " << config.listenHost << ":"
-              << config.listenPort << " redis=" << (enableRedis ? "on" : "off")
+    std::cout << "LoginApp listening on " << listenHost << ":" << listenPort
+              << " redis=" << (enableRedis ? "on" : "off")
+              << " machine-link=" << (machineLink ? "on" : "off")
               << std::endl;
 
     while (g_running) {

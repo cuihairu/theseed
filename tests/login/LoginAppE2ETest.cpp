@@ -4,15 +4,20 @@
 // 场景 B（authType=password）：空密码拒绝、正常放行。
 // 场景 C（authType=db）：后台线程驱动 file 后端 DBApp，覆盖 auto-register、
 // 正确/错误密码三条鉴权路径。
+#include "theseed/control/machine/HostProbe.h"
+#include "theseed/control/machine/MachineAgent.h"
+#include "theseed/control/machine/MachineDaemon.h"
+#include "theseed/control/machine/ProcessSupervisor.h"
 #include "theseed/db/DBApp.h"
 #include "theseed/foundation/MemoryStream.h"
+#include "theseed/foundation/Metrics.h"
 #include "theseed/foundation/RedisProvider.h"
 #include "theseed/foundation/SessionStore.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/LoginApp.h"
 #include "theseed/login/LoginTypes.h"
+#include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
-
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -43,7 +48,17 @@ using theseed::login::LoginApp;
 using theseed::login::LoginAppConfig;
 using theseed::login::LoginProtocol;
 using theseed::login::RealmInfo;
+using theseed::runtime::ComponentId;
+using theseed::runtime::NetworkTransport;
+using theseed::runtime::RuntimeInvocation;
+using theseed::runtime::SendResult;
 using theseed::runtime::TcpConnection;
+using theseed::control::machine::AccessRole;
+using theseed::control::machine::LocalHostProbe;
+using theseed::control::machine::LocalProcessSupervisor;
+using theseed::control::machine::MachineAgent;
+using theseed::control::machine::MachineDaemon;
+namespace MachineMethod = theseed::control::machine::MachineMethod;
 
 #define TEST(name)                            \
     do {                                      \
@@ -57,6 +72,20 @@ using theseed::runtime::TcpConnection;
     } while (0)
 
 namespace {
+
+// 通知腿两端身份（与 LoginAppConfig 缺省一致）：LoginApp 20 / Machine 60。
+constexpr ComponentId kLoginComponent = 20;
+constexpr ComponentId kMachineComponent = 60;
+// 运维客户端身份（NodeOpsPolicy 白名单 + Operator 角色绑定）。
+constexpr ComponentId kOpsComponent = 5;
+
+std::vector<std::byte> toBytes(const std::string& text) {
+    std::vector<std::byte> bytes(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        bytes[i] = static_cast<std::byte>(text[i]);
+    }
+    return bytes;
+}
 
 std::uint16_t freePort() {
     int s = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -216,6 +245,47 @@ bool httpProbe(std::uint16_t port, const std::string& requestLine,
     firstLine = std::string(buf, static_cast<std::size_t>(n));
     return true;
 }
+
+// 控制面裸客户端：直连 MachineDaemon 监听端口收发 RuntimeInvocation——
+// 测试里代表“运维控制台”这一侧（机器方法请求-应答）。
+struct ControlClient {
+    std::shared_ptr<TcpConnection> conn;
+    std::shared_ptr<NetworkTransport> transport;
+
+    bool connect(std::uint16_t port) {
+        conn = TcpConnection::create();
+        if (!conn->connect("127.0.0.1", port)) return false;
+        transport = std::make_shared<NetworkTransport>(conn);
+        return true;
+    }
+
+    void settle(const std::function<void()>& tick) {
+        for (int i = 0; i < 40; ++i) {
+            tick();
+            transport->tick();
+            usleep(2000);
+        }
+    }
+
+    bool request(ComponentId source, const std::string& method,
+                 std::vector<std::byte> payload, const std::function<void()>& tick,
+                 RuntimeInvocation& out) {
+        RuntimeInvocation inv;
+        inv.sourceComponent = source;
+        inv.targetComponent = kMachineComponent;
+        inv.method = method;
+        inv.payload = std::move(payload);
+        if (transport->send(std::move(inv)) != SendResult::Accepted) return false;
+        transport->flush();
+        for (int i = 0; i < 4000; ++i) {
+            tick();
+            transport->tick();
+            usleep(500);
+            if (transport->receive(source, &out, 1) > 0) return true;
+        }
+        return false;
+    }
+};
 
 }  // namespace
 
@@ -548,6 +618,165 @@ int main() {
         if (app.handleSessionRevoked("link", "") != 0)
             FAIL("cleaned-up binding must not match again");
         PASS();
+    }
+
+    // ------------------------------------------------------------------
+    // 场景 F：踢人联动生产接线（04 §8 Phase 2）——真实 MachineDaemon 吊销
+    // 会话 → machine.session.revoked 推送沿真实 TCP 送达 LoginApp 的入站
+    // 分发面 → 匹配的活跃登录连接被关闭、计数递增；不匹配者不受影响。
+    // ------------------------------------------------------------------
+    {
+        const std::uint16_t machinePort = freePort();
+        const std::uint16_t listenPort = freePort();
+        if (machinePort == 0 || listenPort == 0) FAIL("cannot find free ports");
+
+        auto redis = std::make_shared<InMemoryRedisProvider>();
+        auto store = std::make_shared<SessionStore>(redis);
+
+        MachineAgent agent(std::make_unique<LocalHostProbe>(),
+                           std::make_unique<LocalProcessSupervisor>());
+        MachineDaemon::Config mcfg;
+        mcfg.listenHost = "127.0.0.1";
+        mcfg.listenPort = machinePort;
+        mcfg.sessionStore = store.get();
+        mcfg.sessionNotifyComponent = kLoginComponent;  // 通知目标 = LoginApp
+        mcfg.nodeOpsPolicy.trustedComponents = {kOpsComponent};
+        // LoginApp 的注册探针走 inspect 面（ReadOnly 及以上）
+        mcfg.roleBindings = {{kOpsComponent, AccessRole::Operator},
+                             {kLoginComponent, AccessRole::ReadOnly}};
+        MachineDaemon daemon(mcfg, agent);
+        TEST("MachineDaemon starts with the notify target configured");
+        if (!daemon.start()) FAIL("machine daemon start failed");
+        if (daemon.localPort() == 0) FAIL("daemon has no local port");
+        PASS();
+
+        LoginAppConfig cfg;
+        cfg.listenHost = "127.0.0.1";
+        cfg.listenPort = listenPort;
+        cfg.authType = "null";
+        cfg.sessionStore = store;
+        cfg.realms.push_back(RealmInfo{"realm1", "一区", "smooth", "127.0.0.1", 30001});
+        cfg.localComponentId = kLoginComponent;
+        cfg.machineHost = "127.0.0.1";
+        cfg.machinePort = machinePort;
+        cfg.machineComponentId = kMachineComponent;
+
+        LoginApp app(std::move(cfg));
+        TEST("LoginApp init wires the notify leg (outbound link + probe)");
+        app.init();
+        PASS();
+
+        // 混合泵：通知是双向的，两个进程都要 tick。
+        auto appTick = [&app, &daemon] {
+            app.tick();
+            daemon.tick();
+        };
+
+        FrameClient erin;
+        if (!erin.connect(listenPort)) FAIL("erin connect failed");
+        FrameClient frank;
+        if (!frank.connect(listenPort)) FAIL("frank connect failed");
+        for (int i = 0; i < 40; ++i) {  // 等 accept + 通知腿注册探针握手
+            appTick();
+            erin.conn->pump();
+            frank.conn->pump();
+            usleep(2000);
+        }
+
+        ClientMessageType type;
+        std::vector<std::byte> payload;
+        ParsedLoginResponse lr;
+        ParsedSelectRealmResponse sr;
+        std::string erinToken;
+        std::string frankToken;
+
+        TEST("two live logins (erin/frank) select the same realm");
+        struct LoginCase {
+            FrameClient* client;
+            const char* account;
+            std::string* token;
+        };
+        const LoginCase cases[] = {{&erin, "erin", &erinToken},
+                                   {&frank, "frank", &frankToken}};
+        for (const auto& one : cases) {
+            if (!one.client->request(appTick, ClientMessageType::Login,
+                                     encodeLoginRequest(one.account, "pw"), type, payload))
+                FAIL(std::string("no response to Login(") + one.account + ")");
+            if (!decodeLoginResponse(payload, lr) || !lr.success)
+                FAIL(std::string(one.account) + " login failed: " + lr.error);
+            *one.token = lr.token;
+            if (!one.client->request(appTick, ClientMessageType::SelectRealm,
+                                     encodeSelectRealmRequest("realm1"), type, payload))
+                FAIL(std::string("no response to SelectRealm(") + one.account + ")");
+            if (!decodeSelectRealmResponse(payload, sr) || !sr.success)
+                FAIL(std::string(one.account) + " select realm failed: " + sr.error);
+        }
+        // 选领域把领域写回会话行（联动配对的存储侧口径）
+        const auto erinRow = store->load(erinToken);
+        if (!erinRow || erinRow->accountId != "erin" || erinRow->realmId != "realm1")
+            FAIL("realm selection must be recorded in the session row");
+        PASS();
+
+        ControlClient ops;
+        if (!ops.connect(daemon.localPort())) FAIL("ops connect failed");
+        ops.settle(appTick);
+
+        auto& revokedCounter = foundation::MetricsRegistry::instance().counter(
+            "login_session_revoked_count");
+        auto& notifyCounter = foundation::MetricsRegistry::instance().counter(
+            "machine_session_notify_count");
+        const auto revoked0 = revokedCounter.value();
+        const auto notify0 = notifyCounter.value();
+
+        RuntimeInvocation kickResp;
+        TEST("operator kick pushes the revocation to LoginApp and closes the login");
+        if (!ops.request(kOpsComponent, MachineMethod::kKickSession,
+                         toBytes(erinToken), appTick, kickResp))
+            FAIL("no response to machine.kick-session");
+        if (kickResp.method != MachineMethod::kKickSessionOk ||
+            kickResp.payload != std::vector<std::byte>{std::byte{0x01}})
+            FAIL("kick must be accepted, got method=" + kickResp.method);
+        if (notifyCounter.value() != notify0 + 1)
+            FAIL("daemon must count the delivered notification");
+        for (int i = 0; i < 200 && erin.conn->isConnected(); ++i) {
+            appTick();
+            erin.conn->pump();
+            frank.conn->pump();
+            usleep(2000);
+        }
+        if (erin.conn->isConnected())
+            FAIL("the revoked account's live login must be closed by the push");
+        if (!frank.conn->isConnected())
+            FAIL("a non-matching account must stay connected");
+        if (revokedCounter.value() != revoked0 + 1)
+            FAIL("LoginApp must count exactly one closed login");
+        // 存储行已被吊销（通知是提示，吊销事实以存储为准）
+        if (store->load(erinToken))
+            FAIL("the session row must be gone after the kick");
+        PASS();
+
+        TEST("kick of an unknown token is rejected and closes nothing");
+        if (!ops.request(kOpsComponent, MachineMethod::kKickSession,
+                         toBytes("no-such-token"), appTick, kickResp))
+            FAIL("no response to the unknown-token kick");
+        if (kickResp.method != MachineMethod::kError)
+            FAIL("unknown token must be rejected, got " + kickResp.method);
+        if (revokedCounter.value() != revoked0 + 1)
+            FAIL("a rejected kick must not close logins");
+        if (!frank.conn->isConnected())
+            FAIL("a rejected kick must leave other logins alone");
+        PASS();
+
+        TEST("cleanup drops the closed binding (no stale key after close)");
+        for (int i = 0; i < 40; ++i) {
+            appTick();
+            usleep(2000);
+        }
+        if (app.handleSessionRevoked("erin", "realm1") != 0)
+            FAIL("the cleaned-up binding must not match again");
+        PASS();
+
+        daemon.stop();
     }
 
     std::cout << "\nAll LoginApp E2E tests passed!" << std::endl;

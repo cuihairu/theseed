@@ -558,7 +558,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
             AuditEntry entry;
             entry.timestamp = std::chrono::system_clock::now();
             entry.source = inv.sourceComponent;
-    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
+            entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
             entry.command = kSnapshotCommand;
             entry.accepted = false;
             appendAudit(entry);
@@ -584,7 +584,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
             AuditEntry entry;
             entry.timestamp = std::chrono::system_clock::now();
             entry.source = inv.sourceComponent;
-    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
+            entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
             entry.command = kAuditQueryCommand;
             entry.accepted = false;
             appendAudit(entry);
@@ -614,7 +614,7 @@ void MachineDaemon::handleInvocation(runtime::RuntimeInvocation& inv) {
         AuditEntry entry;
         entry.timestamp = std::chrono::system_clock::now();
         entry.source = inv.sourceComponent;
-    entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
+        entry.requestId = inv.requestId;  // §6.2 关联 id 透传（0 = 未携带）
         if (separator == inv.payload.end()) {
             entry.accepted = false;
             appendAudit(entry);

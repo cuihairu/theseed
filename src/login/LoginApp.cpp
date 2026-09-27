@@ -2,7 +2,9 @@
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/SessionToken.h"
+#include "theseed/control/machine/MachineDaemon.h"
 #include "theseed/db/DBProtocol.h"
+#include "theseed/foundation/Logger.h"
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"
@@ -12,10 +14,69 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace theseed::login {
+
+namespace {
+
+// 从紧凑 JSON 对象里取字符串字段（machine.session.revoked 推送载荷的
+// 消费侧）。转义集与 control 侧 escapeJsonString（MachineSnapshotCodec）
+// 严格对齐：\\ \" \n \r \t；越集转义按畸形拒收——宁拒不猜：通知是
+// best-effort，拒收有日志与计数，不会静默错配账号。键以 "key":"
+// 整体定位（前引号防 "xxxkey" 类前缀误配）。
+bool extractJsonStringField(const std::vector<std::byte>& payload,
+                            const char* key,
+                            std::string& out) {
+    const std::string text(payload.begin(), payload.end());
+    const std::string needle = std::string("\"") + key + "\":\"";
+    const std::size_t pos = text.find(needle);
+    if (pos == std::string::npos) {
+        return false;  // 字段缺失
+    }
+    std::size_t cursor = pos + needle.size();
+    out.clear();
+    while (cursor < text.size()) {
+        const char ch = text[cursor];
+        if (ch == '"') {
+            return true;  // 正常闭合
+        }
+        if (ch != '\\') {
+            out.push_back(ch);
+            ++cursor;
+            continue;
+        }
+        if (cursor + 1 >= text.size()) {
+            return false;  // 转义悬空
+        }
+        switch (text[cursor + 1]) {
+            case '\\':
+                out.push_back('\\');
+                break;
+            case '"':
+                out.push_back('"');
+                break;
+            case 'n':
+                out.push_back('\n');
+                break;
+            case 'r':
+                out.push_back('\r');
+                break;
+            case 't':
+                out.push_back('\t');
+                break;
+            default:
+                return false;  // 越集转义：畸形
+        }
+        cursor += 2;
+    }
+    return false;  // 未闭合
+}
+
+}  // namespace
 
 LoginApp::LoginApp(LoginAppConfig config)
     : config_(std::move(config)) {
@@ -33,9 +94,16 @@ void LoginApp::init() {
         return;
     }
 
-    if (config_.authType == "db" && !config_.dbHost.empty()) {
+    // db 腿（dbRequest 请求-应答）与 machine 腿（控制面通知收发）共用
+    // 同一个 hub：peer 按 componentId 区分，receive 按 targetComponent
+    // 过滤，互不串扰。
+    const bool dbLeg = config_.authType == "db" && !config_.dbHost.empty();
+    const bool machineLeg = !config_.machineHost.empty();
+    if (dbLeg || machineLeg) {
         hub_ = std::make_shared<runtime::TransportHub>(config_.localComponentId);
+    }
 
+    if (dbLeg) {
         std::shared_ptr<runtime::IRuntimeTransport> transport;
         if (config_.dbTransportFactory) {
             transport = config_.dbTransportFactory(config_.dbHost, config_.dbPort);
@@ -50,6 +118,45 @@ void LoginApp::init() {
         }  // LCOV_EXCL_BR_LINE 无 factory 臂必先经上方不可达 connect 失败，此汇合边不可达
         hub_->connectPeer(config_.dbComponentId, transport);
     }  // LCOV_EXCL_BR_LINE 函数尾汇合伪边归因本行（gcc 布局伪影，非业务条件）
+
+    // 控制面通知腿（04 §8 踢人联动生产接线）：出站连 MachineDaemon 并发
+    // 一条 machine.snapshot 注册探针自报身份——daemon 侧 hub 由首条请求
+    // 的 sourceComponent 注册（attachServerTransport seam），此后
+    // machine.session.revoked 推送沿该连接入站（tick → drainInvocations →
+    // handleInvocation）。连接建立不了只告警跳过，不阻断登录面：联动是
+    // best-effort 增益，登录是主职责（与 db 腿的失败即弃不同）。
+    if (machineLeg) {
+        std::shared_ptr<runtime::IRuntimeTransport> machineTransport;
+        if (config_.machineTransportFactory) {
+            machineTransport =
+                config_.machineTransportFactory(config_.machineHost,
+                                                config_.machinePort);
+        } else {
+            auto conn = runtime::TcpConnection::create();
+            if (conn->connect(config_.machineHost, config_.machinePort)) {
+                machineTransport =
+                    std::make_shared<runtime::NetworkTransport>(conn);
+            } else {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（与 db 腿同理由）
+                // LCOV_EXCL_START inet_pton 无 DNS：坏主机名解析为 0.0.0.0 同样 EINPROGRESS，本臂不可达
+                foundation::logWarn("login.machine.link.refused", {});
+                // LCOV_EXCL_STOP
+            }
+        }
+        if (machineTransport) {
+            hub_->connectPeer(config_.machineComponentId, machineTransport);
+            // 注册探针 = §8 只读探活语义的 machine.snapshot：既向 daemon
+            // 自报身份（推送通道的注册面），也验证策略接线（应答 ok /
+            // error 经 handleInvocation 记录联动状态）。
+            runtime::RuntimeInvocation probe;
+            probe.sourceComponent = config_.localComponentId;
+            probe.targetComponent = config_.machineComponentId;
+            probe.method = control::machine::MachineMethod::kSnapshot;
+            if (hub_->send(std::move(probe)) != runtime::SendResult::Accepted) {
+                foundation::logWarn("login.machine.probe.unsent", {});
+            }
+            hub_->flush();
+        }
+    }
 
     if (config_.ops.enabled) {
         ops::ProcessInfo info{};  // LCOV_EXCL_BR_LINE 聚合内 string 成员构造/拷贝内联分支伪影（同 RealmApp）
@@ -78,7 +185,12 @@ void LoginApp::init() {
 
 void LoginApp::tick() {
     const auto tickStart = std::chrono::steady_clock::now();
-    if (hub_) hub_->tick();
+    if (hub_) {
+        hub_->tick();
+        // 排空发到本组件的入站 invocation（控制面推送与探针应答）；
+        // 与 DBApp::processMessages 同款循环，放在 hub 泵之后。
+        drainInvocations();
+    }
     acceptConnections();
     for (auto& session : sessions_) {
         session->pump();
@@ -123,6 +235,59 @@ void LoginApp::handleClientMessage(ClientSession* session,
     onClientMessage(session, type, payload);
 }
 
+// 入站排空（hub 面）：逐条取出发到本组件的 RuntimeInvocation 交给
+// 分发面。循环终止于队列清空——推送与应答都是短消息，不会死循环。
+void LoginApp::drainInvocations() {
+    runtime::RuntimeInvocation inv;
+    while (hub_->receive(config_.localComponentId, &inv, 1) > 0) {
+        handleInvocation(inv);
+    }
+}
+
+void LoginApp::handleInvocation(const runtime::RuntimeInvocation& inv) {
+    if (inv.method == control::machine::MachineMethod::kSessionRevoked) {
+        std::string account, realm;
+        if (!extractJsonStringField(inv.payload, "account", account) ||
+            !extractJsonStringField(inv.payload, "realm", realm)) {
+            foundation::logWarn("login.session.revoked.malformed", {});
+            theseed::foundation::MetricsRegistry::instance()
+                .counter("login_session_notify_malformed_count",
+                         "session-revoked pushes dropped because the payload did not parse")
+                .increment();
+            return;
+        }
+        const std::size_t closed = handleSessionRevoked(account, realm);
+        const foundation::LogAttribute accountAttr = {"account", account};
+        const foundation::LogAttribute realmAttr = {"realm", realm};
+        const foundation::LogAttribute closedAttr = {
+            "closed", static_cast<std::int64_t>(closed)};
+        foundation::logInfo("login.session.revoked",
+                            {accountAttr, realmAttr, closedAttr});
+        return;
+    }
+    // 注册探针应答：snapshot.ok = 联动腿接通（运维可见）；machine.error =
+    // 策略拒绝（daemon 侧已审计，这里仅告警不回重试——探针是启动期一次性
+    // 事件，失败即联动腿不可用，运维据审计排查）。
+    if (inv.method == control::machine::MachineMethod::kSnapshotOk) {
+        foundation::logInfo("login.machine.link.ready", {});
+        return;
+    }
+    if (inv.method == control::machine::MachineMethod::kError) {
+        const std::string reason(inv.payload.begin(), inv.payload.end());
+        const foundation::LogAttribute reasonAttr = {"reason", reason};
+        foundation::logWarn("login.machine.probe.rejected", {reasonAttr});
+        return;
+    }
+    // 未知 method：不静默丢包，记日志与计数（与 daemon 未知方法臂同族
+    // 口径；无应答语义，见头注释）。
+    const foundation::LogAttribute methodAttr = {"method", inv.method};
+    foundation::logWarn("login.invocation.unknown", {methodAttr});
+    theseed::foundation::MetricsRegistry::instance()
+        .counter("login_unknown_invocation_count",
+                 "inbound hub invocations with no handler; logged, not dropped silently")
+        .increment();
+}
+
 runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
                                                 std::span<const std::byte> payload) {
     runtime::RuntimeInvocation inv;
@@ -139,6 +304,7 @@ runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
 
     // 等待应答，上限 dbRequestTimeout：DBApp 失联时退化为失败返回而不是忙等挂死。
     // 单 DBApp 拓扑下杂散消息只会是过期应答，丢弃后继续等本次的。
+    // 同时排空 machine 腿的推送与探针应答——防止阻塞期间堆积。
     const auto deadline = runtime::Clock::now() + config_.dbRequestTimeout;
     const auto expect = std::string(method) + ".ok";
     runtime::RuntimeInvocation resp;
@@ -146,6 +312,8 @@ runtime::RuntimeInvocation LoginApp::dbRequest(const std::string& method,
         hub_->tick();
         if (hub_->receive(config_.localComponentId, &resp, 1) > 0) {
             if (resp.method == expect) return resp;
+            // 非本请求的入站（machine 腿推送、过期 db 应答）：逐条分发
+            handleInvocation(resp);
             continue;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -309,11 +477,11 @@ void LoginApp::handleLogin(ClientSession* session,
     }
 
     if (resp.success) {
-        // 联动绑定：登录成功即登记（领域为空——SelectRealm 成功后补）。
-        // 登录阶段 realm 为空与会话存储行同口径（persistSession 亦存空
-        // 领域），踢人通知按 account+realm 精确对上。
+        // 联动绑定：登录成功即登记（领域为空——SelectRealm 成功后补，
+        // 补时同步写回存储行，见 handleSelectRealm）。
         LoginBinding binding;
         binding.account = account;
+        binding.token = resp.token;  // 仅供本进程补写存储行（见 handleSelectRealm）
         bindings_[session] = std::move(binding);
     }
     auto data = LoginProtocol::encodeLoginResponse(resp);
@@ -346,6 +514,21 @@ void LoginApp::handleSelectRealm(ClientSession* session, const std::string& real
         const auto bound = bindings_.find(session);
         if (bound != bindings_.end()) {
             bound->second.realm = realmId;
+            // 存储行同步领域（联动配对的关键）：踢人通知的 realm 取自
+            // 会话行，登录时只存基础会话（领域空），不补则通知恒带空
+            // 领域、与本连接的绑定对不上，联动会漏关"已选领域"的连接。
+            // 先 load 再改写：已过期的行不因选领域复活。TTL 仍按
+            // config_.sessionTtl 重写（进入领域即该领域会话的起点），
+            // 运维续期策略（extend-sessions）不受影响。
+            if (config_.sessionStore) {
+                const auto stored = config_.sessionStore->load(bound->second.token);
+                if (stored) {
+                    foundation::StoredSession patched = *stored;
+                    patched.realmId = realmId;
+                    config_.sessionStore->save(bound->second.token, patched,
+                                               config_.sessionTtl);
+                }
+            }
         }
     } else {
         resp.success = false;

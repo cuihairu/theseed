@@ -471,16 +471,28 @@ Phase 2 已落地切片（会话运维命令面，2026-09-26）：
     {account, realm, session=指纹, reason=operator.kick |
     operator.kick.batch}）；best-effort——无重试/无确认，目标未注册
     即丢弃告警（吊销事实以存储为准，重连后可经 list-sessions 对账）；
-    令牌原文不出进程。LoginApp 侧落点 handleSessionRevoked（按
-    account+realm 关闭匹配的活跃登录连接，绑定表随断连清扫同步出表）。
+    令牌原文不出进程。
+  - 通知的生产接线（2026-09-27，闭环）：LoginApp 出站连 daemon 并发一条
+    machine.snapshot 注册探针自报身份（daemon hub 沿用 attachServerTransport
+    首请求自报注册，与 DBApp 同机制——不新增注册协议），tick 排空入站
+    RuntimeInvocation 交分发面：machine.session.revoked 解载荷后调
+    handleSessionRevoked（按 account+realm 关闭匹配的活跃登录连接，
+    绑定表随断连清扫同步出表）；探针应答（snapshot.ok / machine.error）
+    记联动状态，其余 method 记日志与计数不静默丢弃。载荷解析与 control 侧
+    escapeJsonString 转义集严格对齐，越集转义按畸形拒收。
+  - 会话行的领域口径修正：登录只写基础会话（realm 空），选领域时把 realm
+    写回同一行（先 load 再改写，过期行不复活）。此前两侧口径不一致——
+    通知的 realm 取自存储行、绑定的 realm 取自本地选择，联动对真实
+    "登录后已选领域"的客户端会漏关；同时 list-sessions 的 realm 字段
+    恒为空。修正后 list-sessions 的领域与踢人通知同源可用。
 
 Phase 2 仍开放：
   - 转发聚合 / entity-type diagnostics；
-  - 通知通道的 LoginApp 生产接线：client 面是 ClientProtocol（非
-    RuntimeInvocation 分发面），LoginApp 的 hub 入站分发面建好后
-    notifySessionRevoked 的推送即接 handleSessionRevoked（落点已备）；
   - 更完整的登录与会话运维命令其余部分（clear temporary bans 仍因
-    无封禁存储前置不做，沿既有边界）。
+    无封禁存储前置不做，沿既有边界）；
+  - 通知腿的运行期韧性：hub 无重连/心跳，daemon 重启后 LoginApp 需重启
+    才能恢复订阅；补发/对账（订阅丢失时的状态同步）未做，当前靠
+    list-sessions 人工对账。
 ```
 
 ---

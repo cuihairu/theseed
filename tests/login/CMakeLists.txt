@@ -12,7 +12,9 @@ add_executable(theseed_login_app_test LoginAppTest.cpp)
 target_link_libraries(
     theseed_login_app_test
     PRIVATE theseed_project_options theseed_test_options
-    PRIVATE theseed_login)
+    PRIVATE theseed_login
+    # 通知腿单元测试直接引用 MachineMethod 常量构造分发面用例
+    PRIVATE theseed_control)
 
 add_test(NAME theseed_login_app_test COMMAND theseed_login_app_test)
 
@@ -27,7 +29,9 @@ if(NOT WIN32)
         theseed_login_app_e2e_test
         PRIVATE theseed_project_options theseed_test_options
         PRIVATE theseed_login
-        PRIVATE theseed_db)
+        PRIVATE theseed_db
+        # 场景 F 起真实 MachineDaemon（踢人联动端到端）
+        PRIVATE theseed_control)
 
     add_test(NAME theseed_login_app_e2e_test COMMAND theseed_login_app_e2e_test)
 endif()

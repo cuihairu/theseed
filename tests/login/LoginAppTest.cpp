@@ -2,6 +2,7 @@
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/SessionToken.h"
+#include "theseed/control/machine/MachineDaemon.h"
 #include "theseed/db/DBProtocol.h"
 #include "theseed/foundation/Metrics.h"
 #include "theseed/runtime/InMemoryBytePipe.h"
@@ -153,6 +154,68 @@ private:
     std::vector<std::byte> queryPayload_;
     Mode createMode_;
     std::vector<std::byte> createPayload_;
+    std::deque<theseed::runtime::RuntimeInvocation> inbox_;
+};
+
+// 模拟 MachineDaemon 通知腿的 IRuntimeTransport：捕获注册探针并按模式
+// 入队应答（Ack = snapshot.ok，Reject = machine.error，Silent = 吞掉，
+// Closed = send 拒绝）；测试可主动 enqueue 任意入站推送。单线程假设与
+// FakeDbTransport 同。
+class FakeMachineTransport final : public theseed::runtime::IRuntimeTransport {
+public:
+    enum class Mode { Ack, Reject, Silent, Closed };
+
+    explicit FakeMachineTransport(Mode mode) : mode_(mode) {}
+
+    theseed::runtime::SendResult send(
+        theseed::runtime::RuntimeInvocation inv) override {
+        probe = inv;  // LoginApp 通知腿只会发一条注册探针
+        if (mode_ == Mode::Closed) {
+            return theseed::runtime::SendResult::NotConnected;
+        }
+        if (mode_ == Mode::Silent) {
+            return theseed::runtime::SendResult::Accepted;
+        }
+        theseed::runtime::RuntimeInvocation resp;
+        resp.sourceComponent = inv.targetComponent;
+        resp.targetComponent = inv.sourceComponent;
+        if (mode_ == Mode::Reject) {
+            resp.method = theseed::control::machine::MachineMethod::kError;
+            const std::string reason = "machine not trusted";
+            resp.payload.reserve(reason.size());
+            for (const char ch : reason) {
+                resp.payload.push_back(static_cast<std::byte>(ch));
+            }
+        } else {
+            resp.method =
+                theseed::control::machine::MachineMethod::kSnapshotOk;
+        }
+        inbox_.push_back(std::move(resp));
+        return theseed::runtime::SendResult::Accepted;
+    }
+
+    void enqueue(theseed::runtime::RuntimeInvocation inv) {
+        inbox_.push_back(std::move(inv));
+    }
+
+    std::size_t receive(theseed::runtime::ComponentId,
+                        theseed::runtime::RuntimeInvocation* out,
+                        std::size_t) override {
+        if (inbox_.empty()) return 0;
+        *out = inbox_.front();
+        inbox_.pop_front();
+        return 1;
+    }
+
+    std::size_t pendingCount() const override { return inbox_.size(); }
+    void flush() override {}
+    theseed::runtime::TransportStats stats() const override { return {}; }
+    void tick() override {}
+
+    theseed::runtime::RuntimeInvocation probe;
+
+private:
+    Mode mode_;
     std::deque<theseed::runtime::RuntimeInvocation> inbox_;
 };
 
@@ -752,6 +815,354 @@ int main() {
             FAIL("revocation counter must be +2");
         // 绑定随连接清扫出表的真臂在 E2E 测试（真实 TCP 生命周期）覆盖：
         // 本桩测试的会话不经 acceptConnections 进 sessions_。
+    }
+    PASS();
+
+    // --- §8 通知腿生产接线的桩面：注册探针、推送分发、畸形/未知臂 ---
+    TEST("machine notify leg: probe, dispatch, malformed and unknown arms");
+    {
+        namespace MachineMethod = theseed::control::machine::MachineMethod;
+        // 通知腿两端身份（LoginAppConfig 的缺省组件 id）：探针与推送
+        // 帧都按这两个 id 收发。
+        constexpr theseed::runtime::ComponentId kLocalComponent = 20;
+        constexpr theseed::runtime::ComponentId kMachineComponent = 60;
+        auto toBytes = [](const std::string& text) {
+            std::vector<std::byte> out(text.size());
+            for (std::size_t i = 0; i < text.size(); ++i)
+                out[i] = static_cast<std::byte>(text[i]);
+            return out;
+        };
+        auto makeMachineConfig = [](
+            std::function<std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                const std::string&, std::uint16_t)> factory) {
+            LoginAppConfig config;
+            config.listenHost = "127.0.0.1";
+            config.listenPort = 0;
+            config.authType = "null";
+            config.machineHost = "fake-machine";
+            config.machinePort = 7777;
+            config.machineTransportFactory = std::move(factory);
+            return config;
+        };
+
+        // --- 注册探针四臂 + 工厂空臂 ---
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Ack);
+            std::string seenHost;
+            std::uint16_t seenPort = 0;
+            LoginApp app(makeMachineConfig(
+                [&seenHost, &seenPort, transport](const std::string& host,
+                                                  std::uint16_t port)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    seenHost = host;
+                    seenPort = port;
+                    return transport;
+                }));
+            app.init();
+            if (seenHost != "fake-machine" || seenPort != 7777)
+                FAIL("machine factory must receive host/port");
+            if (transport->probe.method != MachineMethod::kSnapshot ||
+                transport->probe.sourceComponent != kLocalComponent ||
+                transport->probe.targetComponent != kMachineComponent)
+                FAIL("registration probe must be machine.snapshot from self to daemon");
+            app.tick();  // ack 应答排空（link ready 路由）
+            if (transport->pendingCount() != 0)
+                FAIL("snapshot ack must be drained by tick");
+        }
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Reject);
+            LoginApp app(makeMachineConfig(
+                [transport](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return transport;
+                }));
+            app.init();
+            app.tick();  // machine.error 应答排空（告警路由）
+            if (transport->pendingCount() != 0)
+                FAIL("probe rejection must be drained by tick");
+        }
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Silent);
+            LoginApp app(makeMachineConfig(
+                [transport](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return transport;
+                }));
+            app.init();
+            app.tick();  // 吞掉探针：无应答可排空
+        }
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Closed);
+            LoginApp app(makeMachineConfig(
+                [transport](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return transport;
+                }));
+            app.init();  // send 拒绝 → 探针未发出臂
+            app.tick();
+        }
+        {
+            LoginApp app(makeMachineConfig(
+                [](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return nullptr;  // 跳过通知腿臂
+                }));
+            app.init();
+            app.tick();
+        }
+
+        // --- 推送分发：全转义字符集载荷 → 转义解析 → 命中关闭活登录 ---
+        auto& revokedCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_session_revoked_count");
+        auto& malformedCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_session_notify_malformed_count");
+        auto& unknownCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_unknown_invocation_count");
+        const auto revoked0 = revokedCounter.value();
+        const auto malformed0 = malformedCounter.value();
+        const auto unknown0 = unknownCounter.value();
+
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Ack);
+            LoginApp app(makeMachineConfig(
+                [transport](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return transport;
+                }));
+            app.init();
+
+            // 登录账号带全转义字符集（LF TAB CR 反斜杠 引号）：控制面
+            // escapeJsonString 会转义它们，消费侧必须解析还原后精确匹配。
+            const std::string weird = "we\n\t\r\\d\"q";
+            MockClient client;
+            ClientSession session(client.serverPipe);
+            session.setMessageCallback(
+                [&app, &session](ClientMessageType type,
+                                 std::span<const std::byte> payload) {
+                    app.handleClientMessage(&session, type, payload);
+                });
+            auto payload = encodeLoginPayload(weird, "pw");
+            client.clearReceived();
+            client.sendToServer(
+                ClientMessageType::Login,
+                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+            ClientMessageType type{};
+            std::span<const std::byte> body;
+            if (!client.parseResponse(type, body) ||
+                type != ClientMessageType::LoginResponse ||
+                body.empty() || std::to_integer<std::uint8_t>(body[0]) == 0)
+                FAIL("weird-account login must succeed");
+
+            // 与 daemon notifySessionRevoked 同形的推送（escapeJsonString
+            // 口径：LF TAB CR 反斜杠 引号 → \n \t \r \\ \"）
+            const std::string notice =
+                std::string("{\"account\":\"we\\n\\t\\r\\\\d\\\"q\","
+                            "\"realm\":\"\","
+                            "\"session\":\"session(len=8)\","
+                            "\"reason\":\"operator.kick\"}");
+            theseed::runtime::RuntimeInvocation push;
+            push.sourceComponent = kMachineComponent;
+            push.targetComponent = kLocalComponent;
+            push.method = MachineMethod::kSessionRevoked;
+            push.payload = toBytes(notice);
+            transport->enqueue(std::move(push));
+            app.tick();
+            if (session.isConnected())
+                FAIL("revocation push must close the matching login");
+            if (revokedCounter.value() != revoked0 + 1)
+                FAIL("revocation counter must be +1");
+        }
+
+        // --- 畸形载荷五臂 + 未知 method 臂（不静默，计数可断言）---
+        {
+            auto transport = std::make_shared<FakeMachineTransport>(
+                FakeMachineTransport::Mode::Ack);
+            LoginApp app(makeMachineConfig(
+                [transport](const std::string&, std::uint16_t)
+                    -> std::shared_ptr<theseed::runtime::IRuntimeTransport> {
+                    return transport;
+                }));
+            app.init();
+            const std::string bads[] = {
+                "{\"realm\":\"\",\"session\":\"session(len=3)\","
+                "\"reason\":\"operator.kick\"}",  // account 缺失
+                "{\"account\":\"x\"}",            // realm 缺失
+                "{\"account\":\"x\\q\",\"realm\":\"\"}",  // 越集转义
+                "{\"account\":\"x",                // 未闭合
+                "{\"account\":\"x\\",              // 转义悬空
+            };
+            for (const auto& bad : bads) {
+                theseed::runtime::RuntimeInvocation push;
+                push.sourceComponent = kMachineComponent;
+                push.targetComponent = kLocalComponent;
+                push.method = MachineMethod::kSessionRevoked;
+                push.payload = toBytes(bad);
+                transport->enqueue(std::move(push));
+            }
+            theseed::runtime::RuntimeInvocation stray;
+            stray.sourceComponent = kMachineComponent;
+            stray.targetComponent = kLocalComponent;
+            stray.method = "machine.bogus";
+            transport->enqueue(std::move(stray));
+            app.tick();
+            if (malformedCounter.value() != malformed0 + 5)
+                FAIL("malformed pushes must each count, got " +
+                     std::to_string(malformedCounter.value() - malformed0));
+            if (unknownCounter.value() != unknown0 + 1)
+                FAIL("unknown method must count once");
+        }
+    }
+    PASS();
+
+    // --- 选领域把领域写回会话行（踢人联动的存储侧口径）+ 过期行不复活 ---
+    TEST("realm selection records the realm in the session row");
+    {
+        auto redis = std::make_shared<theseed::foundation::InMemoryRedisProvider>();
+        auto store = std::make_shared<theseed::foundation::SessionStore>(redis);
+
+        LoginAppConfig config;
+        config.listenHost = "127.0.0.1";
+        config.listenPort = 0;
+        config.authType = "null";
+        config.sessionStore = store;
+        config.sessionTtl = std::chrono::seconds(60);
+        RealmInfo r;
+        r.realmId = "default";
+        r.name = "Default";
+        r.status = "smooth";
+        r.host = "127.0.0.1";
+        r.port = 20000;
+        config.realms.push_back(r);
+        LoginApp app(std::move(config));
+        app.init();
+
+        auto stringPayload = [](const std::string& s) {
+            std::vector<std::byte> out;
+            const auto len = static_cast<std::uint32_t>(s.size());
+            out.push_back(std::byte(len & 0xFF));
+            out.push_back(std::byte((len >> 8) & 0xFF));
+            out.push_back(std::byte((len >> 16) & 0xFF));
+            out.push_back(std::byte((len >> 24) & 0xFF));
+            for (const char c : s) out.push_back(static_cast<std::byte>(c));
+            return out;
+        };
+        auto driveLogin = [&app](MockClient& client, ClientSession& session,
+                                 const std::string& account, std::string& token) {
+            session.setMessageCallback(
+                [&app, &session](ClientMessageType type,
+                                 std::span<const std::byte> payload) {
+                    app.handleClientMessage(&session, type, payload);
+                });
+            auto payload = encodeLoginPayload(account, "pw");
+            client.clearReceived();
+            client.sendToServer(
+                ClientMessageType::Login,
+                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+            ClientMessageType type{};
+            std::span<const std::byte> body;
+            if (!client.parseResponse(type, body) ||
+                type != ClientMessageType::LoginResponse ||
+                body.empty() || std::to_integer<std::uint8_t>(body[0]) == 0)
+                return false;
+            // token 是响应尾串：[u8][u32 errLen][error][u32 tokLen][token]
+            std::size_t off = 1;
+            std::uint32_t errLen = 0;
+            for (int i = 0; i < 4; ++i)
+                errLen |= static_cast<std::uint32_t>(
+                              std::to_integer<std::uint8_t>(body[off + i])) << (8 * i);
+            off += 4 + errLen;
+            std::uint32_t tokLen = 0;
+            for (int i = 0; i < 4; ++i)
+                tokLen |= static_cast<std::uint32_t>(
+                              std::to_integer<std::uint8_t>(body[off + i])) << (8 * i);
+            off += 4;
+            token.assign(reinterpret_cast<const char*>(body.data() + off), tokLen);
+            return true;
+        };
+        auto driveSelectRealm = [&stringPayload](MockClient& client, ClientSession& session,
+                                                const std::string& realmId) {
+            auto payload = stringPayload(realmId);
+            client.clearReceived();
+            client.sendToServer(
+                ClientMessageType::SelectRealm,
+                std::span<const std::byte>(payload.data(), payload.size()));
+            client.pump();
+            session.pump();
+            client.pump();
+            ClientMessageType type{};
+            std::span<const std::byte> body;
+            return client.parseResponse(type, body) &&
+                   type == ClientMessageType::SelectRealmResponse &&
+                   !body.empty() && std::to_integer<std::uint8_t>(body[0]) != 0;
+        };
+
+        // 登录即写基础会话行（领域为空）；选领域后领域补进同一行。
+        MockClient daveClient;
+        ClientSession daveSession(daveClient.serverPipe);
+        std::string daveToken;
+        if (!driveLogin(daveClient, daveSession, "dave", daveToken))
+            FAIL("dave login failed");
+        const auto loginRow = store->load(daveToken);
+        if (!loginRow || loginRow->accountId != "dave" || !loginRow->realmId.empty())
+            FAIL("login must store the base session with an empty realm");
+        if (!driveSelectRealm(daveClient, daveSession, "default"))
+            FAIL("dave select realm failed");
+        const auto realmRow = store->load(daveToken);
+        if (!realmRow || realmRow->realmId != "default" || realmRow->accountId != "dave")
+            FAIL("realm selection must be written back to the session row");
+        // 枚举面同口径：list-sessions 的 realm 字段不再是空壳
+        const auto rows = store->listSessions();
+        if (rows.size() != 1 || rows[0].realmId != "default")
+            FAIL("list-sessions must expose the recorded realm");
+
+        // 登录后未选领域的连接：选领域同样补写（绑定存在，行为一致）
+        MockClient erinClient;
+        ClientSession erinSession(erinClient.serverPipe);
+        std::string erinToken;
+        if (!driveLogin(erinClient, erinSession, "erin", erinToken))
+            FAIL("erin login failed");
+        if (!driveSelectRealm(erinClient, erinSession, "default"))
+            FAIL("erin select realm failed");
+        if (!store->load(erinToken) || store->load(erinToken)->realmId != "default")
+            FAIL("erin session row must carry the realm");
+
+        // 未登录的连接选领域：不建绑定、不碰存储（无 token 可写）
+        MockClient strangerClient;
+        ClientSession strangerSession(strangerClient.serverPipe);
+        strangerSession.setMessageCallback(
+            [&app, &strangerSession](ClientMessageType type,
+                                     std::span<const std::byte> payload) {
+                app.handleClientMessage(&strangerSession, type, payload);
+            });
+        if (!driveSelectRealm(strangerClient, strangerSession, "default"))
+            FAIL("stranger select realm should still answer ok");
+        if (store->listSessions().size() != 2)
+            FAIL("an unauthenticated realm select must not create a session row");
+
+        // 过期行不因选领域复活：TTL 走完后 load 落空 → 跳过改写。
+        MockClient ghostClient;
+        ClientSession ghostSession(ghostClient.serverPipe);
+        std::string ghostToken;
+        if (!driveLogin(ghostClient, ghostSession, "ghost", ghostToken))
+            FAIL("ghost login failed");
+        redis->advanceClock(std::chrono::seconds(120));
+        if (store->load(ghostToken))
+            FAIL("the session row should have expired before the realm select");
+        if (!driveSelectRealm(ghostClient, ghostSession, "default"))
+            FAIL("ghost select realm should still answer ok");
+        if (store->load(ghostToken))
+            FAIL("an expired session row must not be resurrected by realm select");
     }
     PASS();
 

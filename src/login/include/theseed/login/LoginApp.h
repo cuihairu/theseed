@@ -49,6 +49,20 @@ struct LoginAppConfig {
     //（返回 nullptr 时该 peer 缺席，dbRequest 立即按 NotConnected 失败）。
     std::function<std::shared_ptr<runtime::IRuntimeTransport>(const std::string& host,
                                                               std::uint16_t port)> dbTransportFactory;
+    // 控制面通知腿（04 §8 踢人联动生产接线）：MachineDaemon 地址。非空时
+    // init 出站连 daemon（hub connectPeer）并发一条 machine.snapshot 注册
+    // 探针——daemon 侧 hub 由首条请求的 sourceComponent 自报注册
+    //（attachServerTransport seam，与 DBApp 同机制），此后 daemon 的
+    // machine.session.revoked 推送沿该连接入站，由 handleInvocation 分发
+    // 到 handleSessionRevoked。空 = 不接线（联动通知收不到，登录面不受
+    // 影响）。连接失败同样只跳过不阻断（联动是 best-effort 增益）。
+    std::string machineHost;
+    std::uint16_t machinePort = 0;
+    runtime::ComponentId machineComponentId = 60;  // Machine 组件默认 id
+    // 测试/嵌入注入点：与 dbTransportFactory 同款 seam（返回 nullptr =
+    // 跳过通知腿）。
+    std::function<std::shared_ptr<runtime::IRuntimeTransport>(const std::string& host,
+                                                              std::uint16_t port)> machineTransportFactory;
     LoginAppOpsConfig ops;
 
     // Redis 会话/限流集成（Phase B）。三者共享同一个 IRedisProvider。
@@ -81,12 +95,19 @@ public:
                              ClientMessageType type,
                              std::span<const std::byte> payload);
 
+    // 入站 RuntimeInvocation 分发面（04 §8 踢人联动生产接线）：machine.
+    // session.revoked → 解载荷 → handleSessionRevoked；注册探针的应答
+    //（snapshot.ok / error）记联动状态；其余 method 记日志与计数后
+    // 丢弃——不回包：本面是单向推送消费面，回 error 会与 daemon 的
+    // 未知方法臂互弹成环。公开为测试入口（与 handleClientMessage 同款），
+    // 生产路径由 tick 的排空循环（drainInvocations）调用。
+    void handleInvocation(const runtime::RuntimeInvocation& inv);
+
     // 踢人联动处理面（§8 Phase 2）：按账号+领域关闭匹配的活跃登录连接
     //（MachineDaemon 吊销会话后推送 machine.session.revoked，载荷即
     // account/realm——本进程据本地绑定表定位连接）。返回关闭数。
-    // 注意：client 面是 ClientProtocol（非 RuntimeInvocation 分发面），
-    // 控制面通知通道接入 LoginApp 的接线（hub 入站分发）留待后续——
-    // 本方法即该通道的落点，通道建好即调。
+    // 生产通路：hub 入站分发（handleInvocation）解析推送载荷后调本方法；
+    // 本方法保持纯处理面（不解析协议），便于桩面直测。
     std::size_t handleSessionRevoked(const std::string& accountId,
                                      const std::string& realmId);
 
@@ -101,6 +122,9 @@ private:
     void handleQueryRealms(ClientSession* session);
     void handleSelectRealm(ClientSession* session, const std::string& realmId);
     void cleanupDisconnected();
+    // 排空发到本组件的入站 invocation 并逐条分发（与 DBApp::
+    // processMessages 同款）；由 tick 在 hub 泵后调用。
+    void drainInvocations();
 
     // 向 DBApp 发起一次请求-应答。等待上限为 config_.dbRequestTimeout；
     // 发送失败（NotConnected 等）、超时或杂散应答耗尽等待窗口时返回
@@ -119,6 +143,10 @@ private:
     struct LoginBinding final {
         std::string account;
         std::string realm;  // 登录时为空，SelectRealm 成功后补
+        // 令牌只为本进程内补写存储行而留（选领域时把 realm 落进会话行，
+        // 见 handleSelectRealm）。绝不进日志、不回显、不出进程——与
+        // SessionStore/通知面同纪律。
+        std::string token;
     };
     std::unordered_map<ClientSession*, LoginBinding> bindings_;
     runtime::TransportStatsCollector transportStatsCollector_;
