@@ -354,9 +354,9 @@ int main() {
             std::span<const std::byte> pl;
             if (!LoginProtocol::parseFrame(std::span<const std::byte>(frame.data(), frame.size()), t, pl))
                 FAIL("parse psync failed");
-            PropertySyncMsg out;
-            if (!ClientProtocol::decodePropertySync(pl, out)) FAIL("decode psync failed");
-            if (out.propertyData.size() != 2 || out.propertyData[0] != std::byte{0xAA})
+            PropertySyncMsg ps_out;
+            if (!ClientProtocol::decodePropertySync(pl, ps_out)) FAIL("decode psync failed");
+            if (ps_out.propertyData.size() != 2 || ps_out.propertyData[0] != std::byte{0xAA})
                 FAIL("psync content");
         }
     }

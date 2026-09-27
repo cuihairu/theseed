@@ -1,3 +1,7 @@
+// MSVC 将 getenv 标记为不安全（C4996），需静默。
+#ifdef _MSC_VER
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "theseed/core/EntityData.h"
 #include "theseed/db/PostgreSQLEntityStore.h"
 

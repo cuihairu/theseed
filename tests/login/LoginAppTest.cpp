@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -20,7 +21,17 @@
 #include <string>
 #include <utility>
 #include <vector>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <windows.h>
+#endif
+
+#ifndef _WIN32
+#define SLEEP_MS(ms) usleep((ms) * 1000)
+#else
+#define SLEEP_MS(ms) Sleep(ms)
+#endif
 
 using namespace theseed::login;
 using namespace theseed::runtime;
@@ -1118,7 +1129,7 @@ int main() {
             for (int i = 0; i < 1000; ++i) {
                 if (done()) return true;
                 app.tick();
-                usleep(2000);
+                SLEEP_MS(2);
             }
             return done();
         };
@@ -1325,7 +1336,7 @@ int main() {
             for (int i = 0; i < 1000; ++i) {
                 if (done()) return true;
                 app.tick();
-                usleep(2000);
+                SLEEP_MS(2);
             }
             return done();
         };

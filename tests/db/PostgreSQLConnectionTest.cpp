@@ -1,6 +1,10 @@
 // PostgreSQLConnection 直连测试：在真实 PostgreSQL 上驱动 happy path 与错误
 // 分支（坏 SQL、连接失败、断线后的 PQreset 重连、NULL/bytea/u64 参数与结果
 // 解码）。需要 THESEED_PG_HOST 等环境变量，未设置时整体跳过。
+// MSVC 将 getenv 标记为不安全（C4996），需静默。
+#ifdef _MSC_VER
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "theseed/db/PostgreSQLConnection.h"
 
 #include <cstddef>
