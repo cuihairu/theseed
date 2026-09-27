@@ -913,6 +913,14 @@ int main() {
             FAIL("no response to malformed terminate");
         if (payloadToString(resp).find("malformed") == std::string::npos)
             FAIL("malformed pid must be named: " + payloadToString(resp));
+        // 尾随垃圾：from_chars 的 ptr != end 短路臂（"abc" 只走 ec 臂）。
+        // 数字段取 uint32 最大值：真前缀不可能撞上有意义进程。
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf("4294967295x"), guardTick, resp))
+            FAIL("no response to trailing-garbage terminate");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("trailing garbage pid must be named: " +
+                 payloadToString(resp));
         // 2) 非受信来源
         RawClient stranger;
         stranger.component = 2;
@@ -976,8 +984,8 @@ int main() {
         ::kill(sleeper, SIGTERM);
         ::waitpid(sleeper, &status, 0);
 
-        if (termRejected.value() != rejected0 + 7)
-            FAIL("all seven rejections must count, got delta " +
+        if (termRejected.value() != rejected0 + 8)
+            FAIL("all eight rejections must count, got delta " +
                  std::to_string(termRejected.value() - rejected0));
         guardDaemon.stop();
         PASS();
@@ -1252,16 +1260,23 @@ int main() {
         if (payloadToString(resp).find("malformed") == std::string::npos)
             FAIL("empty payload must be malformed too: " +
                  payloadToString(resp));
+        // 尾随垃圾：from_chars 的 ptr != end 短路臂
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf("9z"),
+                                   profileTick, resp))
+            FAIL("no response to trailing-garbage download");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("trailing garbage handle must be named: " +
+                 payloadToString(resp));
 
-        // 指标四路增量：触发受/拒 2/2，访问受/拒 4/5
+        // 指标四路增量：触发受/拒 2/2，访问受/拒 4/6
         if (triggerAccepted.value() != trigAcc0 + 2)
             FAIL("trigger accepted must be +2");
         if (triggerRejected.value() != trigRej0 + 2)
             FAIL("trigger rejected must be +2");
         if (accessAccepted.value() != accAcc0 + 4)
             FAIL("access accepted must be +4");
-        if (accessRejected.value() != accRej0 + 5)
-            FAIL("access rejected must be +5");
+        if (accessRejected.value() != accRej0 + 6)
+            FAIL("access rejected must be +6");
 
         // 只有关键受控动作（触发）进 trace：接受一次 + 限流拒绝一次
         // （真实调度器 runOnce 的 tick span 也走全局出口，按名字过滤）
@@ -1300,24 +1315,24 @@ int main() {
         if (!sawSecondAccept)
             FAIL("second trigger span must mark acceptance");
 
-        // 审计入环（中心聚合 + 本地环形镜像）：13 条动作按发生序落账
+        // 审计入环（中心聚合 + 本地环形镜像）：14 条动作按发生序落账
         const auto& trail = profileCenter.auditTrail();
-        if (trail.size() != audits0 + 13)
-            FAIL("thirteen profile actions must be audited, got " +
+        if (trail.size() != audits0 + 14)
+            FAIL("fourteen profile actions must be audited, got " +
                  std::to_string(trail.size() - audits0));
         struct Expect {
             const char* command;
             bool accepted;
         };
-        const Expect expected[13] = {
+        const Expect expected[14] = {
             {"profiler.trigger", false},  {"profiler.list", false},
             {"profiler.download", false}, {"profiler.trigger", true},
             {"profiler.trigger", false},  {"profiler.list", true},
             {"profiler.download", true},  {"profiler.trigger", true},
             {"profiler.list", true},      {"profiler.download", true},
             {"profiler.download", false}, {"profiler.download", false},
-            {"profiler.download", false}};
-        for (std::size_t i = 0; i < 13; ++i) {
+            {"profiler.download", false}, {"profiler.download", false}};
+        for (std::size_t i = 0; i < 14; ++i) {
             const auto& entry = trail[audits0 + i].entry;
             if (entry.command != expected[i].command ||
                 entry.accepted != expected[i].accepted)
@@ -1328,7 +1343,7 @@ int main() {
             FAIL("accepted trigger must record the handle");
         if (trail[audits0 + 7].entry.args != handle2)
             FAIL("second trigger must record its own handle");
-        if (profileDaemon.auditLog().size() != 13)
+        if (profileDaemon.auditLog().size() != 14)
             FAIL("local ring must mirror the same actions");
 
         foundation::setSpanEmitter(nullptr);
@@ -1931,6 +1946,14 @@ int main() {
             FAIL("no response to non-numeric apply");
         if (payloadToString(resp).find("invalid value") == std::string::npos)
             FAIL("non-numeric value must be refused: " + payloadToString(resp));
+        // 尾随垃圾：from_chars 的 ptr != end 短路臂
+        if (!cfgClient.request(MachineMethod::kConfigApply,
+                               executePayload("ops.report_interval_ms", "5x"),
+                               cfgTick, resp))
+            FAIL("no response to trailing-garbage apply");
+        if (payloadToString(resp).find("invalid value") == std::string::npos)
+            FAIL("trailing garbage value must be refused: " +
+                 payloadToString(resp));
 
         // 白名单内：生效（指标 +9 拒绝在此之后断言，先打点前值）
         if (!cfgClient.request(MachineMethod::kConfigApply,
@@ -1951,13 +1974,13 @@ int main() {
             FAIL("applied interval must take effect on the next tick");
 
         if (applyAccepted.value() != applyAcc0 + 1) FAIL("apply accepted +1");
-        if (applyRejected.value() != applyRej0 + 9)
-            FAIL("apply rejected +9 (malformed/role/4 classes/out-of-list/2 bad values)");
+        if (applyRejected.value() != applyRej0 + 10)
+            FAIL("apply rejected +10 (malformed/role/4 classes/out-of-list/3 bad values)");
 
-        // 审计：10 次尝试全部留痕；接受条目记录 key=value
+        // 审计：11 次尝试全部留痕；接受条目记录 key=value
         const auto& trail = cfgDaemon.auditLog();
-        if (trail.size() != 10)
-            FAIL("all ten apply attempts must be audited, got " +
+        if (trail.size() != 11)
+            FAIL("all eleven apply attempts must be audited, got " +
                  std::to_string(trail.size()));
         if (!trail.back().accepted || !trail.back().ok ||
             trail.back().args != "ops.report_interval_ms=1")
@@ -1968,7 +1991,7 @@ int main() {
         for (const auto& span : *spans) {
             if (span.name == "machine.config.apply") ++applySpans;
         }
-        if (applySpans != 10)
+        if (applySpans != 11)
             FAIL("one span per apply attempt, got " +
                  std::to_string(applySpans));
 

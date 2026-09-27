@@ -26,6 +26,30 @@ inline void setNonBlocking(SocketHandle s) {
     u_long mode = 1;
     ioctlsocket(s, FIONBIO, &mode);
 }
+
+// 与 POSIX 分支同语义（见彼处注释）：关 Nagle、ENOTCONN 可重试、
+// 未决 connect 的 SO_ERROR 读取。macOS 首发的 ENOTCONN 窗口问题在
+// Windows 侧同样存在于 WSAENOTCONN。
+inline void enableNoDelay(SocketHandle s) {
+    const int nodelay = 1;
+    ::setsockopt(s, IPPROTO_TCP, TCP_NODELAY,
+                 reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+}
+
+inline bool notConnectedYet() { return WSAGetLastError() == WSAENOTCONN; }
+
+inline int socketPendingError(SocketHandle s) {
+    int err = 0;
+    SockLen len = sizeof(err);
+    ::getsockopt(s, SOL_SOCKET, SO_ERROR,
+                 reinterpret_cast<char*>(&err), &len);
+    return err;
+}
+
+inline bool connectStillPending(int err) {
+    return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS;
+}
+
 inline void closeSocket(SocketHandle s) { closesocket(s); }
 
 // WSAStartup 必须在任何 socket() 之前执行。用 once 语义保证幂等，
@@ -56,6 +80,7 @@ inline void socketGlobalShutdown() {}
 #include <cerrno>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -89,6 +114,37 @@ inline void setNonBlocking(SocketHandle s) {
     const int flags = ::fcntl(s, F_GETFL, 0);
     ::fcntl(s, F_SETFL, flags | O_NONBLOCK);
 }
+
+// 关闭 Nagle：请求/响应式控制面在非阻塞 tick 循环里逐条写小包，
+// macOS 回环的 Nagle×延迟 ACK 交互会把应答拖过测试的 tick 预算
+// （Linux 较不敏感，属平台行为差异而非语义分支）。
+inline void enableNoDelay(SocketHandle s) {
+    const int nodelay = 1;
+    ::setsockopt(s, IPPROTO_TCP, TCP_NODELAY,
+                 reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+}
+
+// 非阻塞 connect 尚未落定时，send/recv 以 ENOTCONN 表达"未就绪"，
+// 与 EAGAIN 同属可重试——不能据此判死连接（macOS 上握手完成前的
+// 首发命中此窗口的概率远高于 Linux）。
+inline bool notConnectedYet() { return errno == ENOTCONN; }
+
+// 读取未决 connect 的落定结果：0 = 握手成功，其余为 SO_ERROR 原值
+// （调用方判 EINPROGRESS 系错误是否仍在进行）。
+inline int socketPendingError(SocketHandle s) {
+    int err = 0;
+    SockLen len = sizeof(err);
+    ::getsockopt(s, SOL_SOCKET, SO_ERROR,
+                 reinterpret_cast<char*>(&err), &len);
+    return err;
+}
+
+// SO_ERROR 值是否表示握手仍在进行（对照 connectInProgress 的 errno 集）。
+inline bool connectStillPending(int err) {
+    return err == EINPROGRESS || err == EINTR || err == EAGAIN ||
+           err == EWOULDBLOCK;
+}
+
 inline void closeSocket(SocketHandle s) { ::close(s); }
 
 inline void socketEnsureInit() {}

@@ -62,6 +62,12 @@ bool TcpConnection::connect(const std::string& host, std::uint16_t port) {
         return false;
     }
 
+    // 非阻塞 connect 立即返回不代表握手完成：在 SO_ERROR 落定前，
+    // send 会以 ENOTCONN 拒绝（macOS 命中率高，Linux 窗口极窄）。
+    // 连接标记保持乐观（既有状态机语义），pending 期在 pump 里裁决，
+    // send 侧由 notConnectedYet 兜底重试。
+    connectPending_ = (result == detail::kSocketError);
+    detail::enableNoDelay(s);
     connected_ = true;
     return true;
 }
@@ -84,6 +90,7 @@ void TcpConnection::close() {
     }
     socket_ = 0;
     connected_ = false;
+    connectPending_ = false;
     sendBuffer_.clear();
 }
 
@@ -97,6 +104,20 @@ void TcpConnection::pump() {
 
 std::size_t TcpConnection::pumpWithResult() {
     if (!connected_) return 0;
+
+    // 未决 connect 的裁决点：SO_ERROR 归零才允许收发；失败即断开。
+    // 握手仍在进行（EINPROGRESS 系）时本轮空转，交由下一轮 pump。
+    if (connectPending_) {
+        const int err = detail::socketPendingError(toSocket(socket_));
+        if (err != 0) {
+            if (!detail::connectStillPending(err)) {
+                connected_ = false;
+                connectPending_ = false;
+            }
+            return 0;
+        }
+        connectPending_ = false;
+    }
 
     std::size_t totalReceived = 0;
 
@@ -136,7 +157,9 @@ bool TcpConnection::trySendBuffered() {
                     reinterpret_cast<const char*>(sendBuffer_.data()),
                     static_cast<int>(sendBuffer_.size()), detail::kSendFlags);
     if (n == detail::kSocketError) {
-        if (detail::wouldBlock()) {
+        // ENOTCONN 与 EAGAIN 同属"稍后重试"：握手未落定窗口的首发
+        // 不改写连接状态，数据留在 sendBuffer_，待 pump 裁决后续传。
+        if (detail::wouldBlock() || detail::notConnectedYet()) {
             return false;
         }
         connected_ = false;

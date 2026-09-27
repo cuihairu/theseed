@@ -94,6 +94,7 @@ std::shared_ptr<TcpConnection> TcpListener::accept() {
     conn->socket_ = static_cast<std::uintptr_t>(clientSocket);
     conn->connected_ = true;
     conn->setNonBlocking();
+    detail::enableNoDelay(clientSocket);  // 服务侧同关 Nagle，请求/响应与时延预算对齐
     return conn;
 }
 

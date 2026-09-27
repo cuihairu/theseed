@@ -677,6 +677,28 @@ static void testLoaderErrorBranches() {
     PASS();
 }
 
+// trimWs 的四类行尾空白真臂与「整段皆空白」的循环出口臂：
+// 闭合标签 </EntityDef\t\n\r > 逐一命中 \t/\n/\r 的删后缀真臂
+// （' ' 真臂既有用例已覆盖），</ \t> 让 sv 被吃空后从 !empty
+// 假臂退出（根级 parentTag 为空、闭合名不校验，解析照常成功）。
+static void testClosingTagWhitespaceArms() {
+    TEST("closing tag whitespace trim arms");
+
+    const std::string body = "<Properties>"
+                             "<Property name=\"p\" type=\"Int32\"/>"
+                             "</Properties>";
+    const std::string xml1 = "<EntityDef name=\"WsA\">" + body + "</EntityDef\t\n\r >";
+    const std::string xml2 = "<EntityDef name=\"WsB\">" + body + "</ \t>";
+
+    auto defA = EntityDefLoader::loadFromString(xml1);
+    auto defB = EntityDefLoader::loadFromString(xml2);
+
+    bool ok = defA != nullptr && defA->entityType() == "WsA" && defA->propertyCount() == 1;
+    ok = ok && defB != nullptr && defB->entityType() == "WsB";
+
+    if (ok) PASS(); else FAIL("closing tag whitespace arms failed");
+}
+
 static void testBoolMinMaxFallsThroughEncoder() {
     TEST("bool property with minValue hits encoder default branch");
 
@@ -722,6 +744,7 @@ int main() {
     testXmlDeclCommentsAndMinMax();
     testNumericDefaultValues();
     testLoaderErrorBranches();
+    testClosingTagWhitespaceArms();
     testBoolMinMaxFallsThroughEncoder();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

@@ -45,6 +45,8 @@ private:
 
     std::uintptr_t socket_ = 0;
     bool connected_ = false;
+    // 非阻塞 connect 已发起但 SO_ERROR 尚未落定；pump 首轮裁决。
+    bool connectPending_ = false;
     std::function<void(std::span<const std::byte>)> onReceived_;
     std::vector<std::byte> sendBuffer_;
     std::vector<std::byte> recvBuffer_;
