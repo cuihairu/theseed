@@ -1226,3 +1226,4 @@ THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test \
 
 ## 规则 c 巡检 2026-09-27：115/115 测试全绿、gcovr 100%（11682/11682 行 100%，1644/1644 函数 100%）；clang 树零警告、双树门禁 Through（gcc14+merge-use-line-min）
 
+## 规则 c 巡检 2026-09-27：115/115 测试全绿、gcovr 100%（11682/11682 行 100%，1644/1644 函数 100%）；clang 树零警告、双树门禁 Through（gcc14+merge-use-line-min）
