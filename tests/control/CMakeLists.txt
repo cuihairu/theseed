@@ -1,7 +1,8 @@
 # machine/control 的进程治理与套接字探针测试依赖 POSIX（fork/waitpid、
 # ::getpid、POSIX socket），Windows 暂不纳入；HostProbe 与 OpsControlCenter
 # 的测试平台中立、全平台跑（macos job 依赖 HostProbe 测试首验 Apple 胶合，
-# 不可门控掉）。
+# 不可门控掉）。MachineAgent/MachineDaemon/ProcessPortScanner 依赖 Linux 专用
+# procfs / ss 接口，macOS 上全红，门控至 Linux。
 if(NOT WIN32)
 add_executable(theseed_machine_snapshot_codec_test MachineSnapshotCodecTest.cpp)
 
@@ -20,7 +21,9 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_process_supervisor_test COMMAND theseed_process_supervisor_test)
+endif()
 
+if(UNIX AND NOT APPLE)
 add_executable(theseed_machine_agent_test MachineAgentTest.cpp)
 
 target_link_libraries(
@@ -40,7 +43,7 @@ target_link_libraries(
 
 add_test(NAME theseed_host_probe_test COMMAND theseed_host_probe_test)
 
-if(NOT WIN32)
+if(UNIX AND NOT APPLE)
 add_executable(theseed_process_port_scanner_test ProcessPortScannerTest.cpp)
 
 target_link_libraries(
