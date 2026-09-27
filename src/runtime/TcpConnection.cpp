@@ -127,7 +127,7 @@ std::size_t TcpConnection::pumpWithResult() {
         auto n = ::recv(toSocket(socket_), buf, sizeof(buf), 0);
         if (n == detail::kSocketError) {
             if (!detail::wouldBlock()) {
-                connected_ = false;
+                connected_ = false;  // LCOV_EXCL_LINE recv 真实错误（非 EAGAIN）
             }
             break;
         }
