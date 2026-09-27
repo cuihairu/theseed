@@ -73,7 +73,36 @@
    proc_name，本机不可验证、由 CI macos job 首验）；(f) MSVC 双警升错：
    PostgreSQLConnection 的 PQftype size_t→int 实参（static_cast，本机无
    libpq 编译不可验证）与 RedisProviderTest 两处 zrange 裸 -1（同款
-   size_t 哨兵）。
+   size_t 哨兵）。以上两轮修复随批提交 52bdf63、4ea2f21；第三轮收尾
+   （MSVC C4244 + libc++ <algorithm>）为 17f4bd2。
+7. **随批修复之三 + coverage 门口径校准（2026-09-27 第三轮）**：(a)
+   MSVC C4244——ProcessSummary.port 存储面加宽 uint32 后裸传
+   probeProcessVersion(uint16)，显式收缩无损（取值恒来自端口扫描器的
+   uint16，bind/htons 语义）；(b) libc++ 不经传递包含引入 <algorithm>
+   ——EntityDefRegistryTest 的 std::sort 补显式包含；(c) coverage 门
+   校准：`--fail-under-branch 100` 系 065a3e4 迁移期遗留配置、对现行
+   代码从未绿过（先被编译红掩盖、后被 PG 分母污染掩盖）——gcc 对
+   **有代码的行**同样记 STL 内联 cleanup landing pad 出边
+   （`--exclude-throw-branches` 只剔带 throw 标记的边，pad 自身出边
+   是 throw:false），叠加真实条件臂存量缺口，分支 100 不可达。对齐
+   本文件既有口径（行/函数 100%、分支信息性）：coverage job 显式钉
+   g++-14（gcc-13 给模板/默认参数残影多记 5 条伪 0 行：Entity.h
+   :232/233 ×2、TickScheduler.h:56，gcc-14 起不再产出），加
+   `--exclude-unreachable-branches`（纯花括号行上的编译器 pad 出边，
+   真实分支不可能长在除花括号外无内容的行上），`--fail-under-branch
+   100` 换 `--fail-under-function 100`（文档口径含函数门，此前反而
+   未断言）。
+8. **分支缺口建档（存量测试债，后续分批消化）**：gcc-14 + 双排除旗标
+   后分支 97.8%（未剔时 96.5%/318 点；两旗标合计剔 132 点）。剩余
+   186 点/101 行分型：(i) 编译器 cleanup pad——LogAttribute/audit
+   初始化行、try_emplace 内联展开等，异常展开机制、任何测试不可达，
+   约 45 点；(ii) 真实条件臂缺口约 140 点——MachineDaemon 解析短路
+   链臂（213/236/281）与 ternary 失败臂（933/1151/1225/1695）、
+   OpsControlCenter maxNodes/查询过滤臂、LoginApp 两腿链路监督状态机
+   臂（316-326/423-433）、ProcessPortScanner 错误臂、EntityDefLoader
+   trim 四类空白字符臂、SessionStore/DBApp/HostProbe 单臂——集中于
+   本系列早批代码，非本批引入。后续按文件分批补测试消化，消化完
+   可升回分支硬门。
 
 **边界与遗留（如实记录）**：
 - Windows 网络等价探针仍缺（940 只承诺 Linux/macOS；Windows 的 CPU/内存

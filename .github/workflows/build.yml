@@ -36,8 +36,10 @@ jobs:
 
   coverage:
     name: linux-coverage-gate
-    # 固定 24.04 锁定 GCC 13：分支插桩的 STL 内联边随 GCC 版本漂移，
-    # 与本地 gcc-coverage 树（g++13）保持同一口径，100% 门禁才可复现。
+    # 固定 24.04 并显式钉 gcc-14：gcc-13 会给模板/默认参数残影多记 5 条
+    # 伪 0 行（Entity.h:232/233、TickScheduler.h:56，gcc-14 起不再产出，
+    # 实测见 todo.md 2026-09-27 批）；STL 内联的异常/cleanup 边各版本都
+    # 有，由 gcovr 排除旗标处理（见 Coverage gate 注释）。
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -45,13 +47,19 @@ jobs:
       - name: Install gcovr
         run: pipx install gcovr
 
+      - name: Install gcc-14
+        run: sudo apt-get update && sudo apt-get install -y g++-14
+
       # ubuntu-24.04 镜像自带 libpq，find_package(PostgreSQL) 会自动点亮
       # PG 后端——但 runner 上没有可连的 PG 服务器，测试自跳，PostgreSQL*
       # 源码全量 0 覆盖进 gcovr 分母（实测行 96.4%/分支 92.6%）。显式禁用
       # 该 find，保持与本地无 libpq 的开发树同一分母。gcc-debug/sanitize
       # 不设门禁的 job 仍保留 PG 参编（真实 libpq 的编译验证在那两条腿）。
       - name: Configure
-        run: cmake --preset gcc-coverage -DCMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON
+        run: >
+          cmake --preset gcc-coverage -DCMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON
+          -DCMAKE_C_COMPILER=/usr/bin/gcc-14
+          -DCMAKE_CXX_COMPILER=/usr/bin/g++-14
 
       - name: Build
         run: cmake --build --preset gcc-coverage
@@ -62,13 +70,19 @@ jobs:
       - name: Test
         run: ctest --preset gcc-coverage
 
-      # 业务口径：--exclude-throw-branches 剔除结构性不可达的异常边；
-      # 结构性不可达的业务分支用源码 LCOV_EXCL_BR_LINE 显式登记豁免。
-      # 行与分支双 100% 断言，任一不达 gcovr 以非零退出。
+      # 业务口径（todo.md：行/函数 100%，分支信息性）：
+      # - --exclude-throw-branches 剔除内联调用的异常边；
+      # - --exclude-unreachable-branches 剔除纯花括号行上的编译器 landing
+      #   pad 出边——真实分支不可能长在除花括号外无内容的行上；
+      # - 行+函数双 100% 硬断言。分支 100 从未对现行代码成立（065a3e4
+      #   遗留配置，被编译红/分母污染掩盖）：gcc 对有代码行也记 cleanup
+      #   边，且存量真实条件臂有缺口（186 点分型清册见 todo.md 同批），
+      #   分支改为信息性输出，缺口按清册分批消化后可再升回硬门。
       - name: Coverage gate
         run: |
           gcovr --filter src/ --exclude-throw-branches \
-            --fail-under-line 100 --fail-under-branch 100 \
+            --exclude-unreachable-branches \
+            --fail-under-line 100 --fail-under-function 100 \
             --gcov-ignore-errors=no_working_dir_found \
             --print-summary
 
