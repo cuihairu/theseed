@@ -1,6 +1,35 @@
 # TODO
 
+## 遗留事项收口：Windows 网络探针台账校准（2026-09-27，非覆盖率轮）
+
+「遗留事项」清单里 macOS 批次留下的「Windows 网络探针仍缺，本条只承诺
+Linux/macOS」尾注是陈旧记录——实现实际已由同日「Windows 等价网络流量
+探针」批（85c6a58 + 40a77e7 + cbacb3d）落地并 CI 验证，本轮仅台账收口：
+
+1. **实现现状核实**（无需新码）：`_WIN32` 胶合走 GetIfTable2 的
+   MIB_IF_ROW2 64 位八位组计数（InOctets/OutOctets，static_assert 钉
+   IF_TYPE_SOFTWARE_LOOPBACK），逐行经 probe_detail::windowsLinkCounters
+   归一回环、aggregateLinkCounters 多网卡求和——与 Linux/macOS 同一份
+   聚合口径；iphlpapi 链接在 windows 分支的 CMake 里。
+2. **验证方式**（本机无 Windows，三层证据）：
+   - 编译：仓库既定 windows CI job（windows-msvc-debug）以 MSVC 编译
+     `_WIN32` 分支——85c6a58..cbacb3d 起历次 run 全绿（run
+     36335150403 / 36344457694 均含该腿）；
+   - 运行时：windows job 里 HostProbeTest 的 testRealProcSources 在
+     真实 Windows 计数器上断言网络计数单调（平台中立断言 = 胶合首验），
+     testWindowsLinkCounters 直测 ifType 24 归一 + 64 位透传全分支；
+   - 本机离线：mingw-w64 交叉编译 `-fsyntax-only -std=c++23 -Wall
+     -Wextra` 复跑零警告（真实 Windows 头复刻 MS SDK 守卫结构）。
+3. **台账校准**：遗留事项「网络流量统计与多网卡聚合」补 Windows 完成
+   注记；「等价主机探针」条目的「仍缺」尾注改指闭合批。
+
+无功能改动、无测试改动——HostProbeTest 的 Windows 归一单测为上批既有，
+本轮随全量套件复跑（gcc-coverage 115/115、clang-debug 115/115、门禁
+行/函数 100%）。
+
 - 规则 c 收尾巡检（2026-09-27，@28f240a）：工作树干净、无遗留脏文件；双树全量 gcc-coverage ctest 115/115 全绿（71.9s）+ clang-debug 115/115 全绿（29.0s），gcovr 门禁（树内根跑，--merge-mode-functions=merge-use-line-min）行 11682/11682 = 100%、函数 1644/1644 = 100%、分支 97.8% 信息性——零失败零 flake，本轮无修复项。
+
+- 规则 c 补巡检（2026-09-27，当前批）：工作树干净、无遗留脏文件；双树全量 gcc-coverage ctest 115/115 全绿（含 machine_daemon_test 179s）+ clang-debug 115/115 全绿，gcovr 门禁（树内根跑，--merge-mode-functions=merge-use-line-min）行 11052/11052 = 100%、函数 1628/1628 = 100%、分支 97.6% 信息性——零失败零 flake，本轮无修复项，覆盖率/台账 item 8 按指示继续暂停。
 
 ## §6.2 requestId 全链路关联：发起方铸造 + 中心环形按请求查询（2026-09-27）
 
@@ -1128,7 +1157,8 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 以下事项暂不进入当前实现：
 
 - ~~`LocalHostProbe` 的高精度 CPU 采样稳定化，当前 CLI 两次短窗口采样仍可能得到 `0.00`~~（2026-09-26 完成）
-- ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux）
+- ~~网络流量统计与多网卡聚合~~（2026-09-26 完成，Linux；Windows 等价
+  胶合 2026-09-27 补齐——GetIfTable2 64 位计数入同一 probe_detail 聚合口径）
 - ~~非受控全局进程的策略化管理与权限边界~~（2026-09-26 完成：控制面
   execute 双白名单 + 主机级非 agent 进程的策略化治理——machine.processes
   / machine.terminate RPC、ProcessGovernPolicy 独立策略、全动作审计入
@@ -1137,7 +1167,9 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 - ~~Linux / macOS 的等价主机探针完整实现与验证（网络部分 Linux 已完成，缺 macOS）~~
   （2026-09-27 完成 macOS 实现：CPU/内存/网络 Apple 胶合 + probe_detail
   共用口径（Linux 单测直测）；Linux 运行时本机已验，macOS 运行时由 CI
-  macos-latest job 首验。Windows 网络探针仍缺，本条只承诺 Linux/macOS）
+  macos-latest job 首验。Windows 网络探针亦已于同日补齐（85c6a58..cbacb3d，
+  见顶部「Windows 等价网络流量探针」批）——「仍缺」为该批之前的陈旧
+  尾注，2026-09-27 收口校准）
 - ~~`MachineAgent` 的 RPC 输出与控制面注册~~（2026-09-26 完成：MachineDaemon
   TCP 端点；控制面中心注册待 Ops Control Plane 对接时一并做）
 - ~~与 `Ops Control Plane` 的注册、上报和审计对接~~（2026-09-26 完成：
