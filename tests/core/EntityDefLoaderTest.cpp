@@ -282,26 +282,34 @@ static void testInheritance() {
     ok = ok && registry.hasDef("Creature");
     ok = ok && registry.hasDef("Player");
 
-    auto& player = registry.getDef("Player");
-    ok = ok && player != nullptr;
-    ok = ok && player->propertyCount() == 3;  // hp + level + name
-    ok = ok && player->methodCount() == 2;    // onDamage + onChat
+    auto playerPtr = registry.getDef("Player");
+    ok = ok && playerPtr != nullptr;
+    if (!ok) {
+        std::filesystem::remove_all(dir);
+        FAIL("Player def not found after load, loaded=" + std::to_string(loaded) +
+             " hasCreature=" + std::to_string(registry.hasDef("Creature")) +
+             " hasPlayer=" + std::to_string(registry.hasDef("Player")));
+        return;
+    }
 
-    ok = ok && player->findProperty("hp") != nullptr;
-    ok = ok && player->findProperty("level") != nullptr;
-    ok = ok && player->findProperty("name") != nullptr;
-    ok = ok && player->findMethod("onDamage") != nullptr;
-    ok = ok && player->findMethod("onChat") != nullptr;
+    ok = ok && playerPtr->propertyCount() == 3;  // hp + level + name
+    ok = ok && playerPtr->methodCount() == 2;    // onDamage + onChat
+
+    ok = ok && playerPtr->findProperty("hp") != nullptr;
+    ok = ok && playerPtr->findProperty("level") != nullptr;
+    ok = ok && playerPtr->findProperty("name") != nullptr;
+    ok = ok && playerPtr->findMethod("onDamage") != nullptr;
+    ok = ok && playerPtr->findMethod("onChat") != nullptr;
 
     // Verify inherited properties have correct sizes
-    auto* hp = player->findProperty("hp");
-    auto* level = player->findProperty("level");
+    auto* hp = playerPtr->findProperty("hp");
+    auto* level = playerPtr->findProperty("level");
     ok = ok && hp != nullptr && hp->size == 4;
     ok = ok && level != nullptr && level->size == 4;
 
     std::filesystem::remove_all(dir);
-    if (ok) PASS(); else FAIL("inheritance failed, props=" + std::to_string(player->propertyCount())
-                               + " methods=" + std::to_string(player->methodCount()));
+    if (ok) PASS(); else FAIL("inheritance failed, props=" + std::to_string(playerPtr->propertyCount())
+                               + " methods=" + std::to_string(playerPtr->methodCount()));
 }
 
 static void testMultiLevelInheritance() {

@@ -83,6 +83,8 @@ Linux/macOS」尾注是陈旧记录——实现实际已由同日「Windows 等�
 
 - 规则 c 补巡检（2026-09-27，当前批）：工作树干净、无遗留脏文件；双树全量 gcc-coverage ctest 115/115 全绿（含 machine_daemon_test 179s）+ clang-debug 115/115 全绿，gcovr 门禁（树内根跑，--merge-mode-functions=merge-use-line-min）行 11052/11052 = 100%、函数 1628/1628 = 100%、分支 97.6% 信息性——零失败零 flake，本轮无修复项，覆盖率/台账 item 8 按指示继续暂停。
 
+- 规则 c 收尾巡检（2026-09-28）：build_test/ 清理 + .gitignore 补 `build_*/`（与既有 `build-*/` 对称，注明 preset 口径）；process_port_scanner_test flake 三层根因修复——测试侧复验制 + 轮询退避 + ChildStopGuard + 子进程 tick 1ms 密跑；产品侧 probeProcessVersion 阻塞 connect 无超时（backlog 饱和时 SYN 重传卡 25s+），改非阻塞 connect + poll 统一超时；新增 backlog 饱和注入测试钉住连接超时分支。验证：双树全量 gcc-coverage 115/115 + clang-debug 115/115 全绿，gcovr 行/函数 100%（11064/11064 行、1628/1628 函数），mingw 离线零警告。覆盖率/台账 item 8 按指示继续暂停。
+
 ## §6.2 requestId 全链路关联：发起方铸造 + 中心环形按请求查询（2026-09-27）
 
 巡检派发项。协议帧字段与 daemon 透传已由「Phase 2 余项」批落地，
