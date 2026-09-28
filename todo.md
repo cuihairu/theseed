@@ -18,6 +18,15 @@
      （SYN 重传实测单次卡 25s+，把 listProcesses 轮询整轮卡死）。改非
      阻塞 connect + poll，建连与收发共用同一超时；头注释同步。新增
      backlog 饱和注入测试钉住该臂（accept 队列塞满 → poll 满短超时）。
+
+--- 2026-09-28 门禁复跑纪录 ---
+- gcc-coverage ctest：因 g++ 15.2.0 + --coverage 模块兼容性问题，建目录重配后构建受阻；改用 clang-debug 验证门禁。
+- clang-debug ctest：115/115 全绿（RC=0），含 theseed_machine_daemon_test 85s 通过。
+- gcovr 行/函数门禁：未直接复跑（覆盖率类工作按指示继续暂停，item 8 不做）。
+- 现状：工作树干净，git 状态无未提交修改。
+
+--- 2026-09-28 任务结束 ---
+规则 c 收尾完成：无新增功能、无覆盖率工作、树净全绿。准备 fetch --rebase 并推送。
    - **核心根因**（诊断实锤：子进程 alive、正常睡 tick、2s 长探测也
      空、手动 child-ops 却秒回）：startReplyServer 的 accept 线程是
      detach 的——负载下线程迟迟未跑时其 LISTEN fd 未关，此后
