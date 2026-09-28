@@ -1,5 +1,42 @@
 # TODO
 
+## 规则 c 收尾：build_test 清理 + 过程端口扫描 flake 三层根因修复（2026-09-28）
+
+1. **build_test/ 判定与清理**：未跟踪的 build_test/ 是手工配置的 Debug
+   构建树（CMakeCache/CMakeFiles/24 个 .o，1606 文件均当日生成，非任何
+   preset 的 binaryDir——CMakePresets 恒为 build/<presetName>）。清理 +
+   .gitignore 补 `build_*/`（与既有 `build-*/` 对称，注明 preset 口径）。
+2. **门禁复跑实caught flake**：theseed_process_port_scanner_test 高载下
+   30 连跑挂 2（此前各轮全绿——失败集中于并行会话重载窗口）。逐层取证：
+   - 测试侧：轮询预算浅（10s 兜底在慢轮下只给 5-7 次尝试）→ 复验制改造
+     （与 HostProbeTest::testRealProcSources 同款纪律：断言一字不动，首
+     预算未命中取完整预算复验，连续两预算未命中才判失败）+ 轮询间隔退
+     避 + ChildStopGuard（FAIL 路径随行 stop 子进程，防 120s×1000tick/s
+     泄漏进程成为负载放大器）+ 子进程 tick 1ms 密跑加速排空；
+   - 产品侧（真实缺陷）：probeProcessVersion 的阻塞 connect 无超时——
+     头注释「回环 connect 不长阻塞」的前提在对端 backlog 饱和时不成立
+     （SYN 重传实测单次卡 25s+，把 listProcesses 轮询整轮卡死）。改非
+     阻塞 connect + poll，建连与收发共用同一超时；头注释同步。新增
+     backlog 饱和注入测试钉住该臂（accept 队列塞满 → poll 满短超时）。
+   - **核心根因**（诊断实锤：子进程 alive、正常睡 tick、2s 长探测也
+     空、手动 child-ops 却秒回）：startReplyServer 的 accept 线程是
+     detach 的——负载下线程迟迟未跑时其 LISTEN fd 未关，此后
+     supervisor.start() fork 把该 fd 继承给子进程；lookupPidPort 按
+     「最小监听端口」反查即命中这个无主 listener（无人 accept，版本
+     探测恒超时）。修法：ReplyServer 返回可 join 句柄，fork 前一律
+     join（fd 随线程关闭）。
+3. **验证**：外部 load 43-62 重载窗口 60 连跑 0 挂（修复前同窗口挂
+   1-2）；极载（14 核烧满 + 4 并行实例 + 外载 40-60）0/8；双树全量
+   gcc-coverage 115/115（gcc-14）+ clang-debug 115/115；gcovr 门禁行
+   11694/11694 = 100%、函数 1644/1644 = 100%（分支 97.8% 信息性）；
+   mingw 离线 `-fsyntax-only` 零警告。
+4. **环境注记**：build/gcc-coverage 于 03:47 被并行会话就地重配（编译
+   器改回 /usr/bin/g++、二进制与 gcda 尽失）——不对抗，门禁改用私有
+   钉死树 build/gcc14-gate（gcc-14），后续轮次沿用该口径。
+
+覆盖率/台账 item 8 按指示继续暂停；本批不含覆盖率类补测（新增的
+backlog 饱和测试是产品 connect 超时分支的行为测试，随既有门禁口径）。
+
 ## 遗留事项收口：Windows 网络探针台账校准（2026-09-27，非覆盖率轮）
 
 「遗留事项」清单里 macOS 批次留下的「Windows 网络探针仍缺，本条只承诺

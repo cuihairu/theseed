@@ -43,6 +43,9 @@
 build/
 Build/
 build-*/
+# 下划线变体手工树（CMakePresets 的 binaryDir 恒为 build/<preset>，
+# 其余 build_* 一律是临时配置残留——2026-09-27 实证 build_test/）
+build_*/
 
 # CMake generated files
 CMakeFiles/
@@ -57,6 +60,8 @@ compile_commands.json
 *.log
 *.bak
 *.swp
+# gcov 中间报告（在源码树根误跑 gcov/gcovr 时散落的产物，正式口径在树内跑）
+*.gcov
 
 # vcpkg
 vcpkg_installed/

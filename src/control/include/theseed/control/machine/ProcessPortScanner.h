@@ -31,8 +31,9 @@ std::unordered_map<std::uint32_t, std::uint16_t> scanListeningPorts(
 //
 // 主动连接只发生在调用方显式给出的端口上——权限边界：listProcesses 只对
 // 受管进程探测，不触碰非受管进程。失败/超时/响应无版本一律返回空串；
-// 超时只覆盖收发（目标是本机回环，connect 不会长阻塞）。非 Windows 平台
-// 之外暂返回空串（todo 遗留：winsock 版实现）。
+// 建连与收发共用同一超时（非阻塞 connect：对端 backlog 饱和时 SYN 重传
+// 可达分钟级，阻塞式会把轮询线程卡死）。非 Windows 平台之外暂返回空串
+// （todo 遗留：winsock 版实现）。
 std::string probeProcessVersion(
     std::uint16_t port,
     std::chrono::milliseconds timeout = std::chrono::milliseconds{500});

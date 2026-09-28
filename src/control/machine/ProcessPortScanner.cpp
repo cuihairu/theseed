@@ -14,7 +14,10 @@
 
 #ifndef _WIN32
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -178,12 +181,48 @@ std::string probeProcessVersion(std::uint16_t port, std::chrono::milliseconds ti
     };
     FdGuard guard{fd};
 
+    // 建连与收发共用同一超时：非阻塞 connect + poll。阻塞 connect 在
+    // 对端 backlog 饱和时会撞 SYN 重传（秒级到分钟级，高载主机实测单
+    // 次 25s+），把调用方（listProcesses 轮询）整轮卡死——"回环 connect
+    // 不长阻塞"的前提只在队列未饱和时成立。
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        // LCOV_EXCL_START 合法 fd 的 fcntl 不失败，无法稳定注入
+        return "";
+        // LCOV_EXCL_STOP
+    }
+
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        return "";  // 端口无进程或拒绝连接
+        if (errno != EINPROGRESS) {  // LCOV_EXCL_LINE Linux TCP connect 非 0 即 EINPROGRESS，同步失败臂不可达
+            // LCOV_EXCL_START 同上
+            return "";  // 端口无进程或拒绝连接（同步臂）
+            // LCOV_EXCL_STOP
+        }
+        pollfd waiter{};
+        waiter.fd = fd;
+        waiter.events = POLLOUT;
+        const auto ready = ::poll(&waiter, 1, static_cast<int>(timeout.count()));
+        if (ready <= 0) {
+            return "";  // 建连超时（backlog 饱和/对端不可达）或 poll 失败
+        }
+        int soError = 0;
+        socklen_t optionLength = sizeof(soError);
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &optionLength) != 0 ||
+            soError != 0) {  // LCOV_EXCL_BR_LINE 合法 fd 的 getsockopt 不失败；refused 经 soError 臂覆盖
+            // LCOV_EXCL_START getsockopt 失败臂无法稳定注入
+            return "";
+            // LCOV_EXCL_STOP
+        }
+        // 恢复阻塞语义：SO_RCVTIMEO/SO_SNDTIMEO 只对阻塞 fd 生效
+        if (::fcntl(fd, F_SETFL, flags) != 0) {
+            // LCOV_EXCL_START 同 fcntl 上方臂
+            return "";
+            // LCOV_EXCL_STOP
+        }
     }
 
     timeval tv{};

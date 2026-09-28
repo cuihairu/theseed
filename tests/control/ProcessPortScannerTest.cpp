@@ -67,11 +67,31 @@ std::uint16_t freePort() {
     return ntohs(addr.sin_port);
 }
 
+// 断言失败沿 FAIL 宏直接 return，子进程若不随行清理会在残余存活期
+// （120s×1000 tick/s 的密跑循环）持续消耗 CPU——在高载环境下一次失败
+// 就放大成后续运行的负载源。守卫保证任何退出路径都 stop。
+struct ChildStopGuard {
+    LocalProcessSupervisor* supervisor;
+    std::uint32_t pid = 0;
+    ~ChildStopGuard() {
+        if (pid != 0) supervisor->stop(pid);
+    }
+};
+
 // 极简 accept-and-respond 服务器：单连接，发送 reply 后关闭。
-// 线程分离自回收；端口由调用方先 bind 探测，竞态窗口可忽略（测试串行）。
-std::uint16_t startReplyServer(const std::string& reply) {
+// 线程由调用方 join——不能 detach：accept 线程迟迟未跑时 LISTEN fd 尚
+// 未关闭，此后的 supervisor.start() fork 会把该 fd 继承给子进程，而
+// scanListeningPorts 按「最小监听端口」反查会命中这个无主 listener
+// （无人 accept，版本探测恒超时）——2026-09-28 flake 根因。调用方在
+// 该用例结束（尤其 fork 前）必须 join。
+struct ReplyServer {
+    std::uint16_t port = 0;
+    std::thread thread;
+};
+
+ReplyServer startReplyServer(const std::string& reply) {
     const int s = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) return 0;
+    if (s < 0) return {};
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = 0;
@@ -79,21 +99,22 @@ std::uint16_t startReplyServer(const std::string& reply) {
     if (::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
         ::listen(s, 4) != 0) {
         ::close(s);
-        return 0;
+        return {};
     }
     socklen_t len = sizeof(addr);
     ::getsockname(s, reinterpret_cast<sockaddr*>(&addr), &len);
-    const auto port = ntohs(addr.sin_port);
 
-    std::thread([s, reply] {
+    ReplyServer server;
+    server.port = ntohs(addr.sin_port);
+    server.thread = std::thread([s, reply] {
         const int c = ::accept(s, nullptr, nullptr);
         if (c >= 0) {
             ::send(c, reply.data(), reply.size(), 0);
             ::close(c);
         }
         ::close(s);
-    }).detach();
-    return port;
+    });
+    return server;
 }
 
 // 阻塞式探测跑在子线程，主线程持续 tick OpsServer 驱动 accept/响应。
@@ -114,8 +135,13 @@ std::string probeWhileTicking(OpsServer& server, std::uint16_t port,
     return version;
 }
 
-// 子进程模式：挂一个真实 OpsServer（版本 9.9.9-child）运行 ~30s 后退出，
-// 供 supervisor 端到端测试反查 port 与探测 version。
+// 子进程模式：挂一个真实 OpsServer（版本 9.9.9-child）运行 ~120s 后退出，
+// 供 supervisor 端到端测试反查 port 与探测 version。存活上界须覆盖主进程
+// 复验制轮询的预算上限（2×30s），否则预算用满时的 stop 会撞上已自退的
+// 子进程。tick 以 1ms 粒度密跑：探测 miss 会在 backlog（TcpListener 默认
+// 16）滞留半开连接，慢 tick 下滞留堆积可 saturate 队列，此后新 connect
+// 撞 SYN 重传（探测的 connect 无超时）拖出数十秒慢轮——高 tick 率让
+// 滞留连接被快速 accept+清理，排空速度远高于主进程的探测产生速率。
 int runChildOpsMode() {
     ProcessInfo info;
     info.role = "ChildProbe";
@@ -128,9 +154,9 @@ int runChildOpsMode() {
     if (!server.start()) {
         return 1;
     }
-    for (int i = 0; i < 3000; ++i) {
+    for (int i = 0; i < 120000; ++i) {
         server.tick();
-        ::usleep(10000);
+        ::usleep(1000);
     }
     return 0;
 }
@@ -261,17 +287,61 @@ int main(int argc, char** argv) {
         PASS();
     }
 
+    TEST("probeProcessVersion connect times out against saturated backlog");
+    {
+        // accept 队列塞满（backlog=1 + 预占连接不 accept）后，内核对后续
+        // SYN 静默丢弃，探测的 connect 停在 SYN_SENT——建连超时臂的真实
+        // 路径（阻塞式 connect 在此会撞 SYN 重传卡秒级，非阻塞 + poll 满
+        // 短超时返回空）。耗时断言钉住「超时确实生效」而非即时拒绝。
+        TcpListener listener;
+        if (!listener.listen("127.0.0.1", 0, 1))
+            FAIL("backlog listener failed to bind");
+
+        sockaddr_in target{};
+        target.sin_family = AF_INET;
+        target.sin_port = htons(listener.localPort());
+        target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        int fillers[2] = {-1, -1};
+        for (int& filler : fillers) {
+            filler = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (filler < 0) FAIL("filler socket failed");
+            if (::connect(filler, reinterpret_cast<sockaddr*>(&target),
+                          sizeof(target)) != 0) {
+                ::close(filler);
+                filler = -1;
+                FAIL("filler connect failed");
+            }
+        }
+
+        const auto begin = std::chrono::steady_clock::now();
+        const auto version =
+            probeProcessVersion(listener.localPort(), std::chrono::milliseconds{60});
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - begin)
+                .count();
+        for (int filler : fillers) {
+            if (filler >= 0) ::close(filler);
+        }
+        listener.close();
+        if (!version.empty()) FAIL("saturated backlog should give empty");
+        if (elapsed < 50)
+            FAIL("connect timeout not honored (elapsed " +
+                 std::to_string(elapsed) + "ms)");
+        PASS();
+    }
+
     TEST("probeProcessVersion without version field or truncated value returns empty");
     {
-        const auto plainPort =
-            startReplyServer("HTTP/1.0 200 OK\r\n\r\nplain text, no json");
-        if (!probeProcessVersion(plainPort).empty())
+        auto plain = startReplyServer("HTTP/1.0 200 OK\r\n\r\nplain text, no json");
+        if (!probeProcessVersion(plain.port).empty())
             FAIL("response without version must give empty");
+        plain.thread.join();  // fork 前确保 LISTEN fd 已随线程关闭
 
-        const auto truncatedPort =
-            startReplyServer("HTTP/1.0 200 OK\r\n\r\n{\"version\":\"1.2");
-        if (!probeProcessVersion(truncatedPort).empty())
+        auto truncated = startReplyServer("HTTP/1.0 200 OK\r\n\r\n{\"version\":\"1.2");
+        if (!probeProcessVersion(truncated.port).empty())
             FAIL("truncated value must give empty");
+        truncated.thread.join();
         PASS();
     }
 
@@ -279,25 +349,58 @@ int main(int argc, char** argv) {
     TEST("listProcesses reports managed child port and version end to end");
     {
         LocalProcessSupervisor supervisor;
+        ChildStopGuard childGuard{&supervisor};
         if (!supervisor.start("/proc/self/exe --child-ops"))
             FAIL("failed to start child ops mode");
 
         // 子进程启动 + OpsServer 监听 + 探测需要毫秒级；轮询快照直到
-        // 受管子进程补出端口与版本（带 10s 兜底），命中即拷出快照。
-        ProcessSummary found;
-        bool complete = false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
-        while (std::chrono::steady_clock::now() < deadline) {
-            for (const auto& process : supervisor.listProcesses()) {
-                if (process.managed) found = process;
+        // 受管子进程补出端口与版本，命中即拷出快照。轮询成本是环境敏
+        // 感的：listProcesses 单轮要对全机 /proc 逐 pid 扫 fd（本机实
+        // 测 545 pid），与其他 ctest 并行时单轮可阻塞数秒、子进程 tick
+        // 饥饿使单次 500ms 版本探测偶发 miss——浅预算会把偶发负载放
+        // 大成必然失败（2026-09-28 flake 根因）。环境毛刺纪律（与
+        // HostProbeTest::testRealProcSources 同款）：断言一字不动，首
+        // 预算未命中时取完整预算复验一次，连续两预算未命中才判失败。
+        // 轮首查预算（不发预算外的新轮）、轮尾也查（慢轮后不再续睡）。
+        const auto pollUntilComplete = [&](ProcessSummary& found,
+                                           int& polls) -> bool {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            auto interval = std::chrono::milliseconds{250};
+            while (std::chrono::steady_clock::now() < deadline) {
+                for (const auto& process : supervisor.listProcesses()) {
+                    if (process.managed) {
+                        found = process;
+                        childGuard.pid = process.pid;
+                    }
+                }
+                ++polls;
+                if (found.port != 0 && !found.version.empty()) return true;
+                if (std::chrono::steady_clock::now() >= deadline) break;
+                // 间隔退避（250ms→500ms→1s 封顶）：每次 miss 的探测都会
+                // 在子进程 pending_/backlog 双层队列滞留半开连接（见
+                // runChildOpsMode 注释），间隔过密等于自造 SYN 积压；退
+                // 避给子进程的 accept 排空留出窗口。
+                std::this_thread::sleep_for(interval);
+                if (interval < std::chrono::seconds{1}) interval *= 2;
             }
-            complete = found.port != 0 && !found.version.empty();
-            if (complete) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds{50});
+            return false;
+        };
+
+        ProcessSummary found;
+        int polls = 0;
+        if (pollUntilComplete(found, polls)) {
+            // 首预算命中：定论臂在下方统一断言。
+        } else {
+            std::cout << "  (slow environment, re-polling with a fresh budget) "
+                      << std::flush;
+            pollUntilComplete(found, polls);
         }
 
-        if (!complete || found.port == 0)
-            FAIL("managed child listening port not discovered");
+        if (found.port == 0 || found.version.empty())
+            FAIL("managed child listening port not discovered (polls=" +
+                 std::to_string(polls) + " port=" + std::to_string(found.port) +
+                 " version='" + found.version + "')");
         if (found.version != "9.9.9-child")
             FAIL("child version mismatch: '" + found.version + "'");
 
