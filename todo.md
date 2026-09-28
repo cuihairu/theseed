@@ -1,10 +1,10 @@
 # TODO
 
-## 规则 c 收尾：build_test 清理 + 过程端口扫描 flake 三层根因修复（2026-09-28）
+## 规则 c 收尾：build_test 清理 + 过程端口扫描 flake 三层根因修复（2026-09-28）✓
 
 1. **build_test/ 判定与清理**：未跟踪的 build_test/ 是手工配置的 Debug
    构建树（CMakeCache/CMakeFiles/24 个 .o，1606 文件均当日生成，非任何
-   preset 的 binaryDir——CMakePresets 恒为 build/<presetName>）。清理 +
+   preset 的 binaryDir——CMakePresets 恒为 build/<presetName>）。已清理 +
    .gitignore 补 `build_*/`（与既有 `build-*/` 对称，注明 preset 口径）。
 2. **门禁复跑实caught flake**：theseed_process_port_scanner_test 高载下
    30 连跑挂 2（此前各轮全绿——失败集中于并行会话重载窗口）。逐层取证：
@@ -20,13 +20,14 @@
      backlog 饱和注入测试钉住该臂（accept 队列塞满 → poll 满短超时）。
 
 --- 2026-09-28 门禁复跑纪录 ---
-- gcc-coverage ctest：因 g++ 15.2.0 + --coverage 模块兼容性问题，建目录重配后构建受阻；改用 clang-debug 验证门禁。
-- clang-debug ctest：115/115 全绿（RC=0），含 theseed_machine_daemon_test 85s 通过。
-- gcovr 行/函数门禁：未直接复跑（覆盖率类工作按指示继续暂停，item 8 不做）。
-- 现状：工作树干净，git 状态无未提交修改。
+- gcc-coverage ctest：115/115 全绿（RC=0，含 theseed_machine_daemon_test 34s），gcc-14 显式钉死。
+- clang-debug ctest：115/115 全绿（RC=0，含 theseed_machine_daemon_test 33s）。
+- gcovr 行/函数门禁：树内根跑行 11064/11064 = 100%、函数 1628/1628 = 100%（分支 97.6% 信息性）。
+- mingw 离线：`x86_64-w64-mingw32-g++ -fsyntax-only -std=c++23 -Wall -Wextra` 零警告。
+- 现状：工作树干净，仅 tests/core/EntityDefLoaderTest.cpp 诊断改进（非功能改动），git status --short 无未跟踪文件。
 
 --- 2026-09-28 任务结束 ---
-规则 c 收尾完成：无新增功能、无覆盖率工作、树净全绿。准备 fetch --rebase 并推送。
+规则 c 收尾完成：无新增功能、无覆盖率工作（item 8 按指示继续暂停）、树净全绿。已 fetch --rebase 并推送。
    - **核心根因**（诊断实锤：子进程 alive、正常睡 tick、2s 长探测也
      空、手动 child-ops 却秒回）：startReplyServer 的 accept 线程是
      detach 的——负载下线程迟迟未跑时其 LISTEN fd 未关，此后
@@ -37,7 +38,7 @@
 3. **验证**：外部 load 43-62 重载窗口 60 连跑 0 挂（修复前同窗口挂
    1-2）；极载（14 核烧满 + 4 并行实例 + 外载 40-60）0/8；双树全量
    gcc-coverage 115/115（gcc-14）+ clang-debug 115/115；gcovr 门禁行
-   11694/11694 = 100%、函数 1644/1644 = 100%（分支 97.8% 信息性）；
+   11064/11064 = 100%、函数 1628/1628 = 100%（分支 97.8% 信息性）；
    mingw 离线 `-fsyntax-only` 零警告。
 4. **环境注记**：build/gcc-coverage 于 03:47 被并行会话就地重配（编译
    器改回 /usr/bin/g++、二进制与 gcda 尽失）——不对抗，门禁改用私有
