@@ -510,6 +510,50 @@ int main() {
     }
     PASS();
 
+    TEST("db auth: machine push inside the dbRequest wait loop is dispatched");
+    {
+        // dbRequest 等待窗内到达的 machine 腿推送不是查询应答：不得当
+        // .ok 消费，交 handleInvocation 分发（未知 method 计数），查询
+        // 照旧等到超时降级——这是「等待循环只认 DB 源帧」的假臂锚点。
+        auto& unknownCounter = theseed::foundation::MetricsRegistry::instance()
+            .counter("login_unknown_invocation_count");
+        auto machine = std::make_shared<FakeMachineTransport>(
+            FakeMachineTransport::Mode::Ack);
+        auto fake = std::make_shared<FakeDbTransport>(
+            FakeDbTransport::Mode::Silent, std::vector<std::byte>{});
+        LoginAppConfig config = makeDbConfig(
+            [fake](const std::string&, std::uint16_t) {
+                return std::shared_ptr<theseed::runtime::IRuntimeTransport>(fake);
+            });
+        config.machineHost = "fake-machine";
+        config.machinePort = 7777;
+        config.machineTransportFactory =
+            [machine](const std::string&, std::uint16_t) {
+                return std::shared_ptr<theseed::runtime::IRuntimeTransport>(
+                    machine);
+            };
+        LoginApp app(std::move(config));
+        app.init();
+        app.tick();  // 两腿探针应答排空 → 双链 Up
+
+        const auto unknown0 = unknownCounter.value();
+        theseed::runtime::RuntimeInvocation push;
+        push.sourceComponent = 60;  // machineComponentId 默认值
+        push.targetComponent = 20;  // localComponentId 默认值
+        push.method = "machine.noise";
+        machine->enqueue(std::move(push));
+
+        bool success = true;
+        std::string error, token;
+        if (!runLogin(app, "alice", "pw", success, error, token)) FAIL("no login response");
+        if (success) FAIL("silent db must time out");
+        if (error != "database unavailable") FAIL("unexpected error: " + error);
+        if (unknownCounter.value() != unknown0 + 1)
+            FAIL("machine push must be dispatched inside the wait loop, delta=" +
+                 std::to_string(unknownCounter.value() - unknown0));
+    }
+    PASS();
+
     TEST("db auth: closed DBApp fails fast without waiting for timeout");
     {
         auto fake = std::make_shared<FakeDbTransport>(
@@ -832,6 +876,14 @@ int main() {
             .counter("login_session_revoked_count");
         const auto revoked0 = revokedCounter.value();
 
+        // 活跃会话 + 账号命中 + 领域不匹配：不关、不计（realm 比较的
+        // 假臂只在连接仍活时可达；下文 carl 的第二次直调时连接已断，
+        // 同款调用走的是 isConnected 短路）。
+        if (app.handleSessionRevoked("carl", "other") != 0)
+            FAIL("realm mismatch on a live session must not close");
+        if (!carlSession.isConnected())
+            FAIL("realm mismatch must keep the live session connected");
+
         // 账号+领域精确命中：carl@default 关一条
         if (app.handleSessionRevoked("carl", "default") != 1)
             FAIL("carl@default must close exactly one live login");
@@ -845,7 +897,7 @@ int main() {
             FAIL("already-closed login must not recount");
         if (app.handleSessionRevoked("nobody", "") != 0)
             FAIL("no-match must close nothing");
-        // 领域不匹配不应命中
+        // 已断会话的领域不匹配走 isConnected 短路（活跃版直调在上方）
         if (app.handleSessionRevoked("carl", "other") != 0)
             FAIL("realm mismatch must not close");
 
@@ -1187,6 +1239,37 @@ int main() {
             if (upCounter.value() != up0) FAIL("no inbound must not claim link up");
         }
 
+        // --- 臂 2b：PendingAck 期间 transport 死（探针已发出、活性转
+        //     假）→ 首个监督 tick 立即断链，不等 ack 宽限——这是
+        //     transport-lost 与 probe-ack-timeout 的分野：宽限 500ms 远
+        //     未到就降，只可能是死 transport 臂。断链后照常退避重连。 ---
+        {
+            Recording rec;
+            rec.modes = {FMode::Silent, FMode::Ack};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(resilienceConfig(rec.factory(),
+                                          std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();  // 探针发出（Silent 吞）→ PendingAck：活性真、宽限未到
+            if (rec.calls != 1) FAIL("PendingAck must hold while transport is live");
+            if (downCounter.value() != down0)
+                FAIL("a live transport must not drop before the ack deadline");
+            rec.made[0]->alive = false;  // 宽限期内 daemon 侧重启断连
+            app.tick();  // 首个监督 tick：死 transport 立降，不等 500ms 宽限
+            if (downCounter.value() != down0 + 1)
+                FAIL("a dead transport in PendingAck must drop on the first tick");
+            if (rec.calls != 1) FAIL("the drop must sit out the backoff window");
+            // 首链无应答从未 Up 过：恢复只计一次 link up。
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 1;
+            });
+            if (!recovered) FAIL("transport-lost drop must still reconnect and recover");
+            if (rec.calls != 2) FAIL("expected exactly: dropped link, recovery");
+            if (rec.made[1]->sends != 1)
+                FAIL("recovery must re-send the registration probe");
+        }
+
         // --- 臂 3：断链后首次重连 seam 返空 → 告警退避（窗口翻倍）→
         //     再试接通恢复。失败的尝试不是第二次断链。 ---
         {
@@ -1391,6 +1474,36 @@ int main() {
             if (!timedOut) FAIL("probe without ack must time out and retry");
             if (rec.calls < 2) FAIL("ack timeout must drive a reconnect attempt");
             if (upCounter.value() != up0) FAIL("no inbound must not claim link up");
+        }
+
+        // --- 臂 2b：PendingAck 期间 transport 死（探针已发出、活性转
+        //     假）→ 首个监督 tick 立即断链，不等 ack 宽限（transport-lost
+        //     三目臂；宽限 500ms 远未到即降）。断链后照常退避重连。 ---
+        {
+            DbRecording rec;
+            rec.probeModes = {DMode::Silent, DMode::Canned};
+            const auto down0 = downCounter.value();
+            const auto up0 = upCounter.value();
+            LoginApp app(dbResilienceConfig(rec.factory(),
+                                            std::chrono::milliseconds{500}));
+            app.init();
+            app.tick();  // 探针发出（Silent 吞）→ PendingAck：活性真、宽限未到
+            if (rec.calls != 1) FAIL("PendingAck must hold while transport is live");
+            if (downCounter.value() != down0)
+                FAIL("a live transport must not drop before the ack deadline");
+            rec.made[0]->alive = false;  // 宽限期内 DBApp 侧重启断连
+            app.tick();  // 首个监督 tick：死 transport 立降，不等 500ms 宽限
+            if (downCounter.value() != down0 + 1)
+                FAIL("a dead db transport in PendingAck must drop on the first tick");
+            if (rec.calls != 1) FAIL("the drop must sit out the backoff window");
+            // 首链无应答从未 Up 过：恢复只计一次 link up。
+            const bool recovered = pumpUntil(app, [&] {
+                return upCounter.value() >= up0 + 1;
+            });
+            if (!recovered) FAIL("transport-lost drop must still reconnect and recover");
+            if (rec.calls != 2) FAIL("expected exactly: dropped link, recovery");
+            if (rec.made[1]->sends != 1)
+                FAIL("recovery must re-send the liveness probe");
         }
 
         // --- 臂 3：断链后首次重连 seam 返空 → 告警退避（窗口翻倍）→

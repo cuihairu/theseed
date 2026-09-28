@@ -1,5 +1,44 @@
 # TODO
 
+## login 模块分支补测：LoginApp 韧性臂收割（2026-09-28）✓
+
+口径同上轮 control 批次：分支层收割（信息性，门禁不卡），arc 级甄别后真臂
+全清、余量留档。login 起盘 40 缺失（27 缺失行），收尾 21 缺失行。
+
+1. **arc 级甄别收尾**（对 27 缺失行逐行核 JSON 弧 + 源码）：
+   - 噪声/豁免 13 行：243/354（LCOV_EXCL_BR_LINE 已标，Linux 非阻塞
+     connect 恒 EINPROGRESS）、306/307/413/414/474/475/478/493/494/499/500
+     （markDown/handleInvocation 行上 LogAttribute::Value 四路 variant 转换
+     构造库噪声，同 control 轮定性）。
+   - 结构性不可达 8 行：318/425（`!hub_` 防御守卫——tick() 的 `if (hub_)`
+     包住全部 supervise 调用，stop() 置 Backoff 后 tick 不再进监督）、
+     320/427（switch 隐式出口弧——LinkState 三枚举全覆盖且无 default）、
+     322/429/328/435 的 null-transport 臂（PendingAck/Up 态 transport 必非
+     空：attempt 成功才置态，失败/markDown 即 reset+Backoff）。
+   - 真臂 4 处（6 分支）全清，见下。
+2. **真臂补测（LoginAppTest）**：
+   - machine 腿「臂 2b」：PendingAck 期间 transport 死（探针已发出、活性
+     转假）→ 首个监督 tick 立降，不等 ack 宽限——与 probe-ack-timeout 的
+     分野用 500ms 宽限 + 2ms tick 钉死（误走超时路径断言即败）；降后照常
+     退避重连恢复（sends==1 复发探针）；
+   - db 腿镜像「臂 2b」：同款编排（DMode::Silent→Canned）。
+   - 新 TEST「machine push inside the dbRequest wait loop」：db Silent +
+     machine 腿接线，推送落在 dbRequest 等待窗内 → 非 DB 源帧臂（L532 假
+     臂）→ 交 handleInvocation 分发（unknown 计数 +1 锚定），查询照旧超时
+     降级。
+   - §8 kick 测试补活跃版 realm-mismatch 直调（原直调在会话已断后，走
+     isConnected 短路——handleSessionRevoked 的 realm 比较假臂补齐）。
+3. **留档余量（21 缺失行）**：全部属上述三类，不为信息性指标改产品码；
+   分支缺失 186→178（login 40→32）。
+
+--- 2026-09-28 门禁纪录 ---
+- gcc14-gate ctest：117/117 全绿（含 e2e）；clang-debug 树 login 双测试绿
+  （src 未动，行/函数分母不变）。
+- gcovr 行/函数门禁：行 11694/11694 = 100%、函数 1644/1644 = 100%；
+  分支 8415→8423（缺失 186→178，login 40→32），零新增豁免。
+- mingw 离线：LoginAppTest.cpp `-fsyntax-only -std=c++23 -Wall -Wextra
+  -Werror` 零警告。
+
 ## 覆盖率缺口定位 + control 模块分支补测（2026-09-28）✓
 
 本轮按派发转覆盖率：跑覆盖率定位缺口最大模块，补 top1 单测。行/函数门禁
