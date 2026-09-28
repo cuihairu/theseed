@@ -1,5 +1,39 @@
 # TODO
 
+## db 模块补测：DBProtocol + RemoteEntityStore 直测（2026-09-28）✓
+
+覆盖率/台账 item 8 按指示继续暂停；本轮改挑排除 item 8 后剩余可达面中缺口
+最大的模块补测试。选择口径（自假设，非交互判定）：
+
+1. **缺口判定**：模块「src 行数/test 行数」比值 db 最低（0.88）。可达面
+   过滤——MySQL/PostgreSQL 后端因本机 find_package 失败不编译（环境态，
+   排除），DBProtocol.cpp（353 行）+ RemoteEntityStore.cpp（132 行）= 485
+   行是剩余可达面中最大的无同名专测块；其余模块的无专测文件
+   （MessageHeader/RateLimiter/SessionStore/ClientSession/SessionToken）
+   均被多个测试 API 级广泛引用，无真缺口。
+2. **tests/db/DBProtocolTest.cpp**（17 用例）：全消息 encode→decode 往返
+   （64 位极值 id、空串、空列表、多属性 EntityData 含二进制 blob）；每个
+   解码器逐前缀截断拒绝矩阵（任何严格前缀必须 false）；失败/未命中响应
+   短路臂（success=false 不携带载荷、queryAccount not-found 与
+   createAccount 失败置零哨兵）；listIds/listTypes/allocId 无参请求的空载
+   荷契约（listIds 请求无专用解码器，按 DBApp 消费方同款 MemoryStream 读法
+   往返）。
+3. **tests/db/RemoteEntityStoreTest.cpp**（11 用例）：ScriptedDbTransport
+   脚本化 transport（仿 LoginAppTest 的 FakeDbTransport 范式，单线程无锁）
+   逐臂驱动：请求构造（组件路由/method/payload 可解回）、六操作正常往返、
+   杂散应答丢弃不重发、静默超时六操作全降级（30ms 短预算，耗时下界钉住
+   「真的在等」）、发送拒收立即降级（不进等待循环）、pumpFn 等待循环驱动、
+   请求 flush transport。
+4. CMake 挂接：两个 target 全平台无条件跑（纯 std + theseed 头，无 POSIX
+   专属依赖）。不改 src——覆盖分母不变。
+
+--- 2026-09-28 门禁纪录 ---
+- gcc14-gate ctest：117/117 全绿（115 + 新增 DBProtocolTest/RemoteEntityStoreTest）。
+- clang-debug ctest：117/117 全绿。
+- gcovr 行/函数门禁（build/gcc14-gate 树内跑）：行 11694/11694 = 100%、
+  函数 1644/1644 = 100%（分支 97.8% 信息性），GATE_RC=0。
+- mingw 离线：两个新测试文件 `-fsyntax-only -std=c++23 -Wall -Wextra` 零警告。
+
 ## 规则 c 收尾：build_test 清理 + 过程端口扫描 flake 三层根因修复（2026-09-28）✓
 
 1. **build_test/ 判定与清理**：未跟踪的 build_test/ 是手工配置的 Debug

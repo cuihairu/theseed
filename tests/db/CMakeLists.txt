@@ -7,6 +7,28 @@ target_link_libraries(
 
 add_test(NAME DBAppTest COMMAND theseed_db_app_test)
 
+# DBProtocol 直测：DB 帧编解码纯函数（round-trip、截断拒绝矩阵、失败哨兵
+# 臂），无 I/O，全平台跑。
+add_executable(theseed_db_protocol_test DBProtocolTest.cpp)
+
+target_link_libraries(
+    theseed_db_protocol_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_db)
+
+add_test(NAME DBProtocolTest COMMAND theseed_db_protocol_test)
+
+# RemoteEntityStore 直测：脚本化 transport 逐臂驱动请求-应答循环（请求构
+# 造、杂散丢弃、超时/拒发降级、pumpFn），无真实 I/O，全平台跑。
+add_executable(theseed_remote_entity_store_test RemoteEntityStoreTest.cpp)
+
+target_link_libraries(
+    theseed_remote_entity_store_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_db)
+
+add_test(NAME RemoteEntityStoreTest COMMAND theseed_remote_entity_store_test)
+
 # 回环探针用 POSIX socket（arpa/inet.h、非阻塞 recv），Windows 暂不纳入；
 # 其余单元测试全平台跑。
 if(NOT WIN32)
