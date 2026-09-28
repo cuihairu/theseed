@@ -203,6 +203,24 @@ int main() {
         PASS();
     }
 
+    TEST("unbounded capacity (maxNodes 0) keeps every node");
+    {
+        // 0 = 不设上界（头注口径：测试/单机内嵌场景）：容量守卫直接早退，
+        // 逐出循环体不可达——既有容量盘全部显式设上界，此臂从未走过。
+        OpsControlCenter::Config config;
+        config.maxNodes = 0;
+        OpsControlCenter center(config);
+        for (int i = 0; i < 4; ++i) {
+            center.publish(makeReport("node-" + std::to_string(i), 1.0, baseTime));
+        }
+        NodeReport out;
+        for (int i = 0; i < 4; ++i) {
+            EXPECT(center.latest("node-" + std::to_string(i), out),
+                   "unbounded center keeps node-" + std::to_string(i));
+        }
+        PASS();
+    }
+
     TEST("pruneStale removes only timed-out nodes");
     {
         OpsControlCenter center;

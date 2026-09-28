@@ -921,6 +921,14 @@ int main() {
         if (payloadToString(resp).find("malformed") == std::string::npos)
             FAIL("trailing garbage pid must be named: " +
                  payloadToString(resp));
+        // pid 0 哨兵：解析成功（ec 干净、无尾随）但 0 恒非合法治理目标
+        //（parsePidPayload 的 pid==0 臂——空/非数字/尾随垃圾都不覆盖）。
+        if (!guardClient.request(MachineMethod::kTerminate,
+                                 payloadOf("0"), guardTick, resp))
+            FAIL("no response to zero-pid terminate");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("zero pid must be named malformed: " +
+                 payloadToString(resp));
         // 2) 非受信来源
         RawClient stranger;
         stranger.component = 2;
@@ -984,8 +992,8 @@ int main() {
         ::kill(sleeper, SIGTERM);
         ::waitpid(sleeper, &status, 0);
 
-        if (termRejected.value() != rejected0 + 8)
-            FAIL("all eight rejections must count, got delta " +
+        if (termRejected.value() != rejected0 + 9)
+            FAIL("all nine rejections must count, got delta " +
                  std::to_string(termRejected.value() - rejected0));
         guardDaemon.stop();
         PASS();
@@ -1267,16 +1275,24 @@ int main() {
         if (payloadToString(resp).find("malformed") == std::string::npos)
             FAIL("trailing garbage handle must be named: " +
                  payloadToString(resp));
+        // 句柄 0 哨兵：解析成功但 0 = "无产物"恒畸形
+        //（parseHandlePayload 的 handle==0 臂）。
+        if (!profileClient.request(MachineMethod::kProfile, payloadOf("0"),
+                                   profileTick, resp))
+            FAIL("no response to zero-handle download");
+        if (payloadToString(resp).find("malformed") == std::string::npos)
+            FAIL("zero handle must be named malformed: " +
+                 payloadToString(resp));
 
-        // 指标四路增量：触发受/拒 2/2，访问受/拒 4/6
+        // 指标四路增量：触发受/拒 2/2，访问受/拒 4/7
         if (triggerAccepted.value() != trigAcc0 + 2)
             FAIL("trigger accepted must be +2");
         if (triggerRejected.value() != trigRej0 + 2)
             FAIL("trigger rejected must be +2");
         if (accessAccepted.value() != accAcc0 + 4)
             FAIL("access accepted must be +4");
-        if (accessRejected.value() != accRej0 + 6)
-            FAIL("access rejected must be +6");
+        if (accessRejected.value() != accRej0 + 7)
+            FAIL("access rejected must be +7");
 
         // 只有关键受控动作（触发）进 trace：接受一次 + 限流拒绝一次
         // （真实调度器 runOnce 的 tick span 也走全局出口，按名字过滤）
@@ -1315,24 +1331,25 @@ int main() {
         if (!sawSecondAccept)
             FAIL("second trigger span must mark acceptance");
 
-        // 审计入环（中心聚合 + 本地环形镜像）：14 条动作按发生序落账
+        // 审计入环（中心聚合 + 本地环形镜像）：15 条动作按发生序落账
         const auto& trail = profileCenter.auditTrail();
-        if (trail.size() != audits0 + 14)
-            FAIL("fourteen profile actions must be audited, got " +
+        if (trail.size() != audits0 + 15)
+            FAIL("fifteen profile actions must be audited, got " +
                  std::to_string(trail.size() - audits0));
         struct Expect {
             const char* command;
             bool accepted;
         };
-        const Expect expected[14] = {
+        const Expect expected[15] = {
             {"profiler.trigger", false},  {"profiler.list", false},
             {"profiler.download", false}, {"profiler.trigger", true},
             {"profiler.trigger", false},  {"profiler.list", true},
             {"profiler.download", true},  {"profiler.trigger", true},
             {"profiler.list", true},      {"profiler.download", true},
             {"profiler.download", false}, {"profiler.download", false},
-            {"profiler.download", false}, {"profiler.download", false}};
-        for (std::size_t i = 0; i < 14; ++i) {
+            {"profiler.download", false}, {"profiler.download", false},
+            {"profiler.download", false}};
+        for (std::size_t i = 0; i < 15; ++i) {
             const auto& entry = trail[audits0 + i].entry;
             if (entry.command != expected[i].command ||
                 entry.accepted != expected[i].accepted)
@@ -1343,7 +1360,7 @@ int main() {
             FAIL("accepted trigger must record the handle");
         if (trail[audits0 + 7].entry.args != handle2)
             FAIL("second trigger must record its own handle");
-        if (profileDaemon.auditLog().size() != 14)
+        if (profileDaemon.auditLog().size() != 15)
             FAIL("local ring must mirror the same actions");
 
         foundation::setSpanEmitter(nullptr);
@@ -2868,6 +2885,115 @@ int main() {
             FAIL("accepted extends must record scope + split counts");
 
         extDaemon.stop();
+        PASS();
+    }
+
+    TEST("session ops: extend scope arms (account miss, all in-loop) + entry gate");
+    {
+        // 分支补全（独立小盘，不动上方计数校准）：extend 的选择器臂——
+        // account 圈选命中一行、其余行比较为假；"all" 在既有盘里只在信
+        // 任门前被拒过，从未到达循环体。入口关闭臂——续期策略 TTL=0 时
+        // extend 视同未知方法（缺省安全：无策略即无命令）；会话入口开
+        // 启时的未知方法同样落统一错误臂（短路链第三条件为假）。
+        OpsControlCenter armCenter;
+        auto armRedis = std::make_shared<foundation::InMemoryRedisProvider>();
+        foundation::SessionStore armStore(armRedis);
+
+        foundation::StoredSession armSession;
+        armSession.accountId = "carl";
+        armSession.userId = 1;
+        if (!armStore.save("arm-1", armSession, std::chrono::minutes{5}))
+            FAIL("save carl failed");
+        armSession.accountId = "amy";
+        armSession.userId = 2;
+        if (!armStore.save("arm-2", armSession, std::chrono::minutes{5}))
+            FAIL("save amy#1 failed");
+        if (!armStore.save("arm-3", armSession, std::chrono::minutes{5}))
+            FAIL("save amy#2 failed");
+
+        MachineAgent armAgent(std::make_unique<LocalHostProbe>(),
+                              std::make_unique<LocalProcessSupervisor>(),
+                              nullptr);
+        MachineDaemon::Config armConfig;
+        armConfig.listenPort = 0;
+        armConfig.auditSink = &armCenter;
+        armConfig.nodeOpsPolicy.trustedComponents = {kClientComponent};
+        armConfig.roleBindings = {{kClientComponent, AccessRole::Operator}};
+        armConfig.sessionStore = &armStore;
+        armConfig.sessionRenewalTtl = std::chrono::milliseconds{30000};
+        MachineDaemon armDaemon(armConfig, armAgent);
+        if (!armDaemon.start()) FAIL("arm daemon start failed");
+        auto armTick = [&armDaemon] { armDaemon.tick(); };
+
+        RawClient op;
+        op.component = kClientComponent;
+        if (!op.connect(armDaemon.localPort())) FAIL("arm connect failed");
+        op.settle(armTick);
+
+        RuntimeInvocation resp;
+        // account 圈选：carl 的一行命中（续到策略 TTL），amy 两行比较为
+        // 假——requested 只含命中行，missing 恒空。
+        if (!op.request(MachineMethod::kExtendSessions,
+                        payloadOf("account=carl"), armTick, resp))
+            FAIL("no response to account extend");
+        if (resp.method != MachineMethod::kExtendSessionsOk ||
+            payloadToString(resp).find("\"requested\":1") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"missing\":[]") == std::string::npos)
+            FAIL("account=carl must select only carl's row: " +
+                 payloadToString(resp));
+
+        // all 圈选到循环体：三行全续。
+        if (!op.request(MachineMethod::kExtendSessions, payloadOf("all"),
+                        armTick, resp))
+            FAIL("no response to all extend");
+        if (resp.method != MachineMethod::kExtendSessionsOk ||
+            payloadToString(resp).find("\"requested\":3") ==
+                std::string::npos ||
+            payloadToString(resp).find("\"missing\":[]") == std::string::npos)
+            FAIL("all must reach every live row: " + payloadToString(resp));
+
+        // 会话入口开启（store 已配、TTL>0）时的未知方法：短路链前两条
+        // 为真、第三条为假——落统一 unknown-method 错误臂。
+        if (!op.request("machine.bogus", {}, armTick, resp))
+            FAIL("no response to unknown method with entries open");
+        if (resp.method != MachineMethod::kError ||
+            payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("unknown method must be named with entries open: " +
+                 payloadToString(resp));
+
+        armDaemon.stop();
+
+        // --- 入口关闭臂：续期策略 TTL=0 → extend 视同未知方法 ---
+        OpsControlCenter gateCenter;
+        auto gateRedis = std::make_shared<foundation::InMemoryRedisProvider>();
+        foundation::SessionStore gateStore(gateRedis);
+        MachineAgent gateAgent(std::make_unique<LocalHostProbe>(),
+                               std::make_unique<LocalProcessSupervisor>(),
+                               nullptr);
+        MachineDaemon::Config gateConfig;
+        gateConfig.listenPort = 0;
+        gateConfig.auditSink = &gateCenter;
+        gateConfig.nodeOpsPolicy.trustedComponents = {kClientComponent};
+        gateConfig.roleBindings = {{kClientComponent, AccessRole::Operator}};
+        gateConfig.sessionStore = &gateStore;
+        gateConfig.sessionRenewalTtl = std::chrono::milliseconds{0};
+        MachineDaemon gateDaemon(gateConfig, gateAgent);
+        if (!gateDaemon.start()) FAIL("gate daemon start failed");
+        auto gateTick = [&gateDaemon] { gateDaemon.tick(); };
+
+        RawClient gateOp;
+        gateOp.component = kClientComponent;
+        if (!gateOp.connect(gateDaemon.localPort())) FAIL("gate connect failed");
+        gateOp.settle(gateTick);
+        if (!gateOp.request(MachineMethod::kExtendSessions, payloadOf("all"),
+                            gateTick, resp))
+            FAIL("no response to extend with ttl 0");
+        if (resp.method != MachineMethod::kError ||
+            payloadToString(resp).find("unknown method") == std::string::npos)
+            FAIL("extend with ttl 0 must fall to unknown method: " +
+                 payloadToString(resp));
+        gateDaemon.stop();
         PASS();
     }
 

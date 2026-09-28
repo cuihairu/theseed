@@ -1,5 +1,44 @@
 # TODO
 
+## 覆盖率缺口定位 + control 模块分支补测（2026-09-28）✓
+
+本轮按派发转覆盖率：跑覆盖率定位缺口最大模块，补 top1 单测。行/函数门禁
+恒 100%（11694/1644），可定位的缺口信号在分支层（信息性口径，门禁不卡）。
+
+1. **缺口定位（gcovr txt/json，与门禁同口径）**：分支缺失按模块聚合——
+   control 134（62.9%）＞ login 40 ＞ runtime 9 ＞ foundation 8 ＞ db 1，
+   合计 192（总 8601 分支）。top1 = control；文件分布 MachineDaemon.cpp 84
+   ＞ OpsControlCenter.cpp 35 ＞ ProcessPortScanner.cpp 13。
+2. **arc 级甄别**：逐缺失行对照 gcov JSON 的分支弧，把 43+17 行缺失分为
+   三类——(a) 真产品臂；(b) 库机械噪声：log/attr 行上 `LogAttribute::Value`
+   （std::variant 四路）转换构造与日志机制被归因到调用行的 0-对（约 36
+   行，测试不可达、也不该为信息性指标改产品码）；(c) 结构性不可达臂（各
+   有在码注释背书）。
+3. **真臂补测（全清）**：
+   - MachineDaemonTest「terminate guards」：pid 0 哨兵载荷（parsePidPayload
+     的 pid==0 臂）+ 拒绝计数 8→9；
+   - MachineDaemonTest「diagnostics profiling」：handle 0 哨兵载荷
+     （parseHandlePayload 的 handle==0 臂）+ 计数表 14→15、accessRejected +6→+7；
+   - MachineDaemonTest 新增「extend scope arms + entry gate」独立小盘（不动
+     既有计数校准）：account 圈选未命中行（比较假臂）、"all" 首次到达循环体
+     （此前全被信任门拦截）、TTL=0 续期入口关闭臂（extend 视同未知方法）、
+     会话入口开启时的未知方法（短路链第三条件假臂）；
+   - OpsControlCenterTest 新增「unbounded capacity (maxNodes 0)」：无界模式
+     容量早退臂（默认 256，既有容量盘全部显式设上界）。
+4. **确认为不可测并留档的臂**：toBytes 空串防御（全部调用点传非空串）、
+   relayArtifacts/auditSink 的空 hostname 臂（MachineAgent 不可注入，真机
+   hostname 恒非空）、terminate ok=false（枚举↔处置固有竞态，码注释自认
+   MVP SIGTERM 语义）、profile query entityId 匹配臂（无生产者，码注释
+   自认「如实落空」）。
+
+--- 2026-09-28 门禁纪录 ---
+- gcc14-gate ctest：117/117 全绿；clang-debug ctest：117/117 全绿。
+- gcovr 行/函数门禁（build/gcc14-gate 树内跑）：行 11694/11694 = 100%、
+  函数 1644/1644 = 100%，GATE_RC=0；分支 8409→8415（缺失 192→186，
+  control 134→128），零新增豁免、零断言放宽。
+- mingw 离线：OpsControlCenterTest 新增段 `-fsyntax-only -std=c++23
+  -Wall -Wextra -Werror` 零警告（MachineDaemonTest 在 NOT WIN32 块内）。
+
 ## db 模块补测：DBProtocol + RemoteEntityStore 直测（2026-09-28）✓
 
 覆盖率/台账 item 8 按指示继续暂停；本轮改挑排除 item 8 后剩余可达面中缺口
