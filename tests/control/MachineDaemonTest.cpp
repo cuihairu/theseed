@@ -44,6 +44,8 @@
 #endif
 
 using theseed::control::machine::AccessRole;
+using theseed::control::machine::HostSummary;
+using theseed::control::machine::IHostProbe;
 using theseed::control::machine::LocalHostProbe;
 using theseed::control::machine::LocalProcessSupervisor;
 using theseed::control::machine::MachineAgent;
@@ -176,6 +178,13 @@ public:
 private:
     foundation::LogLevel level_ = foundation::LogLevel::Debug;
     std::vector<foundation::LogRecord> records_;
+};
+
+// 空 hostname 探针假件：nodeId 身份口径下不可注册的形态（OpsControlCenterTest
+// 同款），驱动 relayArtifacts 守卫的身份缺失臂。
+class EmptyHostProbe final : public IHostProbe {
+public:
+    HostSummary sample() override { return {}; }
 };
 
 // 剖面出口假件：清单报告句柄但字节不可读——验证回传对"清单与存储
@@ -1548,6 +1557,58 @@ int main() {
             FAIL("center keeps its copy after agent-side eviction");
 
         relayDaemon.stop();
+        PASS();
+    }
+
+    TEST("diagnostics relay guards: half-configured sink and empty identity");
+    {
+        // relayArtifacts 守卫的剩余两臂：artifactSink 配了而 tickProfiler
+        // 未配（半配置），与两出口都配而 nodeId 为空（身份缺失）——守卫
+        // 都应静默跳过，不崩（场景 A 若守卫失效会直接解引用 null
+        // profiler）、不推残缺帧。此前两臂不可达：既有场景要么全配要么
+        // 全不配，身份用真机探针（hostname 恒非空）。
+        auto gatedCenter = [] {
+            OpsControlCenter::Config cfg;
+            cfg.profilePolicy.canAccess = {kClientComponent};
+            cfg.roleBindings = {{kClientComponent, AccessRole::Admin}};
+            return OpsControlCenter(cfg);
+        };
+
+        // 臂 1：artifactSink 配、tickProfiler 缺省（采样入口关闭）。
+        {
+            OpsControlCenter halfCenter = gatedCenter();
+            MachineAgent halfAgent(std::make_unique<LocalHostProbe>(),
+                                   std::make_unique<LocalProcessSupervisor>());
+            MachineDaemon::Config halfConfig;
+            halfConfig.listenPort = 0;
+            halfConfig.artifactSink = &halfCenter;
+            MachineDaemon halfDaemon(halfConfig, halfAgent);
+            if (!halfDaemon.start()) FAIL("half-configured daemon start failed");
+            halfDaemon.tick();
+            halfDaemon.stop();
+            if (!halfCenter.queryProfiles(kClientComponent, ProfileQuery{})
+                     .empty())
+                FAIL("half-configured relay must push nothing");
+        }
+
+        // 臂 2：两出口都配、探针返回空 hostname（nodeId 身份缺失）。
+        {
+            OpsControlCenter anonCenter = gatedCenter();
+            MachineAgent anonAgent(std::make_unique<EmptyHostProbe>(),
+                                   std::make_unique<LocalProcessSupervisor>());
+            UnreadableProfiler anonProfiler;  // 仅占位非空：身份臂先短路，不会被触达
+            MachineDaemon::Config anonConfig;
+            anonConfig.listenPort = 0;
+            anonConfig.artifactSink = &anonCenter;
+            anonConfig.tickProfiler = &anonProfiler;
+            MachineDaemon anonDaemon(anonConfig, anonAgent);
+            if (!anonDaemon.start()) FAIL("anonymous daemon start failed");
+            anonDaemon.tick();
+            anonDaemon.stop();
+            if (!anonCenter.queryProfiles(kClientComponent, ProfileQuery{})
+                     .empty())
+                FAIL("anonymous relay must push nothing");
+        }
         PASS();
     }
 
