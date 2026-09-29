@@ -2,6 +2,12 @@
 // 路径、对端关闭感知与重复 close 安全性。全部单线程驱动（两端都 pump）。
 #include "theseed/runtime/TcpConnection.h"
 #include "theseed/runtime/TcpListener.h"
+#include "SocketDetail.h"  // TU 私有胶合头（测试目标私有 include）：connectStillPending 纯函数直测
+
+#include <arpa/inet.h>
+#include <cerrno>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -250,6 +256,71 @@ int main() {
     }
 
     TcpConnection::globalShutdown();
+
+    // connectStillPending 语义集直测：pending 窗口（SO_ERROR ∈ EINPROGRESS 系）
+    // 只出现在握手跨 tick 未落定的真实网络——内核回环握手同步完成，运行时
+    // 打不中，纯函数直测锚定 errno 契约：pending 系 vs 最终错误/成功。
+    CHECK(theseed::runtime::detail::connectStillPending(EINPROGRESS),
+          "EINPROGRESS is pending");
+    CHECK(theseed::runtime::detail::connectStillPending(EINTR), "EINTR is pending");
+    CHECK(theseed::runtime::detail::connectStillPending(EAGAIN), "EAGAIN is pending");
+    CHECK(theseed::runtime::detail::connectStillPending(EWOULDBLOCK),
+          "EWOULDBLOCK is pending");
+    CHECK(!theseed::runtime::detail::connectStillPending(ECONNREFUSED),
+          "ECONNREFUSED is final");
+    CHECK(!theseed::runtime::detail::connectStillPending(0),
+          "zero (handshake done) is final");
+
+    // RST 断连臂 A（recv 侧）：对端以 SO_LINGER{1,0} 裸 close 触发 RST——
+    // TcpConnection 的 close 走正常 FIN，无法产生 RST，借裸 socket 注入。
+    // RST 到达后 recv 返回 ECONNRESET（非 EAGAIN 的 recv 真错误）→ 断连。
+    {
+        TcpListener listener;
+        CHECK(listener.listen("127.0.0.1", 0), "listen for RST recv arm");
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in rawAddr{};
+        rawAddr.sin_family = AF_INET;
+        rawAddr.sin_port = htons(listener.localPort());
+        rawAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&rawAddr),
+                        sizeof(rawAddr)) == 0,
+              "raw client connect");
+        auto server = listener.accept();
+        CHECK(server != nullptr, "accept RST recv arm");
+        linger rstLinger{1, 0};  // on=1 timeout=0：close 无条件 RST
+        ::setsockopt(fd, SOL_SOCKET, SO_LINGER, &rstLinger, sizeof(rstLinger));
+        ::close(fd);
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds{20});  // 回环 RST 必达
+        server->pump();
+        CHECK(!server->isConnected(), "RST must disconnect via recv ECONNRESET");
+        server->close();
+    }
+
+    // RST 断连臂 B（send 侧）：同一注入，先 write——send 返回真错误
+    // （EPIPE 系，非 EAGAIN 且非 ENOTCONN）→ 断连，连接状态不再乐观。
+    {
+        TcpListener listener;
+        CHECK(listener.listen("127.0.0.1", 0), "listen for RST send arm");
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in rawAddr{};
+        rawAddr.sin_family = AF_INET;
+        rawAddr.sin_port = htons(listener.localPort());
+        rawAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&rawAddr),
+                        sizeof(rawAddr)) == 0,
+              "raw client connect");
+        auto server = listener.accept();
+        CHECK(server != nullptr, "accept RST send arm");
+        linger rstLinger{1, 0};
+        ::setsockopt(fd, SOL_SOCKET, SO_LINGER, &rstLinger, sizeof(rstLinger));
+        ::close(fd);
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        const std::byte one{0x01};
+        server->write(std::span<const std::byte>(&one, 1));
+        CHECK(!server->isConnected(), "RST must disconnect via send error");
+        server->close();
+    }
 
     if (gFailures == 0) {
         std::cout << "TcpConnectionTest: all passed" << std::endl;

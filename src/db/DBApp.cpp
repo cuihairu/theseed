@@ -124,6 +124,12 @@ bool DBApp::init() {
     if (config_.storeBackend == "file") {
         store_ = std::make_shared<core::FileEntityStore>(config_.storePath);
         accountStore_ = nullptr;
+    } else if (!store_) {  // LCOV_EXCL_BR_LINE 假臂=非 file 且 store_ 已落成，只发生在带 SQL 后端的构建（本构建无 SQL，已知后端名已被上方 #else 转回 file）
+        // 走到这里 = 后端名拼错（"file"/"mysql"/"postgresql" 之外）：拒绝
+        // 启动，不带 null store 进运行期——首个请求会在 store_ 上解引用。
+        std::cerr << "DBApp: unknown storeBackend '" << config_.storeBackend
+                  << "' (expected file, mysql or postgresql)" << std::endl;
+        return false;
     }
 
     hub_ = std::make_shared<runtime::TransportHub>(config_.componentId);

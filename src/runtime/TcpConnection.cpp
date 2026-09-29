@@ -106,7 +106,10 @@ std::size_t TcpConnection::pumpWithResult() {
     if (!connected_) return 0;
 
     // 未决 connect 的裁决点：SO_ERROR 归零才允许收发；失败即断开。
-    // 握手仍在进行（EINPROGRESS 系）时本轮空转，交由下一轮 pump。
+    // 握手仍在进行（EINPROGRESS 系）时本轮空转，交由下一轮 pump——该
+    // 空转臂只在握手跨 tick 未落定的真实网络出现，内核回环握手同步完
+    // 成（SO_ERROR 首查即 0 或最终错误），本仓测试环境不可达；pending
+    // 语义集由 TcpConnectionTest 直测 connectStillPending 锚定。
     if (connectPending_) {
         const int err = detail::socketPendingError(toSocket(socket_));
         if (err != 0) {

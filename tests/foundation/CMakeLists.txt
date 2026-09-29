@@ -87,3 +87,12 @@ target_link_libraries(
     PRIVATE theseed_foundation)
 
 add_test(NAME theseed_redis_provider_test COMMAND theseed_redis_provider_test)
+
+add_executable(theseed_session_store_test SessionStoreTest.cpp)
+
+target_link_libraries(
+    theseed_session_store_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_foundation)
+
+add_test(NAME theseed_session_store_test COMMAND theseed_session_store_test)

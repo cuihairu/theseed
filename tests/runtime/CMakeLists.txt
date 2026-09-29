@@ -16,6 +16,13 @@ target_link_libraries(
     PRIVATE theseed_project_options theseed_test_options
     PRIVATE theseed_runtime)
 
+# 直测 SocketDetail.h 的纯函数（connectStillPending 的 errno 语义集）——
+# 该头是 TcpConnection 的 TU 私有胶合层，不为测试提升其可见性，仅本测试
+# 目标加私有 include。
+target_include_directories(
+    theseed_tcp_connection_test
+    PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+
 add_test(NAME theseed_tcp_connection_test COMMAND theseed_tcp_connection_test)
 endif()
 

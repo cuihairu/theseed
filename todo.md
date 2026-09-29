@@ -1,5 +1,66 @@
 # TODO
 
+## runtime/foundation/db 分支补测：尾量三模块一次收割（2026-09-29）✓
+
+口径同 control/login 批次：分支层收割（信息性，门禁不卡），arc 级甄别后
+真臂全清、余量逐行留档。control 128 / login 32 均为前两批已定性余量，本
+轮按缺失排名收剩余三模块（runtime 9 > foundation 8 > db 1，合计 18），
+收尾 8。
+
+1. **arc 级甄别**（JSON 弧 + 行级证据对照源码）：
+   - TickDiagnostics.cpp:39（2 弧）：logWarn 三属性行的 LogAttribute::Value
+     variant 转换构造库噪声，同 control/login 轮定性——留档；
+   - SocketDetail.h:144 connectStillPending（4 分支）：与相邻 connectInProgress
+     同构的 `EAGAIN || EWOULDBLOCK` 同值短路链——EWOULDBLOCK 真臂结构性
+     不可达，**补上漏掉的同款 LCOV_EXCL_BR_LINE 豁免**（相邻 wouldBlock/
+     connectInProgress 均已有）；EINPROGRESS/EINTR/EAGAIN 三真臂为运行时
+     pending 窗口语义（SO_ERROR ∈ pending 系只在握手跨 tick 未落定的真实
+     网络出现，内核回环握手同步完成）——纯函数直测锚定；
+   - TcpConnection.cpp:113（现 116）：pending 空转臂，同上窗口论证，码
+     注释补背书留档；
+   - TcpConnection.cpp:129：recv 真错误（非 EAGAIN）臂——SO_LINGER{1,0}
+     裸 socket 注入 RST 可达，真臂；
+   - TcpConnection.cpp:162（现 165）：send 真错误（非 EAGAIN 且非
+     ENOTCONN）臂——RST 后 write 走 EPIPE 断连可达，真臂；
+   - SessionStore.cpp:44：save 的 `stored && zadd` 双写契约——set 失败
+     短路（索引不写）与 zadd 失败上抛（会话键保留供重试）两真臂；尾部
+     4 零弧为 `kSessionKeyPrefix + token` 字符串拼接 SSO/堆副本库噪声；
+   - DBApp.cpp:124：非 file 臂——本构建无 SQL 时已知后端名被 #else 转回
+     file，原假臂只剩垃圾后端名可达，且 store_ 保持 null 进运行期会在首个
+     请求解引用崩溃（真实配置校验缺口）。
+2. **产品码**（防御/豁免，无行为变更 1 + 缺口修复 1）：
+   - SocketDetail.h connectStillPending 补同值豁免（照抄相邻格式与理由）；
+   - DBApp::init 补 `else if (!store_)` 守卫：后端名拼错 init 即拒（统一
+     错误处理），SQL 可用构建的成功路径不受影响（假臂 LCOV 豁免注明）；
+   - TcpConnection.cpp 裁决点注释补 pending 窗口不可达论证。
+3. **测试**：
+   - TcpConnectionTest：connectStillPending 六值直测（pending 系/最终错误/
+     成功）+ RST 双场景（裸 socket SO_LINGER{1,0} 触发——TcpConnection 的
+     close 走 FIN 无法产生 RST）：A 先 pump 走 recv ECONNRESET 断连、B 先
+     write 走 send 真错误断连；私有胶合头经测试目标私有 include 直测
+     （不为测试提升头可见性）；
+   - tests/foundation/SessionStoreTest.cpp（新，4 用例）：可注入失败的
+     FakeRedisProvider——双写全成功往返+索引可见 / set 失败短路不碰索引 /
+     zadd 失败如实上抛且会话键保留 / 空 token 拒绝；
+   - DBAppTest 补 unknown storeBackend init 拒绝。
+4. **余量留档（8）**：TickDiagnostics 39×2（variant 噪声）、TcpConnection
+   116×1（pending 窗口，码注释背书）、165×1（gcc || 汇合副本弧，EPIPE
+   断连行为已由断言钉死）、SessionStore 44×4（SSO 副本噪声）。
+
+--- 2026-09-29 门禁纪录 ---
+- gcc14-gate ctest：118/118 全绿（+SessionStoreTest）；clang-debug 全量
+  重建后 118/118 全绿。
+- gcovr 行/函数门禁：行 11698/11698 = 100%、函数 1644/1644 = 100%；
+  分支 8423→8425（缺失 178→168；runtime 9→4、foundation 8→4、db 1→0），
+  豁免 +8 弧（connectStillPending 同值链）。
+- 中途坑：只构建三个测试 target 时其余链接 theseed_runtime 的二进制未
+  重链，全量 ctest 新旧二进制混写 gcda → gcov stamp mismatch、四个重编
+  TU 整体退出聚合（分支分母 8601→8352 假象）。清 gcda + ninja 全量重链
+  + 重跑 ctest 后分母恢复 8593（-8 为新豁免弧），行 11694→11698（+4
+  守卫）。
+- mingw 离线：DBAppTest / SessionStoreTest / TcpConnection.cpp
+  `-fsyntax-only -std=c++23 -Wall -Wextra -Werror` 零警告。
+
 ## login 模块分支补测：LoginApp 韧性臂收割（2026-09-28）✓
 
 口径同上轮 control 批次：分支层收割（信息性，门禁不卡），arc 级甄别后真臂

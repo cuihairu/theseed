@@ -391,6 +391,19 @@ int main() {
     }
     PASS();
 
+    // 后端名拼错在 init 即拒绝：不带 null store 进运行期（首个请求会在
+    // store_ 上解引用）。已知后端名（mysql/postgresql）在无 SQL 的构建里
+    // 已被转回 file，走到这里的一律是拼写错误。
+    TEST("unknown storeBackend is rejected at init");
+    {
+        DBApp::Config cfg;
+        cfg.listenPort = 0;
+        cfg.storeBackend = "bogus";
+        DBApp app(std::move(cfg));
+        if (app.init()) FAIL("unknown backend must be rejected at init");
+    }
+    PASS();
+
     std::cout << "\nAll DBApp tests passed!" << std::endl;
     return 0;
 }

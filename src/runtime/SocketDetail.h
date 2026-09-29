@@ -141,8 +141,10 @@ inline int socketPendingError(SocketHandle s) {
 
 // SO_ERROR 值是否表示握手仍在进行（对照 connectInProgress 的 errno 集）。
 inline bool connectStillPending(int err) {
-    return err == EINPROGRESS || err == EINTR || err == EAGAIN ||
-           err == EWOULDBLOCK;
+    // EWOULDBLOCK 与 EAGAIN 同值：末位比较真臂不可达，豁免登记在下两行行尾。
+    // EINPROGRESS/EINTR/EAGAIN 的语义集由 TcpConnectionTest 直测锚定。
+    return err == EINPROGRESS || err == EINTR || err == EAGAIN ||  // LCOV_EXCL_BR_LINE 同值短路链：EAGAIN 真蕴含 EWOULDBLOCK 真，末位比较真臂不可达，miss 边为汇合副本
+           err == EWOULDBLOCK;  // LCOV_EXCL_BR_LINE EWOULDBLOCK==EAGAIN，真臂结构性不可达
 }
 
 inline void closeSocket(SocketHandle s) { ::close(s); }
