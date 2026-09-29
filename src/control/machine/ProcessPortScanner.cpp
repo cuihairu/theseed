@@ -197,7 +197,7 @@ std::string probeProcessVersion(std::uint16_t port, std::chrono::milliseconds ti
     address.sin_port = htons(port);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        if (errno != EINPROGRESS) {  // LCOV_EXCL_LINE Linux TCP connect 非 0 即 EINPROGRESS，同步失败臂不可达
+        if (errno != EINPROGRESS) {  // LCOV_EXCL_BR_LINE Linux 非阻塞 TCP connect 非 0 恒 EINPROGRESS（同步失败臂不可达；行内 EXCL 豁免覆盖返回臂）
             // LCOV_EXCL_START 同上
             return "";  // 端口无进程或拒绝连接（同步臂）
             // LCOV_EXCL_STOP

@@ -1,5 +1,42 @@
 # TODO
 
+## 分支缺口第三轮复核：control 余量定性收口 + 排除清单固化（2026-09-29）✓
+
+派发口径：剩余缺口 top 模块补单测，遵守排除口径勿硬凑不可达臂。基线
+（f3d7a47）：分支缺失 166 = control 126（MachineDaemon 77 / OpsControl
+Center 34 / ProcessPortScanner 13 / HostProbe 2）＞ login 32。
+
+1. **复核范围与结论**：MachineDaemon 77 为上轮刚复核完的已定性余量
+   （variant 噪声 30 行 + 结构性 8 行），不重复挖；主攻同模块内未深挖
+   的 OpsControlCenter 34 与 ProcessPortScanner 13，login 32 抽查维持
+   上轮定性（码内证据链完整）。
+2. **OpsControlCenter 34 全定性**：29 缺失为 variant 噪声模板；L98
+   try_emplace 六 0 弧为 std 库内联机械弧（inserted 语义两臂已测，
+   12 真/1 假）；L150 order 空表防御臂（order 与 nodes_ 同步维护，
+   超容量时 order 必非空）；L311 entityId 命中臂（无生产者，码注释
+   自认如实落空）。真臂 0。
+3. **ProcessPortScanner 13 全定性**：11 缺失已有 LCOV 豁免/EXCL 背书；
+   新发现两处——L111 fd 链接畸形防御臂（/proc 恒规范）与 L199 connect
+   同步成功臂（非阻塞握手异步恒 EINPROGRESS）补登记；**L200 漏标
+   BR_LINE**（原 LINE 豁免不清分支弧），照同文件 5 处既有 BR_LINE
+   惯例对齐——本轮唯一产品码改动（豁免注释，无行为变更）。
+4. **真臂净增量 = 0**：三轮收割（control/login/runtime+foundation+db）
+   后真臂已尽，本轮无新测试——符合「勿为凑数硬凑不可达分支」口径。
+5. **排除口径固化**：新建 docs/KNOWN_UNCOVERABLE_ARMS.md——三轮留档
+   臂全部归档（文件:行 + 类别 variant-noise/inline-noise/structural +
+   一句背书 + 维护纪律），作为后续收割轮的既定排除清单。
+
+--- 2026-09-29 门禁纪录 ---
+- gcovr 行/函数门禁：行 11699/11699 = 100%（+1 = L200 从 LINE 对齐为
+  BR_LINE 后该行判断语句回到行分母，仍全执行）、函数 1644/1644 =
+  100%；分支 8427/8593、缺失 166 维持——**实证 gcovr 8.6 不识别
+  LCOV_EXCL_BR_LINE**（行内 BR 豁免仅对 lcov 工具链生效），200 的 0T
+  弧仍在缺失内，排除依据落 KNOWN_UNCOVERABLE_ARMS 登记。由此勘误：
+  runtime/foundation/db 轮的「豁免 +8 弧」实为 gcda stamp 修复副产物
+  （豁免注释在 gcovr 口径从未削减计数），缺失数值本身不受影响。
+- 双树 ctest 118/118 全绿（src 注释级改动，全量重链后复跑）。
+- mingw 口径不适用：本轮产品码改动为注释级，测试零新增。
+
 ## runtime/foundation/db 分支补测：尾量三模块一次收割（2026-09-29）✓
 
 口径同 control/login 批次：分支层收割（信息性，门禁不卡），arc 级甄别后
