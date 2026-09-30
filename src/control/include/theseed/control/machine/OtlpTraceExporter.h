@@ -88,9 +88,12 @@ public:
     // 响应状态行解码：完整状态行返回状态码，未收全或非状态行形态返回 0。
     static int decodeHttpStatus(std::string_view response);
 
-private:
+    // OTLP 公共阻塞传输（TcpConnection 一次性 POST）：trace/metrics 两
+    // 导出器共用单实现，HttpPost 接缝的缺省绑定。
     static PostResult postViaTcp(const Target& target, const std::string& body,
                                  std::chrono::milliseconds timeout);
+
+private:
     void onSpan(const foundation::Span& span);
 
     Config config_;

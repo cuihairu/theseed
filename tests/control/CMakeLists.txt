@@ -83,4 +83,14 @@ target_link_libraries(
     PRIVATE theseed_control)
 
 add_test(NAME theseed_otlp_trace_exporter_test COMMAND theseed_otlp_trace_exporter_test)
+
+# OTLP metrics 导出器同构：回环 e2e 同门控。
+add_executable(theseed_otlp_metrics_exporter_test OtlpMetricsExporterTest.cpp)
+
+target_link_libraries(
+    theseed_otlp_metrics_exporter_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control)
+
+add_test(NAME theseed_otlp_metrics_exporter_test COMMAND theseed_otlp_metrics_exporter_test)
 endif()

@@ -761,6 +761,98 @@ int main() {
         PASS();
     }
 
+    TEST("otlp metrics wiring: default off, enabled installs exporter, tick drives export, stop restores");
+    {
+        // 端点口径与 trace 装配用例同款：先占一个端口再放掉——连接多半
+        // 被拒；失败日志 + failed 计数即导出器已安装的观测信号，无需真
+        // 收集端。
+        theseed::runtime::TcpListener portHolder;
+        if (!portHolder.listen("127.0.0.1", 0))
+            FAIL("port holder listen");
+        const auto refusedPort = portHolder.localPort();
+        portHolder.close();
+
+        const auto captured = std::make_shared<CapturingLogger>();
+        auto previousLogger = foundation::takeGlobalLogger();
+        foundation::setGlobalLogger(captured);
+
+        // --- 默认关闭臂：缺省配置不安装导出器——tick 驱动亦无 otlp.metrics 日志
+        {
+            MachineDaemon::Config offConfig;
+            offConfig.listenPort = 0;
+            MachineAgent offAgent(
+                std::make_unique<LocalHostProbe>(),
+                std::make_unique<LocalProcessSupervisor>());
+            MachineDaemon offDaemon(offConfig, offAgent);
+            if (!offDaemon.start()) FAIL("default daemon must start");
+            auto offTick = [&offDaemon] { offDaemon.tick(); };
+            offTick();
+            offTick();
+            offDaemon.stop();
+            for (const auto& record : captured->drain()) {
+                if (record.message.rfind("otlp.metrics.", 0) == 0)
+                    FAIL("disabled daemon must not log otlp.metrics records");
+            }
+        }
+
+        // --- 开启臂：start 安装导出器（启动日志明示数据范围），首个 tick
+        //     立即到期导出（refused 端点 → 失败日志），stop 后 tick 静默
+        {
+            MachineDaemon::Config onConfig;
+            onConfig.listenPort = 0;
+            onConfig.otlpMetrics.enabled = true;
+            onConfig.otlpMetrics.endpoint =
+                "http://127.0.0.1:" + std::to_string(refusedPort) + "/v1/metrics";
+            onConfig.otlpMetrics.timeout = std::chrono::milliseconds{200};
+            MachineAgent onAgent(
+                std::make_unique<LocalHostProbe>(),
+                std::make_unique<LocalProcessSupervisor>());
+            MachineDaemon onDaemon(onConfig, onAgent);
+            if (!onDaemon.start()) FAIL("enabled daemon must start");
+
+            // drain() 按值返回：断言所需字段必须在循环内就地取出，
+            // 不得留存指向临时记录的指针。
+            bool sawEnabledLog = false;
+            std::string scope;
+            for (const auto& record : captured->drain()) {
+                if (record.message != "otlp.metrics.export.enabled")
+                    continue;
+                sawEnabledLog = true;
+                for (const auto& attr : record.attrs) {
+                    if (attr.key == "data_scope")
+                        scope = std::get<std::string>(attr.value);
+                }
+            }
+            if (!sawEnabledLog)
+                FAIL("enabled daemon must log otlp.metrics.export.enabled");
+            if (scope.find("bucketCounts") == std::string::npos ||
+                scope.find("not exported") == std::string::npos)
+                FAIL("enabled log must state the exported data scope");
+
+            auto onTick = [&onDaemon] { onDaemon.tick(); };
+            onTick();  // 首 tick：lastExportAt_ 为 epoch，立即到期导出
+            bool sawFailedLog = false;
+            for (const auto& record : captured->drain()) {
+                if (record.message == "otlp.metrics.export.failed")
+                    sawFailedLog = true;
+            }
+            if (!sawFailedLog)
+                FAIL("installed exporter must attempt the configured endpoint");
+
+            // --- 卸载臂：stop 后 tick 不再外发
+            onDaemon.stop();
+            captured->drain();
+            onTick();
+            for (const auto& record : captured->drain()) {
+                if (record.message.rfind("otlp.metrics.", 0) == 0)
+                    FAIL("stopped daemon must not export metrics");
+            }
+        }
+
+        foundation::setGlobalLogger(std::move(previousLogger));
+        PASS();
+    }
+
     TEST("audit ring evicts oldest beyond capacity");
     {
         LocalHostProbe probe;

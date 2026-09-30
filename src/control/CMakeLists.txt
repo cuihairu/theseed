@@ -4,6 +4,7 @@ add_library(
     machine/MachineAgent.cpp
     machine/MachineDaemon.cpp
     machine/MachineSnapshotCodec.cpp
+    machine/OtlpMetricsExporter.cpp
     machine/OtlpTraceExporter.cpp
     machine/ProcessPortScanner.cpp
     machine/ProcessSupervisor.cpp

@@ -127,7 +127,7 @@ Grafana / Alerting
 
 `control::machine::OtlpTraceExporter` 把既有 `SpanScope` / `SpanEmitter`
 产物以 OTLP/HTTP JSON（`application/json`，protobuf 编码不用）导出到
-可配置 endpoint。metrics 导出后置（本文 §4 的指标面暂无外发通道）。
+可配置 endpoint。metrics 导出见 §2.2（同族落地，拉模型）。
 
 **数据外发默认关闭（硬性要求）**：`Config.enabled` 缺省 `false`，不显式
 置 true 就不安装、不外发、零网络副作用。开启且 endpoint 合法后，启动
@@ -164,6 +164,53 @@ vcpkg 工具链未装，引入需全量重建，沿既定降级路径）。每�
 **配置面**：`MachineDaemon::Config::otlpTrace` 承载（daemon 是控制面
 span 属主；当前无生产宿主装配 daemon，配置面先行，装配随宿主落地）。
 开启即全量导出，无采样。
+
+### 2.2 控制面 OTLP metrics 导出（已落地）
+
+`control::machine::OtlpMetricsExporter` 把进程级 `MetricsRegistry`
+（本文 §4 的指标面，`machine_*` / `ops_*` / 基础设施计数与直方图）全量
+快照以 OTLP/HTTP JSON 导出到可配置 endpoint。与 §2.1 同族同约束（零第
+三三方依赖、endpoint 口径、失败语义、注入传输接缝均沿用，公共面单实现
+`OtlpTraceExporter` 复用），差异只在数据源与驱动模型：trace 是事件驱动
+（span 完结钩子），metrics 是**周期拉取**——`MachineDaemon::tick()` 按
+`Config.interval`（缺省 5000ms）驱动 `exportIfDue()`，到期一次 POST 上
+报当期全量快照（每期一笔请求，批内含全部样本）；首个到期调用立即导出
+（与 `reportIfDue` 首 tick 立即上报同口径）。
+
+**数据外发默认关闭（硬性要求）**：`Config.enabled` 缺省 `false`，不显式
+置 true 就不安装、不外发、零网络副作用（未开启时 `exportIfDue` 空转，
+连注册表快照都不取）。开启且 endpoint 合法后，启动日志
+`otlp.metrics.export.enabled` 携带 `interval_ms` 与 `data_scope` 属性
+明示导出范围，与本节同源：
+
+| 导出 | 不导出 |
+| --- | --- |
+| metric name 与 description | spans/traces |
+| counter / gauge 值（asInt，int64 口径含负值） | 结构化日志 |
+| histogram count / sum / bucketCounts / explicitBounds（累积口径，同仓内注册表） | 请求与审计载荷 |
+| 采集时刻 timeUnixNano（快照时刻） | |
+| resource `service.name`（缺省 `theseed`） | |
+| scope `theseed.control.metrics` | |
+
+**类型映射**：counter → OTLP `sum`（`aggregationTemporality=2` 累积 +
+`isMonotonic=true`）；gauge → `gauge`；histogram → `histogram`（累积
+`bucketCounts` 与 `explicitBounds`，`bucketCounts` 长度 = 边界数 + 1，
+末桶 `+Inf`——与注册表内部语义逐一对应）。注册表不记每指标起始时刻，
+`startTimeUnixNano` 缺省 0（protobuf 默认值，采集端按累计口径处理）；
+非有限 histogram sum（NaN/Inf）无合法 JSON 数字表示，按 OTLP 可选字段
+省略（count / buckets 不受影响）。
+
+**endpoint / 传输 / 失败语义**：与 §2.1 同口径——仅
+`http://<IPv4 字面量>[:port][/path]`（缺省 4318）；`TcpConnection`
+一次性阻塞 POST；`Config.timeout`（缺省 500ms）即 tick 上下文的阻塞上
+界；失败（建连拒 / 对端先关 / 超时 / 非 2xx）丢弃 + `++exportFailed` +
+warn `otlp.metrics.export.failed` 带 `http_status`（0 = 未收到响应），
+**当期不重试**；2xx 计 `exportedOk`，成功路径零日志。`install()` 只做
+校验与启动声明，不触碰任何全局槽位；`uninstall()` 与析构兜底收口。
+
+**配置面**：`MachineDaemon::Config::otlpMetrics` 承载（daemon tick 驱
+动导出；当前无生产宿主装配 daemon，配置面先行，装配随宿主落地）。
+开启即全量导出，无采样、无过滤。
 
 ---
 

@@ -361,6 +361,12 @@ bool MachineDaemon::start() {
     // 空转（非法 endpoint 的 warn 由导出器记），不影响 daemon 上线。
     otlpExporter_ = std::make_unique<OtlpTraceExporter>(config_.otlpTrace);
     static_cast<void>(otlpExporter_->install());
+    // OTLP metrics 外发（05-telemetry §2.2，默认关闭）：开启且 endpoint
+    // 合法才安装；tick() 按 interval 驱动导出（首 tick 立即到期，同
+    // reportIfDue 口径）。与 hub_ 同生命周期——tick 对其解引用不空。
+    otlpMetricsExporter_ =
+        std::make_unique<OtlpMetricsExporter>(config_.otlpMetrics);
+    static_cast<void>(otlpMetricsExporter_->install());
     // 命名属性单行化（同上，规避续行归因）
     const auto listenPort = static_cast<std::int64_t>(listener_.localPort());
     const foundation::LogAttribute portAttr = {"listen_port", listenPort};
@@ -394,6 +400,7 @@ void MachineDaemon::stop() {
     listener_.close();
     hub_.reset();
     otlpExporter_.reset();  // 导出器卸载还原全局发射器（dtor 内同样触发）
+    otlpMetricsExporter_.reset();  // 卸载（install 无全局槽位，还原旗标）
 }
 
 void MachineDaemon::tick() {
@@ -412,6 +419,9 @@ void MachineDaemon::tick() {
         return;
     }
     reportIfDue();
+    // metrics 导出与周期上报同属周期性遥测出站：由本调用按 interval
+    // 判到期（默认关闭时 install 空转，此处调用为无副作用空转）。
+    static_cast<void>(otlpMetricsExporter_->exportIfDue());
     relayArtifacts();
 }
 

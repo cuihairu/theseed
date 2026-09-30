@@ -1,9 +1,58 @@
 # TODO
 
+## OTel metrics 导出器：控制面注册表快照的 OTLP/HTTP JSON 外发（2026-09-30）✓
+
+trace 半边（同日上批）的同构姊妹面：把 MetricsRegistry 全量快照导出到
+可配置 OTLP/HTTP JSON endpoint，05-telemetry 同步成文 §2.2。与 trace 的
+差异只在数据源与驱动模型，硬约束三条原样沿袭（默认关、endpoint 口径、
+失败丢弃不重试），设计假设拍板如下：
+
+1. **零依赖与公共面复用**：不引 OTel SDK / protobuf / abseil；OTLP/
+   HTTP JSON 报文手写编码（counter→累积 sum+isMonotonic、gauge→gauge、
+   histogram→累积直方图 bucketCounts/explicitBounds）；传输、endpoint
+   解析、状态码解码、HttpPost 注入接缝全部沿用 OtlpTraceExporter 单
+   实现（postViaTcp 提为公共静态），JSON 转义器两文件独立同族副本
+   （编码面冻结，零漂移风险且互不引入交叉 include）。
+2. **数据外发默认关闭（硬要求）**：Config.enabled 缺省 false，未开启
+   连注册表快照都不取（exportIfDue 空转返回，零网络副作用）；开启且
+   endpoint 合法即打启动日志 otlp.metrics.export.enabled，data_scope
+   与 05 遥测 §2.2 同源明示（name/description/counter·gauge asInt/
+   histogram count·sum·bucketCounts·explicitBounds/采集 timeUnixNano/
+   service.name/scope；不导出 spans/traces、结构化日志、请求与审计载
+   荷），另带 interval_ms。
+3. **驱动模型 = 周期拉取**：MachineDaemon::tick() 按 Config.interval
+   （缺省 5000ms，≤0 每 tick 都导出）调 exportIfDue()，到期一次
+   POST 报全量快照（每期一笔、批内全部样本）；首个到期调用立即导出
+   （reportIfDue 首 tick 立即上报同口径）。install 只校验+打日志、
+   不触碰全局槽位；uninstall/析构收口。注册表不记每指标起始时刻，
+   startTimeUnixNano 缺省 0；非有限 histogram sum 省略（可选字段）。
+4. **endpoint / 失败语义**：仅 http://<IPv4字面量>[:port][/path]
+   （缺省 4318）；timeout（缺省 500ms）即 tick 上下文阻塞上界；失败
+   （建连拒/对端先关/超时/非 2xx）丢弃 + ++exportFailed + warn 带
+   http_status（0=无响应），**当期不重试**；2xx 计 exportedOk，成功
+   路径零日志。scope 名 theseed.control.metrics、service.name 缺省
+   theseed。配置面 = MachineDaemon::Config::otlpMetrics。
+5. **测试**：新 theseed_otlp_metrics_exporter_test 18 例（默认关零副作
+   用/非法端点 warn/启用日志 data_scope 幂等单条/回环 e2e 三型指标+
+   头部断言/卸载与析构/interval 到期门 + 0 间隔/500·拒绝速败·静默超
+   时·先关·垃圾状态行·拆包 200/失败不重试/注入传输接缝/三型直测含转
+   义全族 torture 串·非有限 sum 省略·空批次）+ MachineDaemonTest 装配
+   用例（默认关 tick 静默、开启装导出器首 tick 即到期尝试、stop 后
+   tick 静默）；MockOtlpCollector 沿 trace 测试同款多连接回环收集器，
+   Linux 门控。
+
+验证口径：gcc14-gate 全量重链 120/120 全绿、gcovr 行 100%
+（12139/12139）函数 100%（1684/1684）双过门（分支 97.8% 8749/8948
+信息口径）；clang-debug 全量重链零警告、120/120 全绿。覆盖收口注记：
+新文件首轮 20 行缺口 = 转义臂族（\\ \b \f \r \t \x01 未喂）+ 两条折行
+LogAttribute 声明被 gcov 记账到结束行（gcovr 报首行 #####）——torture
+串直测 + 单行化声明修复，全文件 ##### 归零。
+
 ## OTel 导出器：控制面 trace 的 OTLP/HTTP JSON 外发（2026-09-30）✓
 
 遗留项「OTel 导出器仍开放」的 trace 半落地（05-telemetry §2.1 同步成文；
-metrics 导出仍开放登记）。零第三方依赖与数据外发默认关闭为两条硬约束，
+metrics 半边同日继落，见顶部「OTel metrics 导出器」批）。零第三方依赖
+与数据外发默认关闭为两条硬约束，
 设计假设自行拍板如下：
 
 1. **零依赖口径**：不引 OTel SDK / protobuf / abseil（vcpkg 工具链未装，
@@ -1173,8 +1222,9 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
 
 对齐 05-telemetry-and-debug 的导出层（OTel SDK/OTLP 判定过重：vcpkg 工具
 链未安装，引入需全量重建 protobuf/abseil 与 preset 改造——按既定降级路径
-先落只读导出面，OTel 迁移留待依赖就绪；2026-09-30 trace 半边以零依赖
-OTLP/HTTP JSON 先行落地，见顶部「OTel 导出器」批）：
+先落只读导出面，OTel 迁移留待依赖就绪；2026-09-30 trace 与 metrics 两
+半边均以零依赖 OTLP/HTTP JSON 落地，见顶部「OTel 导出器」与「OTel
+metrics 导出器」两批）：
 
 1. **导出面盘点**：OpsServer 的 GET /metrics 早已接线
    `OpsInspector::renderMetrics()` → 全局 `MetricsRegistry::renderText()`
@@ -1525,9 +1575,9 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
   汇入中心可查询审计环形）
 - ~~与 `Telemetry` 的指标、日志、trace 联动~~（2026-09-26 完成控制面切片：
   machine/ops 双侧计数与水位仪表、结构化审计与生命周期日志、
-  execute SpanScope + 日志自动 trace 关联；OTel 导出器 trace 半边
-  2026-09-30 零依赖 OTLP/HTTP JSON 落地，见顶部「OTel 导出器」批，
-  metrics 导出仍开放）
+  execute SpanScope + 日志自动 trace 关联；OTel 导出器 trace 与
+  metrics 两半边 2026-09-30 均以零依赖 OTLP/HTTP JSON 落地，见顶部
+  「OTel 导出器」与「OTel metrics 导出器」两批，外发出口全收口）
 - 更完整的单元测试与跨平台 CI 构建矩阵（矩阵部分 2026-09-27 落地：
   新增 macos-latest job（复用 clang-debug preset），矩阵成
   linux 三连 + coverage 门 + windows + macos；「更完整的单元测试」仍开放）
