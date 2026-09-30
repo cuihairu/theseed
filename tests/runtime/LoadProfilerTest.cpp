@@ -279,12 +279,14 @@ static void test_scope_with_empty_type_keeps_first_type() {
     EntityLoadProfiler p;
     {
         auto s = p.scope(21, "Avatar");
+        sleepMs(1);  // 空块两次 steady_clock::now() 间时钟未走则 elapsed=0，rawLoad 断言会炸
         static_cast<void>(s);
     }
     p.tick();
     {
         // 第二次 scope 传空 type：accumulate 的 !type.empty() 假臂，保留首类型。
         auto s = p.scope(21, "");
+        sleepMs(1);  // 同上：保 elapsed 非零
         static_cast<void>(s);
     }
     p.tick();
@@ -296,6 +298,7 @@ static void test_scope_with_empty_type_keeps_first_type() {
     // entry 照常建立并累计负载，但类型保持空。
     {
         auto s = p.scope(31, "");
+        sleepMs(1);  // 同上：保 elapsed 非零（macOS 腿已实证空块会偶发炸 rawLoad 断言）
         static_cast<void>(s);
     }
     p.tick();

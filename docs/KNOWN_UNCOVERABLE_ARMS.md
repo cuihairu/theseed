@@ -43,10 +43,14 @@ arc 级甄别后的排除清单：**下列臂不为补测而硬凑**——测试
   242/255 [structural]：资源异常与平台窗口臂（/proc 恒在、合法 fd 的
   fcntl/getsockopt/setsockopt 不失败、Linux 非阻塞 TCP connect 恒
   EINPROGRESS、回环已连接 send 失败需即刻 RST、/health 响应恒小于
-  2KB）。行内豁免（LCOV_EXCL_* / LCOV_EXCL_BR_*）仅对 lcov 工具链
-  生效；gcovr 8.6 分支口径不识别 BR 标记——本文件登记即这些臂在
-  gcovr 口径下的排除依据（200 于本轮从 LINE 对齐为 BR_LINE，使行
-  口径与分支口径的豁免各归其位）。
+  2KB）。【2026-09-30 勘误】行内豁免（LCOV_EXCL_* / LCOV_EXCL_BR_*）
+  对 gcovr 8.6 同样生效（A/B 实证：HostProbe:318 挂/撤 BR_LINE 对
+  同一 gcda，gcovr JSON 臂 gcovr/excluded 随之翻转；本条 200 的 0T
+  弧现由 BR_LINE 排除出分母，SocketDetail.h 同值链 22 弧同证）——
+  旧记「不识别、仅 lcov 生效」系观察混淆，详见 todo.md 2026-09-30
+  批。登记仍保留：定性/背书台账与维护纪律载体，非 gcovr 排除的
+  唯一依据（200 于当轮从 LINE 对齐为 BR_LINE，行口径与分支口径的
+  豁免各归其位）。
 - 199 connect 同步成功臂（0F）[structural]：Linux 非阻塞 connect 完成
   握手才返回 0，回环握手异步，恒 EINPROGRESS。
 

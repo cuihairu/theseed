@@ -1,5 +1,38 @@
 # TODO
 
+## 上轮遗留收尾：LoadProfiler 时序 flake 修复 + gcovr BR 识别结论勘误（2026-09-30）✓
+
+前轮收尾两个尾巴一次清：①macOS CI 腿偶发 theseed_load_profiler_test
+失败（test_scope_with_empty_type_keeps_first_type 的 rawLoad 断言）——
+RAII Scope 构造/析构各取一次 steady_clock::now()，块内无 sleepMs 的空
+块两次 now() 间时钟未走则 elapsed=0（2026-09-30 macOS runner 实证；
+当轮 rerun --failed 偶绿但根因未除）；②勘误「gcovr 8.6 不识别
+LCOV_EXCL_BR_LINE」的第三轮结论——A/B 实测推翻，见下。
+
+1. **BR 识别 A/B 实证**：HostProbe.cpp:318 对同一 gcda 挂/撤
+   LCOV_EXCL_BR_LINE，gcovr 8.6 JSON 臂的 gcovr/excluded 随标记翻转
+   （挂→True 出分母，撤→回缺口）。旁证三件：ProcessPortScanner L200
+   的 0T 弧（旧结论引用的反例行）现由 BR_LINE 排除出分母、
+   SocketDetail.h 同值链 22 弧全排除、行门 100% 本身依赖 START/STOP
+   标记的未执行行被行排除（HostProbe 140/254/297 均 count=0 且
+   excluded=True）。结论：LCOV_EXCL 家族（LINE/BR_LINE/START-STOP）
+   对 gcovr 8.6 全部生效。
+2. **历史结论更正**：本文件 2026-09-29 第三轮门禁纪录与
+   docs/KNOWN_UNCOVERABLE_ARMS.md ProcessPortScanner 条的「不识别/
+   仅 lcov 生效」表述就地勘误；runtime/foundation/db 轮「豁免 +8 弧」
+   的原归因恢复成立（SocketDetail BR 豁免确在 gcovr 口径削减分母），
+   第三轮对其的「gcda 副产物」再归因作废。登记台账保留——定性/背书
+   与维护纪律载体，非 gcovr 排除的唯一依据。
+3. **测试修复**：LoadProfilerTest.test_scope_with_empty_type_keeps_first_type
+   三个空 scope 块补 sleepMs(1)（同文件其余用例既有惯例；该测试失败
+   与当笔 HostProbe 提交零文件交集）。产品码零改动。
+
+--- 2026-09-30 门禁纪录 ---
+- 双树 ctest 118/118 全绿（gcc14-gate / clang-debug 均全量重链后复跑）。
+- gcovr 行 11699/11699、函数 1644/1644 = 100% 硬门；分支 8427/8591
+  （信息性；本笔测试改动不动分母）。
+- mingw 口径不适用：产品码零改动，测试为平台中立 sleep 调整。
+
 ## 分支缺口第三轮复核：control 余量定性收口 + 排除清单固化（2026-09-29）✓
 
 派发口径：剩余缺口 top 模块补单测，遵守排除口径勿硬凑不可达臂。基线
@@ -29,11 +62,16 @@ Center 34 / ProcessPortScanner 13 / HostProbe 2）＞ login 32。
 --- 2026-09-29 门禁纪录 ---
 - gcovr 行/函数门禁：行 11699/11699 = 100%（+1 = L200 从 LINE 对齐为
   BR_LINE 后该行判断语句回到行分母，仍全执行）、函数 1644/1644 =
-  100%；分支 8427/8593、缺失 166 维持——**实证 gcovr 8.6 不识别
-  LCOV_EXCL_BR_LINE**（行内 BR 豁免仅对 lcov 工具链生效），200 的 0T
-  弧仍在缺失内，排除依据落 KNOWN_UNCOVERABLE_ARMS 登记。由此勘误：
-  runtime/foundation/db 轮的「豁免 +8 弧」实为 gcda stamp 修复副产物
-  （豁免注释在 gcovr 口径从未削减计数），缺失数值本身不受影响。
+  100%；分支 8427/8593、缺失 166 维持。
+  【2026-09-30 勘误】本段原记「实证 gcovr 8.6 不识别
+  LCOV_EXCL_BR_LINE，200 的 0T 弧仍在缺失内」系观察混淆——A/B
+  实证（HostProbe:318 挂/撤 BR_LINE 对同一 gcda，gcovr JSON 臂
+  gcovr/excluded 随之翻转）gcovr 8.6 实际识别 LCOV_EXCL 家族
+  （LINE/BR_LINE/START-STOP）；本文件 200 的 0T 弧现由 BR_LINE 排除
+  出分母（gcovr/excluded=True 可复核），SocketDetail.h 同值链 22 弧
+  同证。由此再勘误：runtime/foundation/db 轮「豁免 +8 弧」的原归因
+  恢复成立（BR 豁免确在 gcovr 口径削减分母），本段当时的「gcda
+  副产物」勘误作废。详见 2026-09-30 收尾批。
 - 双树 ctest 118/118 全绿（src 注释级改动，全量重链后复跑）。
 - mingw 口径不适用：本轮产品码改动为注释级，测试零新增。
 
