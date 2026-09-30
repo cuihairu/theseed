@@ -1,6 +1,7 @@
 // OtlpTraceExporter 测试：endpoint 解析、OTLP/HTTP JSON 编码（四类型属性
-// + 转义 + 非有限 double）、回环收集端 e2e（200/500/静默超时/先关/垃圾状
-// 态行/分片响应）、链式发射器与卸载语义、默认关闭口径。
+// + 转义 + 非有限 double）、异步批量外发（满批/周期取批、有界重试、队列
+// 溢出丢弃、停机排水、重装）、回环收集端 e2e（200/500/静默超时/先关/垃圾
+// 状态行/分片响应）、链式发射器与卸载语义、默认关闭口径。
 // 回环 TCP 测试同仓内惯例门控 Linux（见 tests/runtime/CMakeLists）。
 #include "theseed/control/machine/OtlpTraceExporter.h"
 
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -25,6 +27,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace foundation = theseed::foundation;
@@ -59,19 +62,24 @@ struct EmitterReset {
     ~EmitterReset() { foundation::setSpanEmitter(nullptr); }
 };
 
-// 捕获日志假件（单线程：span 外发与断言同线程）。
+// 捕获日志假件（worker 线程的失败 warn 与断言线程的 drain 并发，加锁）。
 class CapturingLoggerImpl final : public foundation::ILogger {
 public:
     void log(foundation::LogRecord record) override {
+        const std::lock_guard lock(mutex_);
         records_.push_back(std::move(record));
     }
     void setLevel(foundation::LogLevel level) override { level_ = level; }
     foundation::LogLevel level() const override { return level_; }
 
-    std::vector<foundation::LogRecord> drain() { return std::move(records_); }
+    std::vector<foundation::LogRecord> drain() {
+        const std::lock_guard lock(mutex_);
+        return std::move(records_);
+    }
 
 private:
     foundation::LogLevel level_ = foundation::LogLevel::Debug;
+    std::mutex mutex_;
     std::vector<foundation::LogRecord> records_;
 };
 
@@ -244,11 +252,56 @@ static OtlpTraceExporter::Config endpointConfig(std::uint16_t port,
     config.endpoint =
         "http://127.0.0.1:" + std::to_string(port) + "/v1/traces";
     config.timeout = timeout;
+    // 既有单 span 用例保持「每 span 一 POST」的旧口径（batchSize=1 满批
+    // 即发）；兜底周期压到 10ms、退避压到 10ms——异步化后不拖慢测试，
+    // 失败用例的有界重试（缺省 3 次）仍全程在旧断言的时间上界内。
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
+    config.retryBackoff = std::chrono::milliseconds{10};
     return config;
 }
 
 static bool contains(std::string_view haystack, std::string_view needle) {
     return haystack.find(needle) != std::string_view::npos;
+}
+
+// 异步外发的轮询等待：worker 线程先落日志再落计数（sendBatch 语义），
+// 观测者等到计数即可安全断言此前的日志与请求数。
+template <class Pred>
+static bool waitUntil(Pred&& pred,
+                      std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return pred();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return true;
+}
+
+static int countOf(std::string_view haystack, std::string_view needle) {
+    int count = 0;
+    for (std::size_t pos = haystack.find(needle); pos != std::string_view::npos;
+         pos = haystack.find(needle, pos + needle.size())) {
+        ++count;
+    }
+    return count;
+}
+
+// 花括号配平自检（批量报文结构 sanity：不回负且收口为 0）。
+static bool bracesBalanced(std::string_view text) {
+    int depth = 0;
+    for (const char c : text) {
+        if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            if (--depth < 0) {
+                return false;
+            }
+        }
+    }
+    return depth == 0;
 }
 
 static void test_resolveEndpoint_parses_scheme_host_port_path() {
@@ -393,11 +446,17 @@ static void test_unroutable_endpoint_fails_at_connect() {
     config.enabled = true;
     config.endpoint = "http://255.255.255.255/v1/traces";
     config.timeout = std::chrono::milliseconds{200};
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
+    config.retryBackoff = std::chrono::milliseconds{10};
     OtlpTraceExporter exporter(config);
     if (!exporter.install()) FAIL("install");
 
     const auto begin = std::chrono::steady_clock::now();
     { foundation::SpanScope span("unit.unroutable"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportFailed() == 1; })) {
+        FAIL("connect failure must be counted");
+    }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - begin);
     if (exporter.exportFailed() != 1) FAIL("connect failure must count failed");
@@ -434,6 +493,9 @@ static void test_collector_receives_otlp_json_span() {
         span.setAttribute("d", 0.5);
         span.setAttribute("bt", true);
         span.setAttribute("bf", false);
+    }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("async export must complete");
     }
 
     const auto requests = collector.requests();
@@ -503,6 +565,9 @@ static void test_child_span_carries_parent_span_id() {
             childParentSpanId = child.context().parentSpanId;
         }
     }
+    if (!waitUntil([&] { return exporter.exportedOk() == 2; })) {
+        FAIL("both spans must export");
+    }
 
     const auto requests = collector.requests();
     if (requests.size() != 2) FAIL("expected two POSTs (child then parent)");
@@ -536,6 +601,9 @@ static void test_json_string_escaping() {
         foundation::SpanScope span("a\"b\\c\nd\te\rf\bg\x01h\fv");
         span.setAttribute("esc", std::string("x\"y\\z\n"));
     }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("escaped span must export");
+    }
 
     const auto requests = collector.requests();
     if (requests.size() != 1) FAIL("expected one POST");
@@ -565,6 +633,9 @@ static void test_non_2xx_response_counts_failed_and_warns() {
     OtlpTraceExporter exporter(endpointConfig(collector.port(), std::chrono::milliseconds{2000}));
     if (!exporter.install()) FAIL("install");
     { foundation::SpanScope span("unit.reject"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportFailed() == 1; })) {
+        FAIL("retried 500 must count as failed");
+    }
 
     if (exporter.exportedOk() != 0) FAIL("500 must not count as exported");
     if (exporter.exportFailed() != 1) FAIL("500 must count as failed");
@@ -599,6 +670,9 @@ static void test_connection_refused_fails_fast() {
     if (!exporter.install()) FAIL("install");
     const auto began = std::chrono::steady_clock::now();
     { foundation::SpanScope span("unit.refused"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportFailed() == 1; })) {
+        FAIL("refused must count as failed");
+    }
     const auto elapsed = std::chrono::steady_clock::now() - began;
 
     if (exporter.exportFailed() != 1) FAIL("refused must count as failed");
@@ -619,6 +693,9 @@ static void test_silent_collector_times_out() {
     if (!exporter.install()) FAIL("install");
     const auto began = std::chrono::steady_clock::now();
     { foundation::SpanScope span("unit.timeout"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportFailed() == 1; })) {
+        FAIL("timeout must count as failed");
+    }
     const auto elapsed = std::chrono::steady_clock::now() - began;
 
     if (exporter.exportFailed() != 1) FAIL("timeout must count as failed");
@@ -641,7 +718,9 @@ static void test_collector_close_and_garbage_fail() {
         OtlpTraceExporter closer(endpointConfig(collector.port(), std::chrono::milliseconds{2000}));
         if (!closer.install()) FAIL("install");
         { foundation::SpanScope span("unit.closed"); static_cast<void>(span); }
-        if (closer.exportFailed() != 1) FAIL("eof must count as failed");
+        if (!waitUntil([&] { return closer.exportFailed() == 1; })) {
+            FAIL("eof must count as failed");
+        }
         closer.uninstall();
         collector.stop();
     }
@@ -651,7 +730,9 @@ static void test_collector_close_and_garbage_fail() {
         OtlpTraceExporter garbage(endpointConfig(collector.port(), std::chrono::milliseconds{2000}));
         if (!garbage.install()) FAIL("install");
         { foundation::SpanScope span("unit.garbage"); static_cast<void>(span); }
-        if (garbage.exportFailed() != 1) FAIL("garbage status must count as failed");
+        if (!waitUntil([&] { return garbage.exportFailed() == 1; })) {
+            FAIL("garbage status must count as failed");
+        }
         garbage.uninstall();
         collector.stop();
     }
@@ -667,6 +748,9 @@ static void test_fragmented_response_still_parses() {
     OtlpTraceExporter exporter(endpointConfig(collector.port(), std::chrono::milliseconds{2000}));
     if (!exporter.install()) FAIL("install");
     { foundation::SpanScope span("unit.fragmented"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("fragmented 200 must export");
+    }
     if (exporter.exportedOk() != 1) FAIL("fragmented 200 must export");
     PASS();
 }
@@ -684,6 +768,9 @@ static void test_chained_emitter_and_uninstall_restore() {
 
     { foundation::SpanScope span("unit.chained"); static_cast<void>(span); }
     if (capture.spans.size() != 1) FAIL("chained emitter must still see spans");
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("exporter must export");
+    }
     if (collector.requests().size() != 1) FAIL("exporter must export");
 
     exporter.uninstall();
@@ -704,6 +791,9 @@ static void test_double_install_is_idempotent() {
     if (!exporter.install()) FAIL("first install");
     if (!exporter.install()) FAIL("second install");
     { foundation::SpanScope span("unit.twice"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("idempotent install must export once");
+    }
     if (collector.requests().size() != 1) FAIL("idempotent install must export once");
     if (exporter.exportedOk() != 1) FAIL("single export count");
     PASS();
@@ -735,16 +825,18 @@ static void test_injected_transport_receives_target_and_body() {
 
     OtlpTraceExporter::Target gotTarget;
     std::string gotBody;
-    int calls = 0;
+    std::atomic<int> calls{0};
     OtlpTraceExporter::Config config;
     config.enabled = true;
     config.endpoint = "http://10.0.0.2:9443/x/y";
     config.timeout = std::chrono::milliseconds{7};
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
     OtlpTraceExporter exporter(
         config,
         [&](const OtlpTraceExporter::Target& target, const std::string& body,
             std::chrono::milliseconds /*timeout*/) {
-            ++calls;
+            calls.fetch_add(1);
             gotTarget = target;
             gotBody = body;
             return OtlpTraceExporter::PostResult{true, 200};
@@ -757,8 +849,11 @@ static void test_injected_transport_receives_target_and_body() {
         spanId = span.context().spanId;
         span.setAttribute("seam", std::string("ok"));
     }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("injected transport must be called");
+    }
 
-    if (calls != 1) FAIL("fake transport must be called once");
+    if (calls.load() != 1) FAIL("fake transport must be called once");
     if (gotTarget.host != "10.0.0.2" || gotTarget.port != 9443 ||
         gotTarget.path != "/x/y") {
         FAIL("resolved target mismatch");
@@ -794,6 +889,335 @@ static void test_encodeTraces_nonfinite_double_as_text() {
     PASS();
 }
 
+// --- 异步批量（todo「批量、重试、异步队列后置登记」落地批） ---------------
+
+static void test_batch_accumulates_until_size() {
+    TEST("batching: spans accumulate to batchSize in a single POST");
+    EmitterReset emitterReset;
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply200)) FAIL("collector start");
+
+    OtlpTraceExporter::Config config =
+        endpointConfig(collector.port(), std::chrono::milliseconds{2000});
+    config.batchSize = 3;
+    config.flushInterval = std::chrono::seconds{60};  // 周期不可能先到
+    OtlpTraceExporter exporter(config);
+    if (!exporter.install()) FAIL("install");
+
+    {
+        foundation::SpanScope a("unit.batch.a");
+        static_cast<void>(a);
+    }
+    {
+        foundation::SpanScope b("unit.batch.b");
+        static_cast<void>(b);
+    }
+    {
+        foundation::SpanScope c("unit.batch.c");
+        static_cast<void>(c);
+    }
+    if (!waitUntil([&] { return exporter.exportedOk() == 3; })) {
+        FAIL("three spans must export");
+    }
+
+    const auto requests = collector.requests();
+    if (requests.size() != 1) FAIL("batch must share a single POST");
+    const auto bodyBegin = requests.front().find("\r\n\r\n");
+    if (bodyBegin == std::string::npos) FAIL("request must be complete");
+    const std::string body = requests.front().substr(bodyBegin + 4);
+    if (countOf(body, "\"name\":\"unit.batch.") != 3) FAIL("three span names");
+    if (countOf(body, "\"traceId\":") != 3) FAIL("three spans in payload");
+    if (countOf(body, "\"resource\":") != 1) FAIL("resource emitted once");
+    if (!bracesBalanced(body)) FAIL("batch payload must balance braces");
+    PASS();
+}
+
+static void test_flush_interval_exports_partial_batch() {
+    TEST("flush interval exports a partial batch and idles without POSTs");
+    EmitterReset emitterReset;
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply200)) FAIL("collector start");
+
+    OtlpTraceExporter::Config config =
+        endpointConfig(collector.port(), std::chrono::milliseconds{2000});
+    config.batchSize = 32;  // 单 span 永远满不了批 → 只能由兜底周期触发
+    config.flushInterval = std::chrono::milliseconds{50};
+    OtlpTraceExporter exporter(config);
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.partial"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("periodic flush must export the lone span");
+    }
+    if (collector.requests().size() != 1) FAIL("one POST for one span");
+
+    // 空队列静默：周期再过几轮也不得凭空发包（无 span 零请求）。
+    std::this_thread::sleep_for(std::chrono::milliseconds{150});
+    if (collector.requests().size() != 1) FAIL("idle exporter must not POST");
+    PASS();
+}
+
+static void test_retry_recovers_after_transient_failures() {
+    TEST("retry: transient failures recover within maxAttempts, zero warn");
+    EmitterReset emitterReset;
+    LoggerReset loggerReset;
+
+    std::atomic<int> calls{0};
+    OtlpTraceExporter::Config config;
+    config.enabled = true;
+    config.endpoint = "http://10.0.0.2:9443/x/y";
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
+    config.maxAttempts = 3;
+    config.retryBackoff = std::chrono::milliseconds{1};
+    OtlpTraceExporter exporter(
+        config,
+        [&](const OtlpTraceExporter::Target&, const std::string&,
+            std::chrono::milliseconds) {
+            const int attempt = calls.fetch_add(1);
+            return attempt < 2 ? OtlpTraceExporter::PostResult{false, 500}
+                               : OtlpTraceExporter::PostResult{true, 200};
+        });
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.retry.ok"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("third attempt must succeed");
+    }
+    if (calls.load() != 3) FAIL("two failures plus one success = three attempts");
+    if (exporter.exportFailed() != 0) FAIL("recovered batch must not count failed");
+    for (const auto& record : loggerReset.captured->drain()) {
+        if (record.message == "otlp.traces.export.failed") {
+            FAIL("recovered export must not warn");
+        }
+    }
+    PASS();
+}
+
+static void test_retry_exhaustion_warns_once_for_the_batch() {
+    TEST("retry: exhaustion drops the batch once with a single warn");
+    EmitterReset emitterReset;
+    LoggerReset loggerReset;
+
+    std::atomic<int> calls{0};
+    OtlpTraceExporter::Config config;
+    config.enabled = true;
+    config.endpoint = "http://10.0.0.2:9443/x/y";
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
+    config.maxAttempts = 3;
+    config.retryBackoff = std::chrono::milliseconds{1};
+    OtlpTraceExporter exporter(
+        config,
+        [&](const OtlpTraceExporter::Target&, const std::string&,
+            std::chrono::milliseconds) {
+            calls.fetch_add(1);
+            return OtlpTraceExporter::PostResult{false, 503};
+        });
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.retry.fail"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportFailed() == 1; })) {
+        FAIL("exhausted retry must count the batch");
+    }
+    if (calls.load() != 3) FAIL("exactly maxAttempts attempts");
+    if (exporter.exportedOk() != 0) FAIL("nothing succeeded");
+
+    int warnCount = 0;
+    std::int64_t status = 0;
+    for (const auto& record : loggerReset.captured->drain()) {
+        if (record.message != "otlp.traces.export.failed") continue;
+        ++warnCount;
+        for (const auto& attr : record.attrs) {
+            if (attr.key == "http_status") status = std::get<std::int64_t>(attr.value);
+        }
+    }
+    if (warnCount != 1) FAIL("exhaustion must warn exactly once");
+    if (status != 503) FAIL("warn carries the last attempt status");
+    PASS();
+}
+
+static void test_queue_overflow_drops_new_spans() {
+    TEST("queue overflow drops new spans and counts them as failed");
+    EmitterReset emitterReset;
+
+    // 闸门：seam 进入后阻塞到 release——确保 worker 拿走首 span 后停在
+    // 传输里，期间灌满队列再溢出。wait_for 自带 2s 上界，FAIL 早退不
+    // 会在析构 join 上卡死。
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool released = false;
+    int entered = 0;
+
+    OtlpTraceExporter::Config config;
+    config.enabled = true;
+    config.endpoint = "http://10.0.0.2:9443/x/y";
+    config.batchSize = 1;
+    config.flushInterval = std::chrono::milliseconds{10};
+    config.maxAttempts = 1;
+    config.maxQueue = 2;
+    OtlpTraceExporter exporter(
+        config,
+        [&](const OtlpTraceExporter::Target&, const std::string&,
+            std::chrono::milliseconds) {
+            std::unique_lock lock(gateMutex);
+            ++entered;
+            gateCv.notify_all();
+            static_cast<void>(gateCv.wait_for(lock, std::chrono::seconds{2},
+                                              [&] { return released; }));
+            return OtlpTraceExporter::PostResult{true, 200};
+        });
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.queue.1"); static_cast<void>(span); }
+    if (!waitUntil([&] {
+            const std::lock_guard lock(gateMutex);
+            return entered >= 1;
+        })) {
+        {
+            const std::lock_guard lock(gateMutex);
+            released = true;
+        }
+        gateCv.notify_all();
+        FAIL("worker must enter transport for the first span");
+    }
+    // worker 已停在传输（队列空）：s2/s3 占满上限 2，s4 溢出被丢。
+    { foundation::SpanScope span("unit.queue.2"); static_cast<void>(span); }
+    { foundation::SpanScope span("unit.queue.3"); static_cast<void>(span); }
+    { foundation::SpanScope span("unit.queue.4"); static_cast<void>(span); }
+    {
+        const std::lock_guard lock(gateMutex);
+        released = true;
+    }
+    gateCv.notify_all();
+
+    if (!waitUntil([&] {
+            return exporter.exportedOk() == 3 && exporter.exportFailed() == 1;
+        })) {
+        FAIL("three spans export and one overflows");
+    }
+    PASS();
+}
+
+static void test_uninstall_drains_pending_spans() {
+    TEST("uninstall drains the pending batch before joining");
+    EmitterReset emitterReset;
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply200)) FAIL("collector start");
+
+    OtlpTraceExporter::Config config =
+        endpointConfig(collector.port(), std::chrono::milliseconds{2000});
+    config.batchSize = 10;                          // 满不了批
+    config.flushInterval = std::chrono::seconds{60};  // 周期不可能先到
+    OtlpTraceExporter exporter(config);
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.drain"); static_cast<void>(span); }
+    // 此刻 worker 必然还在等（batch 未满、周期未到）——卸载必须排空，
+    // 且 join 返回即同步收口（后续断言无需轮询）。
+    exporter.uninstall();
+    if (collector.requests().size() != 1) FAIL("pending span must flush on uninstall");
+    if (exporter.exportedOk() != 1) FAIL("drained span counts as exported");
+    if (exporter.installed()) FAIL("uninstall must clear installed");
+    PASS();
+}
+
+static void test_stopping_drain_skips_retries() {
+    TEST("stopping drain posts once without retry");
+    EmitterReset emitterReset;
+    LoggerReset loggerReset;
+
+    std::atomic<int> calls{0};
+    OtlpTraceExporter::Config config;
+    config.enabled = true;
+    config.endpoint = "http://10.0.0.2:9443/x/y";
+    config.batchSize = 10;
+    config.flushInterval = std::chrono::seconds{60};
+    config.maxAttempts = 3;
+    config.retryBackoff = std::chrono::milliseconds{1};
+    OtlpTraceExporter exporter(
+        config,
+        [&](const OtlpTraceExporter::Target&, const std::string&,
+            std::chrono::milliseconds) {
+            calls.fetch_add(1);
+            return OtlpTraceExporter::PostResult{false, 503};
+        });
+    if (!exporter.install()) FAIL("install");
+
+    { foundation::SpanScope span("unit.stop.drain"); static_cast<void>(span); }
+    exporter.uninstall();
+    if (calls.load() != 1) FAIL("drain must not retry (exit first)");
+    if (exporter.exportFailed() != 1) FAIL("drained batch counts as failed");
+    PASS();
+}
+
+static void test_reinstall_after_uninstall_resumes() {
+    TEST("reinstall after uninstall resets shutdown and exports again");
+    EmitterReset emitterReset;
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply200)) FAIL("collector start");
+
+    OtlpTraceExporter exporter(
+        endpointConfig(collector.port(), std::chrono::milliseconds{2000}));
+    if (!exporter.install()) FAIL("first install");
+    { foundation::SpanScope span("unit.reinstall.a"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("first export must complete");
+    }
+    exporter.uninstall();
+
+    if (!exporter.install()) FAIL("second install");
+    { foundation::SpanScope span("unit.reinstall.b"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 2; })) {
+        FAIL("second export must complete after reinstall");
+    }
+    exporter.uninstall();
+    if (collector.requests().size() != 2) FAIL("two rounds = two POSTs");
+    PASS();
+}
+
+static void test_degenerate_config_clamps_and_logs() {
+    TEST("zeroed batch/attempts/queue config clamps; interval zero allowed");
+    EmitterReset emitterReset;
+    LoggerReset loggerReset;
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply200)) FAIL("collector start");
+
+    OtlpTraceExporter::Config config =
+        endpointConfig(collector.port(), std::chrono::milliseconds{2000});
+    config.batchSize = 0;
+    config.flushInterval = std::chrono::milliseconds{0};
+    config.maxAttempts = 0;
+    config.maxQueue = 0;
+    OtlpTraceExporter exporter(config);
+    if (!exporter.install()) FAIL("install");
+
+    bool sawLog = false;
+    std::int64_t loggedBatch = 0;
+    std::int64_t loggedAttempts = 0;
+    std::int64_t loggedInterval = -1;
+    for (const auto& record : loggerReset.captured->drain()) {
+        if (record.message != "otlp.traces.export.enabled") continue;
+        sawLog = true;
+        for (const auto& attr : record.attrs) {
+            if (attr.key == "batch_size") loggedBatch = std::get<std::int64_t>(attr.value);
+            if (attr.key == "max_attempts") loggedAttempts = std::get<std::int64_t>(attr.value);
+            if (attr.key == "flush_interval_ms") loggedInterval = std::get<std::int64_t>(attr.value);
+        }
+    }
+    if (!sawLog) FAIL("enabled log must declare the batch face");
+    if (loggedBatch != 1) FAIL("zero batchSize must clamp to 1");
+    if (loggedAttempts != 1) FAIL("zero maxAttempts must clamp to 1");
+    if (loggedInterval != 0) FAIL("flush interval zero stays (immediate)");
+
+    { foundation::SpanScope span("unit.degenerate"); static_cast<void>(span); }
+    if (!waitUntil([&] { return exporter.exportedOk() == 1; })) {
+        FAIL("clamped config must still export");
+    }
+    if (collector.requests().size() != 1) FAIL("one POST");
+    PASS();
+}
+
 int main() {
     TcpConnection::globalInit();
 
@@ -816,6 +1240,15 @@ int main() {
     test_destructor_uninstalls();
     test_injected_transport_receives_target_and_body();
     test_encodeTraces_nonfinite_double_as_text();
+    test_batch_accumulates_until_size();
+    test_flush_interval_exports_partial_batch();
+    test_retry_recovers_after_transient_failures();
+    test_retry_exhaustion_warns_once_for_the_batch();
+    test_queue_overflow_drops_new_spans();
+    test_uninstall_drains_pending_spans();
+    test_stopping_drain_skips_retries();
+    test_reinstall_after_uninstall_resumes();
+    test_degenerate_config_clamps_and_logs();
 
     std::cout << "  passed=" << testsPassed << " failed=" << testsFailed << "\n";
     return testsFailed == 0 ? 0 : 1;

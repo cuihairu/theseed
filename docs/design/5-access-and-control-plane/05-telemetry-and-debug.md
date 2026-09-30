@@ -131,8 +131,9 @@ Grafana / Alerting
 
 **数据外发默认关闭（硬性要求）**：`Config.enabled` 缺省 `false`，不显式
 置 true 就不安装、不外发、零网络副作用。开启且 endpoint 合法后，启动
-日志 `otlp.traces.export.enabled` 携带 `data_scope` 属性明示导出范围，
-与本节同源：
+日志 `otlp.traces.export.enabled` 携带 `data_scope` 与批量面属性
+（`batch_size` / `flush_interval_ms` / `max_attempts`）明示导出范围与
+外发口径，与本节同源：
 
 | 导出 | 不导出 |
 | --- | --- |
@@ -150,16 +151,23 @@ Grafana / Alerting
 的 `inet_pton` 同口径（拒绝前导零与越界段）。
 
 **传输与编码**：零第三方依赖（不引 OTel SDK / protobuf / abseil——
-vcpkg 工具链未装，引入需全量重建，沿既定降级路径）。每笔完结 span
-一次阻塞 POST，同步挂在发射钩子上，`Config.timeout`（缺省 500ms）即
-发射点阻塞上界；控制面 span 频率低（每 RPC 一笔）可接受。批量、重试
-与异步队列后置登记。
+vcpkg 工具链未装，引入需全量重建，沿既定降级路径）。**异步批量外发**：
+发射钩子只把 span 入队（链式转发仍在发射线程同步完成），后台 worker
+线程按 `Config.batchSize`（缺省 32）满批或 `Config.flushInterval`
+（缺省 1000ms）兜底周期取批，一次 POST 编码整批（`resourceSpans` 单
+资源 + `spans` 数组）；空队列不发包、不忙等。`Config.timeout`（缺省
+500ms）即单次 POST 的阻塞上界，发射钩子不再随网络等待。
 
-**失败语义**：建连失败 / 对端先关 / 超时 / 非 2xx 一律丢弃该 span 并
-`++exportFailed`，warn 日志 `otlp.traces.export.failed` 带 `http_status`
-（0 = 未收到响应）；不阻塞调用方超过 timeout。2xx 计 `exportedOk`，
-成功路径零日志。安装时链式保留宿主既有 `SpanEmitter`（导出后照常转
-发），`uninstall()` 与析构还原槽位。
+**失败语义**：建连失败 / 对端先关 / 超时 / 非 2xx 一律丢弃该批并
+`++exportFailed`（按批内 span 数计），warn 日志
+`otlp.traces.export.failed` 带 `http_status`（0 = 未收到响应）；
+**有界重试**：每批共 `Config.maxAttempts`（缺省 3）次尝试、相邻间隔
+`Config.retryBackoff`（缺省 50ms），不按状态码分流；停机排水只试一次
+（退出优先）。2xx 计 `exportedOk`（按批内 span 数计），成功路径零
+日志。队列满（`Config.maxQueue`，缺省 4096）丢新 span 并计
+`exportFailed`——本地过载只计数不刷屏。安装时链式保留宿主既有
+`SpanEmitter`（导出后照常转发），`uninstall()` 与析构还原槽位并
+join worker（排空残余队列后退出，卸载即同步收口点）。
 
 **配置面**：`MachineDaemon::Config::otlpTrace` 承载（daemon 是控制面
 span 属主；当前无生产宿主装配 daemon，配置面先行，装配随宿主落地）。

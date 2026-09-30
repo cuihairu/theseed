@@ -3,6 +3,7 @@
 #include "theseed/foundation/Logger.h"
 #include "theseed/runtime/TcpConnection.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -157,6 +158,33 @@ std::string unixNano(std::chrono::system_clock::time_point tp) {
     return std::to_string(nanos);
 }
 
+// 单个 span 对象（含自身花括号）：批量编码的公共单元。收尾 "] }" =
+// attributes 数组闭合 + span 对象闭合，其后的批次收尾由调用方补。
+void appendSpan(std::string& out, const foundation::Span& span) {
+    out += "{\"traceId\":";
+    appendJsonString(out, span.context.traceId);
+    out += ",\"spanId\":";
+    appendJsonString(out, span.context.spanId);
+    if (!span.context.parentSpanId.empty()) {
+        out += ",\"parentSpanId\":";
+        appendJsonString(out, span.context.parentSpanId);
+    }
+    out += ",\"name\":";
+    appendJsonString(out, span.name);
+    out += ",\"kind\":1,\"startTimeUnixNano\":\"";
+    out += unixNano(span.startTime);
+    out += "\",\"endTimeUnixNano\":\"";
+    out += unixNano(span.endTime);
+    out += "\",\"attributes\":[";
+    for (std::size_t i = 0; i < span.attrs.size(); ++i) {
+        if (i > 0) {
+            out.push_back(',');
+        }
+        appendAttribute(out, span.attrs[i]);
+    }
+    out += "]}";
+}
+
 std::string buildRequest(const OtlpTraceExporter::Target& target,
                          const std::string& body) {
     std::string request;
@@ -196,16 +224,37 @@ bool OtlpTraceExporter::install() {
         return false;
     }
     target_ = *target;
+    // 退化配置钳制（0 是无意义形态）：batchSize=0 会使取批恒空进而空
+    // POST 忙循环；maxAttempts=0 是不发包却计整批失败；maxQueue=0 是
+    // 入队恒丢。flushInterval ≤0 不钳（语义 = 有 span 即发，不忙等）。
+    if (config_.batchSize == 0) {
+        config_.batchSize = 1;
+    }
+    if (config_.maxAttempts == 0) {
+        config_.maxAttempts = 1;
+    }
+    if (config_.maxQueue == 0) {
+        config_.maxQueue = 1;
+    }
     previous_ = foundation::takeSpanEmitter();
     foundation::setSpanEmitter(
         [this](const foundation::Span& span) { onSpan(span); });
     installed_ = true;
+    // 重装复位（uninstall 置位的停机状态）；取批时钟自安装起算——首个
+    // 兜底周期从这里数。worker 在挂发射器之后起：其间入队的 span 由
+    // 谓词等待保证不丢唤醒。
+    stopping_ = false;
+    lastFlushAt_ = std::chrono::steady_clock::now();
+    worker_ = std::thread(&OtlpTraceExporter::workerLoop, this);
     // 硬要求①：开启即在启动日志明示导出的数据范围（span/trace 内容）。
     const foundation::LogAttribute endpointAttr = {"endpoint", config_.endpoint};
     const foundation::LogAttribute formatAttr = {"format", "otlp-http/json"};
     const foundation::LogAttribute scopeAttr = {"data_scope", std::string(kDataScope)};
+    const foundation::LogAttribute batchAttr = {"batch_size", static_cast<std::int64_t>(config_.batchSize)};
+    const foundation::LogAttribute intervalAttr = {"flush_interval_ms", static_cast<std::int64_t>(config_.flushInterval.count())};
+    const foundation::LogAttribute attemptsAttr = {"max_attempts", static_cast<std::int64_t>(config_.maxAttempts)};
     foundation::logInfo("otlp.traces.export.enabled",
-                        {endpointAttr, formatAttr, scopeAttr});
+                        {endpointAttr, formatAttr, scopeAttr, batchAttr, intervalAttr, attemptsAttr});
     return true;
 }
 
@@ -213,9 +262,19 @@ void OtlpTraceExporter::uninstall() {
     if (!installed_) {
         return;  // 未安装（含 disabled/非法 endpoint 的 install 失败形态）
     }
+    // 先还原槽位（新 span 不再入队），再停机排水并 join——卸载即同步
+    // 收口点：join 返回后 worker 不再碰本对象。发射与卸载并发的极窄
+    // 窗口里已过钩子分发的 span 可能残留队列（best-effort，析构释放，
+    // 不做 epoch 确认）。
     foundation::setSpanEmitter(previous_);
     previous_ = nullptr;
     installed_ = false;
+    {
+        const std::lock_guard lock(queueMutex_);
+        stopping_ = true;
+    }
+    flushCv_.notify_all();
+    worker_.join();
 }
 
 bool OtlpTraceExporter::installed() const noexcept { return installed_; }
@@ -275,34 +334,27 @@ std::optional<OtlpTraceExporter::Target> OtlpTraceExporter::resolveEndpoint(
 
 std::string OtlpTraceExporter::encodeTraces(const foundation::Span& span,
                                             std::string_view serviceName) {
+    return encodeTraces(std::vector<foundation::Span>{span}, serviceName);
+}
+
+std::string OtlpTraceExporter::encodeTraces(
+    const std::vector<foundation::Span>& spans, std::string_view serviceName) {
     std::string out;
     out += "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":";
     out += "\"service.name\",\"value\":{\"stringValue\":";
     appendJsonString(out, serviceName);
     out += "}}]},\"scopeSpans\":[{\"scope\":{\"name\":";
     appendJsonString(out, kScopeName);
-    out += "},\"spans\":[{\"traceId\":";
-    appendJsonString(out, span.context.traceId);
-    out += ",\"spanId\":";
-    appendJsonString(out, span.context.spanId);
-    if (!span.context.parentSpanId.empty()) {
-        out += ",\"parentSpanId\":";
-        appendJsonString(out, span.context.parentSpanId);
-    }
-    out += ",\"name\":";
-    appendJsonString(out, span.name);
-    out += ",\"kind\":1,\"startTimeUnixNano\":\"";
-    out += unixNano(span.startTime);
-    out += "\",\"endTimeUnixNano\":\"";
-    out += unixNano(span.endTime);
-    out += "\",\"attributes\":[";
-    for (std::size_t i = 0; i < span.attrs.size(); ++i) {
+    out += "},\"spans\":[";
+    for (std::size_t i = 0; i < spans.size(); ++i) {
         if (i > 0) {
             out.push_back(',');
         }
-        appendAttribute(out, span.attrs[i]);
+        appendSpan(out, spans[i]);
     }
-    out += "]}]}]}]}";
+    // 批次收尾（三对）：spans] scope元素} | scopeSpans] resSpans元素} |
+    // resourceSpans] 根}。
+    out += "]}" "]}" "]}";
     return out;
 }
 
@@ -371,21 +423,88 @@ OtlpTraceExporter::PostResult OtlpTraceExporter::postViaTcp(
 }
 
 void OtlpTraceExporter::onSpan(const foundation::Span& span) {
-    const std::string body = encodeTraces(span, config_.serviceName);
-    const PostResult result = post_(target_, body, config_.timeout);
-    if (result.ok) {
-        ++exportedOk_;
-    } else {
-        ++exportFailed_;
-        const foundation::LogAttribute endpointAttr = {"endpoint", config_.endpoint};
-        const foundation::LogAttribute statusAttr =
-            {"http_status", static_cast<std::int64_t>(result.status)};
-        foundation::logWarn("otlp.traces.export.failed",
-                            {endpointAttr, statusAttr});
+    {
+        const std::lock_guard lock(queueMutex_);
+        if (queue_.size() >= config_.maxQueue) {
+            // 本地过载：丢新 span 只计数不刷屏（传输失败才有 warn）。
+            ++exportFailed_;
+        } else {
+            queue_.push_back(span);
+        }
     }
+    flushCv_.notify_one();
     if (previous_) {
-        previous_(span);  // 链式：宿主既有发射器照常收到
+        previous_(span);  // 链式：宿主既有发射器在发射线程同步收到
     }
+}
+
+void OtlpTraceExporter::workerLoop() {
+    std::unique_lock lock(queueMutex_);
+    for (;;) {
+        // 满批或兜底周期到点即发；空队列无限等（无 span 零请求、不忙
+        // 等，谓词防丢唤醒）；停机跳过等待直接排水。
+        const bool flushDue =
+            !queue_.empty() &&
+            (queue_.size() >= config_.batchSize ||
+             std::chrono::steady_clock::now() >=
+                 lastFlushAt_ + config_.flushInterval);
+        if (!stopping_ && !flushDue) {
+            if (queue_.empty()) {
+                flushCv_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+            } else {
+                flushCv_.wait_until(lock, lastFlushAt_ + config_.flushInterval);
+            }
+            continue;  // 醒来重算到期（新 span / 周期到点 / 停机）
+        }
+        if (stopping_ && queue_.empty()) {
+            break;  // 排空且停机：退出（uninstall 在此 join）
+        }
+        // 取一批（≤batchSize）。draining = 停机排水，sendBatch 只试一次。
+        const std::size_t takeCount = std::min(queue_.size(), config_.batchSize);
+        std::vector<foundation::Span> batch;
+        batch.reserve(takeCount);
+        for (std::size_t i = 0; i < takeCount; ++i) {
+            batch.push_back(std::move(queue_[i]));
+        }
+        queue_.erase(queue_.begin(),
+                     queue_.begin() + static_cast<std::ptrdiff_t>(takeCount));
+        lastFlushAt_ = std::chrono::steady_clock::now();
+        const bool draining = stopping_;
+        lock.unlock();
+        sendBatch(batch, draining);
+        lock.lock();
+    }
+}
+
+void OtlpTraceExporter::sendBatch(const std::vector<foundation::Span>& batch,
+                                  bool draining) {
+    const std::string body = encodeTraces(batch, config_.serviceName);
+    // 有界重试：停机排水只试一次（退出优先），否则共 maxAttempts 次
+    // 尝试、相邻间隔 retryBackoff；不按状态码分流（有界尝试 + 控制面
+    // 低频，避免 4xx 分流的分支面）。
+    const std::uint32_t attempts = draining ? 1u : config_.maxAttempts;
+    PostResult result;
+    for (std::uint32_t attempt = 0; attempt < attempts; ++attempt) {
+        if (attempt > 0) {
+            std::this_thread::sleep_for(config_.retryBackoff);
+        }
+        result = post_(target_, body, config_.timeout);
+        if (result.ok) {
+            break;
+        }
+    }
+    if (result.ok) {
+        exportedOk_ += static_cast<std::uint64_t>(batch.size());
+        return;
+    }
+    // 失败语义：整批丢弃 + 计数（按批内 span 数）+ 一次 warn（末次尝试
+    // 的 http_status，0 = 无响应）。warn 先于计数：异步下观测者先见日志
+    // 再见计数。
+    const foundation::LogAttribute endpointAttr = {"endpoint", config_.endpoint};
+    const foundation::LogAttribute statusAttr =
+        {"http_status", static_cast<std::int64_t>(result.status)};
+    foundation::logWarn("otlp.traces.export.failed", {endpointAttr, statusAttr});
+    exportFailed_ += static_cast<std::uint64_t>(batch.size());
 }
 
 }  // namespace theseed::control::machine

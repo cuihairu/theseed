@@ -30,6 +30,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <sys/socket.h>
@@ -167,16 +168,23 @@ std::uint32_t firstManagedPid(const std::string& json) {
 // （与 daemon 审计同一线程假设）。
 class CapturingLogger final : public foundation::ILogger {
 public:
+    // OTLP trace 导出的失败 warn 由后台 worker 线程落（本文件断言线程
+    // 并发 drain），故捕获侧加锁。
     void log(foundation::LogRecord record) override {
+        const std::lock_guard lock(mutex_);
         records_.push_back(std::move(record));
     }
     void setLevel(foundation::LogLevel level) override { level_ = level; }
     foundation::LogLevel level() const override { return level_; }
 
-    std::vector<foundation::LogRecord> drain() { return std::move(records_); }
+    std::vector<foundation::LogRecord> drain() {
+        const std::lock_guard lock(mutex_);
+        return std::move(records_);
+    }
 
 private:
     foundation::LogLevel level_ = foundation::LogLevel::Debug;
+    std::mutex mutex_;
     std::vector<foundation::LogRecord> records_;
 };
 
@@ -716,6 +724,9 @@ int main() {
             // 不得留存指向临时记录的指针。
             bool sawEnabledLog = false;
             std::string scope;
+            std::int64_t batchSize = 0;
+            std::int64_t flushInterval = -1;
+            std::int64_t maxAttempts = 0;
             for (const auto& record : captured->drain()) {
                 if (record.message != "otlp.traces.export.enabled")
                     continue;
@@ -723,6 +734,12 @@ int main() {
                 for (const auto& attr : record.attrs) {
                     if (attr.key == "data_scope")
                         scope = std::get<std::string>(attr.value);
+                    if (attr.key == "batch_size")
+                        batchSize = std::get<std::int64_t>(attr.value);
+                    if (attr.key == "flush_interval_ms")
+                        flushInterval = std::get<std::int64_t>(attr.value);
+                    if (attr.key == "max_attempts")
+                        maxAttempts = std::get<std::int64_t>(attr.value);
                 }
             }
             if (!sawEnabledLog)
@@ -731,12 +748,22 @@ int main() {
                 scope.find("parentSpanId") == std::string::npos ||
                 scope.find("not exported") == std::string::npos)
                 FAIL("enabled log must state the exported data scope");
+            // 批量/重试面随启动日志明示（缺省值即生产口径）。
+            if (batchSize != 32 || flushInterval != 1000 || maxAttempts != 3)
+                FAIL("enabled log must declare the batching defaults");
 
             { foundation::SpanScope probe("unit.otlp.on"); static_cast<void>(probe); }
+            // 外发已异步入队：worker 按缺省兜底周期（1000ms）取批，失败
+            // 日志晚于本线程断言到达——轮询到超时为止（3s > 1s 周期 +
+            // 拒连重试的有界时延）。
             bool sawFailedLog = false;
-            for (const auto& record : captured->drain()) {
-                if (record.message == "otlp.traces.export.failed")
-                    sawFailedLog = true;
+            for (int i = 0; i < 300 && !sawFailedLog; ++i) {
+                for (const auto& record : captured->drain()) {
+                    if (record.message == "otlp.traces.export.failed")
+                        sawFailedLog = true;
+                }
+                if (!sawFailedLog)
+                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
             }
             if (!sawFailedLog)
                 FAIL("installed exporter must attempt the configured endpoint");

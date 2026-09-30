@@ -69,11 +69,20 @@ metrics 半边同日继落，见顶部「OTel metrics 导出器」批）。零�
    OTLP/HTTP 约定、path 缺省 /）：仓内 transport 无 DNS 与 TLS，需域名
    或加密在 endpoint 前置本地代理；IPv4 校验与 TcpConnection 的
    inet_pton 同口径（前导零、越界段、4+ 位段全拒）。
-4. **每 span 一 POST、同步挂发射钩子**：timeout（缺省 500ms）即发射点
-   阻塞上界，控制面每 RPC 一笔的低频可接受；失败（建连拒/对端先关/
-   超时/非 2xx）丢弃 + `++exportFailed` + warn 带 http_status（0=无响
-   应），2xx 计 exportedOk 且成功路径零日志；批量化/重试/异步队列后置
-   登记。
+4. **异步批量外发（后置登记项同日落地）**：发射钩子只入队（链式转发
+   仍在发射线程同步完成），后台 worker 按 `batchSize`（缺省 32）满批
+   或 `flushInterval`（缺省 1000ms）兜底周期取批，一次 POST 编码整批；
+   空队列不发包不忙等。timeout（缺省 500ms）即单次 POST 阻塞上界，
+   发射钩子不再随网络等待。失败（建连拒/对端先关/超时/非 2xx）丢弃
+   该批 + `++exportFailed`（按批内 span 数计）+ warn 带 http_status
+   （0=无响应）；有界重试每批共 `maxAttempts`（缺省 3）次尝试、相邻
+   间隔 `retryBackoff`（缺省 50ms），不按状态码分流，停机排水只试一次
+   （退出优先）；2xx 计 exportedOk（按批内 span 数计）且成功路径零
+   日志。队列满（`maxQueue` 缺省 4096）丢新 span 并计 exportFailed——
+   本地过载只计数不刷屏。退化配置（batchSize/maxAttempts/maxQueue = 0）
+   install 时钳 ≥1；flushInterval ≤0 不钳（语义 = 有 span 即发）。
+   uninstall 与析构还原槽位并 join worker（排空残余队列后退出，卸载
+   即同步收口点）；重装复位停机状态并重开 worker。
 5. **开启即全量导出无采样**；安装链式保留宿主既有 SpanEmitter（导出后
    照常转发），uninstall 与析构还原槽位——析构兜底卸载保证全局槽位绝
    不悬挂已亡实例的回调（测试进程实证过无兜底的悬挂 segfault）。
