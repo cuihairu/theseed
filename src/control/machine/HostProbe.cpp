@@ -315,7 +315,7 @@ void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t&
         // 接口名裁空白；聚合口径排除回环（与物理流量统计的目标一致）
         auto name = line.substr(0, colon);
         const auto nameBegin = name.find_first_not_of(" \t");
-        if (nameBegin == std::string::npos) {  // 冒号前全空白的行在真实 /proc/net/dev 不存在（数据行恒有接口名）
+        if (nameBegin == std::string::npos) {  // LCOV_EXCL_BR_LINE 冒号前全空白的行在真实 /proc/net/dev 不存在（数据行恒有接口名）
             continue;                          // LCOV_EXCL_LINE
         }
         name = name.substr(nameBegin, name.find_last_not_of(" \t") - nameBegin + 1);

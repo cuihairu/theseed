@@ -98,6 +98,64 @@ static void testPrimingWindowExhausted() {
     else FAIL("expected 0.0, got " + std::to_string(summary.cpuUsage));
 }
 
+// primeCpuSample 中 cpuTickQuery_ 成功但 total 未推进（<= baseTotal）：
+// 验证分支进入 continue 而非 return，窗口耗尽后沿用基线。
+static void testPrimeCpuSampleQuerySucceedsButTotalNotAdvanced() {
+    TEST("primeCpuSample query succeeds but total not advanced");
+
+    // 首读给出基线，后续查询恒返回相同 total（total == baseTotal）
+    struct SameTotalTicks {
+        int calls = 0;
+        bool operator()(std::uint64_t& idle, std::uint64_t& total) {
+            ++calls;
+            idle = 1000;
+            total = 4000;  // 恒等于基线
+            return true;   // 查询成功，但 total 未推进
+        }
+    } sameTotal;
+
+    LocalHostProbe::Config config;
+    config.minCpuWindow = std::chrono::milliseconds{30};
+    config.retryGranularity = std::chrono::milliseconds{5};
+    LocalHostProbe probe(config, std::ref(sameTotal));
+
+    const auto summary = probe.sample();
+    // 窗口耗尽未推进：cpuUsage 保持 0（首采粘滞值）
+    if (summary.cpuUsage == 0.0 && sameTotal.calls >= 2) PASS();
+    else FAIL("cpuUsage=" + std::to_string(summary.cpuUsage) + " calls=" + std::to_string(sameTotal.calls));
+}
+
+// 自举窗口内查询失败（/proc/stat 瞬时不可读的退化情形）：cpuTickQuery_
+// 假臂在窗口轮询中短路，空转至窗口耗尽，保持基线读数不闪回 0。
+static void testPrimingWindowQueryFailure() {
+    TEST("priming window tolerates query failure");
+
+    // 首采给出基线，其后每次查询都失败——ScriptedTicks 耗尽后恒重复末组
+    // （恒真），窗口内的假查询需显式注入。
+    struct FailAfterFirst {
+        int calls = 0;
+        bool operator()(std::uint64_t& idle, std::uint64_t& total) {
+            if (++calls > 1) return false;
+            idle = 100;
+            total = 400;
+            return true;
+        }
+    } flaky;
+
+    LocalHostProbe::Config config;
+    config.minCpuWindow = std::chrono::milliseconds{30};
+    config.retryGranularity = std::chrono::milliseconds{5};
+    LocalHostProbe probe(config, std::ref(flaky));
+
+    const auto summary = probe.sample();
+    // 窗口耗尽未推进：totalDelta=0 → 粘滞初值 0。calls>1 断言窗口内确有一次
+    // 假查询走过（deadline 在 now+30ms，首轮必进），否则本例会退化成
+    // testPrimingWindowExhausted 的同义重复而假臂静默失覆。
+    if (summary.cpuUsage == 0.0 && flaky.calls > 1) PASS();
+    else FAIL("expected 0.0 with window query failure, got " + std::to_string(summary.cpuUsage) +
+              " after " + std::to_string(flaky.calls) + " calls");
+}
+
 // 粘滞读数：两次采样间 tick 零推进（窗口短于粒度）沿用上次读数，不闪回 0。
 static void testStickyReadingOnZeroDelta() {
     TEST("zero-delta window keeps previous reading");
@@ -358,6 +416,8 @@ int main() {
 
     testFirstSamplePriming();
     testPrimingWindowExhausted();
+    testPrimeCpuSampleQuerySucceedsButTotalNotAdvanced();
+    testPrimingWindowQueryFailure();
     testStickyReadingOnZeroDelta();
     testQueryFailureKeepsReading();
     testClampBounds();

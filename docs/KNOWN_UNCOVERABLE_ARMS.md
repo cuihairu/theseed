@@ -50,6 +50,12 @@ arc 级甄别后的排除清单：**下列臂不为补测而硬凑**——测试
 - 199 connect 同步成功臂（0F）[structural]：Linux 非阻塞 connect 完成
   握手才返回 0，回环握手异步，恒 EINPROGRESS。
 
+### HostProbe.cpp
+- 318 冒号前全空白行防御臂 [structural]：sumNetworkBytes 匿名命名空间
+  解析器只吃真实 /proc/net/dev 流（istream 无注入缝），数据行恒有接口
+  名（码注释自认）。行豁免在 319 continue（LCOV_EXCL_LINE），分支归因
+  本行——BR_LINE 已照 ProcessPortScanner 200 先例对齐。
+
 ## login
 
 ### LoginApp.cpp
