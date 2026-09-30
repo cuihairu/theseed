@@ -659,6 +659,108 @@ int main() {
         PASS();
     }
 
+    TEST("otlp export wiring: default off, enabled installs exporter, stop restores");
+    {
+        // 端点口径：先占一个端口再放掉——连接多半被拒；即便端口被复用
+        // 成 daemon 自身监听口，无人应答也会走超时失败臂。两种结局都以
+        // 「失败日志 + failed 计数」作导出器已安装的观测信号，无需真收集端。
+        theseed::runtime::TcpListener portHolder;
+        if (!portHolder.listen("127.0.0.1", 0))
+            FAIL("port holder listen");
+        const auto refusedPort = portHolder.localPort();
+        portHolder.close();
+
+        const auto captured = std::make_shared<CapturingLogger>();
+        auto previousLogger = foundation::takeGlobalLogger();
+        foundation::setGlobalLogger(captured);
+        const auto spans = std::make_shared<std::vector<foundation::Span>>();
+        foundation::setSpanEmitter(
+            [spans](const foundation::Span& span) { spans->push_back(span); });
+
+        // --- 默认关闭臂：缺省配置不安装导出器——无 otlp 日志、槽位不动
+        {
+            MachineDaemon::Config offConfig;
+            offConfig.listenPort = 0;
+            MachineAgent offAgent(
+                std::make_unique<LocalHostProbe>(),
+                std::make_unique<LocalProcessSupervisor>());
+            MachineDaemon offDaemon(offConfig, offAgent);
+            if (!offDaemon.start()) FAIL("default daemon must start");
+            { foundation::SpanScope probe("unit.otlp.off"); static_cast<void>(probe); }
+            offDaemon.stop();
+            for (const auto& record : captured->drain()) {
+                if (record.message.rfind("otlp.", 0) == 0)
+                    FAIL("disabled daemon must not log otlp records");
+            }
+            if (spans->size() != 1)
+                FAIL("disabled daemon must not hijack the emitter slot");
+            spans->clear();
+        }
+
+        // --- 开启臂：start 安装导出器——启动日志明示数据范围；span 外发
+        //     尝试可达（refused 端点 → 失败日志）；链式发射器照常收到
+        {
+            MachineDaemon::Config onConfig;
+            onConfig.listenPort = 0;
+            onConfig.otlpTrace.enabled = true;
+            onConfig.otlpTrace.endpoint =
+                "http://127.0.0.1:" + std::to_string(refusedPort) + "/v1/traces";
+            onConfig.otlpTrace.timeout = std::chrono::milliseconds{200};
+            MachineAgent onAgent(
+                std::make_unique<LocalHostProbe>(),
+                std::make_unique<LocalProcessSupervisor>());
+            MachineDaemon onDaemon(onConfig, onAgent);
+            if (!onDaemon.start()) FAIL("enabled daemon must start");
+
+            // drain() 按值返回：断言所需字段必须在循环内就地取出，
+            // 不得留存指向临时记录的指针。
+            bool sawEnabledLog = false;
+            std::string scope;
+            for (const auto& record : captured->drain()) {
+                if (record.message != "otlp.traces.export.enabled")
+                    continue;
+                sawEnabledLog = true;
+                for (const auto& attr : record.attrs) {
+                    if (attr.key == "data_scope")
+                        scope = std::get<std::string>(attr.value);
+                }
+            }
+            if (!sawEnabledLog)
+                FAIL("enabled daemon must log otlp.traces.export.enabled");
+            if (scope.find("traceId") == std::string::npos ||
+                scope.find("parentSpanId") == std::string::npos ||
+                scope.find("not exported") == std::string::npos)
+                FAIL("enabled log must state the exported data scope");
+
+            { foundation::SpanScope probe("unit.otlp.on"); static_cast<void>(probe); }
+            bool sawFailedLog = false;
+            for (const auto& record : captured->drain()) {
+                if (record.message == "otlp.traces.export.failed")
+                    sawFailedLog = true;
+            }
+            if (!sawFailedLog)
+                FAIL("installed exporter must attempt the configured endpoint");
+            if (spans->size() != 1)
+                FAIL("chained emitter must still receive spans");
+
+            // --- 卸载臂：stop 后发射器还原，span 不再外发
+            onDaemon.stop();
+            captured->drain();
+            spans->clear();
+            { foundation::SpanScope probe("unit.otlp.after"); static_cast<void>(probe); }
+            for (const auto& record : captured->drain()) {
+                if (record.message.rfind("otlp.", 0) == 0)
+                    FAIL("stopped daemon must not export spans");
+            }
+            if (spans->size() != 1)
+                FAIL("stop must restore the previous emitter");
+        }
+
+        foundation::setSpanEmitter(nullptr);
+        foundation::setGlobalLogger(std::move(previousLogger));
+        PASS();
+    }
+
     TEST("audit ring evicts oldest beyond capacity");
     {
         LocalHostProbe probe;

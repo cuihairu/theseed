@@ -71,3 +71,16 @@ target_link_libraries(
     PRIVATE theseed_control theseed_runtime)
 
 add_test(NAME theseed_ops_control_center_test COMMAND theseed_ops_control_center_test)
+
+# OTLP trace 导出器的回环 e2e 用例走真实 TCP（TcpListener/TcpConnection），
+# 同仓内 TCP 测试惯例门控 Linux。
+if(UNIX AND NOT APPLE)
+add_executable(theseed_otlp_trace_exporter_test OtlpTraceExporterTest.cpp)
+
+target_link_libraries(
+    theseed_otlp_trace_exporter_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_control)
+
+add_test(NAME theseed_otlp_trace_exporter_test COMMAND theseed_otlp_trace_exporter_test)
+endif()

@@ -356,6 +356,11 @@ bool MachineDaemon::start() {
         return false;
     }
     announceToCenter();
+    // OTLP trace 外发（05-telemetry §2.1，默认关闭）：开启且 endpoint 合法
+    // 才安装，安装成功即由导出器打数据范围启动日志；关闭/非法为无副作用
+    // 空转（非法 endpoint 的 warn 由导出器记），不影响 daemon 上线。
+    otlpExporter_ = std::make_unique<OtlpTraceExporter>(config_.otlpTrace);
+    static_cast<void>(otlpExporter_->install());
     // 命名属性单行化（同上，规避续行归因）
     const auto listenPort = static_cast<std::int64_t>(listener_.localPort());
     const foundation::LogAttribute portAttr = {"listen_port", listenPort};
@@ -388,6 +393,7 @@ void MachineDaemon::stop() {
     nodeId_.clear();
     listener_.close();
     hub_.reset();
+    otlpExporter_.reset();  // 导出器卸载还原全局发射器（dtor 内同样触发）
 }
 
 void MachineDaemon::tick() {

@@ -3,6 +3,7 @@
 #include "theseed/control/machine/AccessControl.h"
 #include "theseed/control/machine/AuditEntry.h"
 #include "theseed/control/machine/MachineAgent.h"
+#include "theseed/control/machine/OtlpTraceExporter.h"
 #include "theseed/control/machine/ProfileRelay.h"
 #include "theseed/foundation/SessionStore.h"
 #include "theseed/runtime/RuntimeTransport.h"
@@ -257,6 +258,12 @@ public:
         // 即推送（含元数据与只读字节）。nullptr = 不回传，中心侧下载
         // 无副本可用（诚实报无副本）。不持有；生命周期由调用方保证。
         INodeArtifactSink* artifactSink = nullptr;
+        // OTLP trace 外发（05-telemetry §2.1 导出层；trace 先行，metrics
+        // 后置）。默认关闭（enabled=false，硬要求①）：显式开启且 endpoint
+        // 合法时 start() 安装全局 span 发射器，把已完成 span 编码为
+        // OTLP/HTTP JSON POST 到 endpoint；安装成功即打启动日志明示导出
+        // 的数据范围。stop()/析构卸载还原。
+        OtlpTraceExporter::Config otlpTrace;
     };
 
     MachineDaemon(Config config, IMachineAgent& agent);
@@ -324,6 +331,9 @@ private:
     IMachineAgent& agent_;
     runtime::TcpListener listener_;
     std::shared_ptr<runtime::TransportHub> hub_;
+    // OTLP trace 导出器：start() 依配置创建并安装（默认关闭则 install
+    // 空转），stop()/析构卸载还原全局发射器。
+    std::unique_ptr<OtlpTraceExporter> otlpExporter_;
     std::vector<AuditEntry> auditLog_;
     std::chrono::steady_clock::time_point lastReportAt_{};
     // 本机身份（快照 hostname，06 的 nodeId 口径）；空 = 未向中心登记。

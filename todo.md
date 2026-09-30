@@ -1,5 +1,49 @@
 # TODO
 
+## OTel 导出器：控制面 trace 的 OTLP/HTTP JSON 外发（2026-09-30）✓
+
+遗留项「OTel 导出器仍开放」的 trace 半落地（05-telemetry §2.1 同步成文；
+metrics 导出仍开放登记）。零第三方依赖与数据外发默认关闭为两条硬约束，
+设计假设自行拍板如下：
+
+1. **零依赖口径**：不引 OTel SDK / protobuf / abseil（vcpkg 工具链未装，
+   引入需全量重建——沿 2026-09-26 导出面板的既定降级路径）；OTLP/HTTP
+   JSON 报文手写编码，HTTP 传输复用仓内 `runtime::TcpConnection` 一次性
+   阻塞 POST（`OtlpTraceExporter::HttpPost` 接缝供测试注入假传输）。
+2. **数据外发默认关闭（硬要求）**：`Config.enabled` 缺省 false，不显式
+   开启不安装不外发、零网络副作用；开启且 endpoint 合法即打启动日志
+   `otlp.traces.export.enabled`，`data_scope` 属性明示导出范围（已完结
+   span 的 name/traceId/spanId/parentSpanId/起止纳秒/attributes 分型值/
+   resource service.name/scope 名；不导出结构化日志、metrics、请求与
+   审计载荷），与 05 遥测 §2.1 文档同源。
+3. **endpoint 仅 `http://<IPv4字面量>[:port][/path]`**（端口缺省 4318
+   OTLP/HTTP 约定、path 缺省 /）：仓内 transport 无 DNS 与 TLS，需域名
+   或加密在 endpoint 前置本地代理；IPv4 校验与 TcpConnection 的
+   inet_pton 同口径（前导零、越界段、4+ 位段全拒）。
+4. **每 span 一 POST、同步挂发射钩子**：timeout（缺省 500ms）即发射点
+   阻塞上界，控制面每 RPC 一笔的低频可接受；失败（建连拒/对端先关/
+   超时/非 2xx）丢弃 + `++exportFailed` + warn 带 http_status（0=无响
+   应），2xx 计 exportedOk 且成功路径零日志；批量化/重试/异步队列后置
+   登记。
+5. **开启即全量导出无采样**；安装链式保留宿主既有 SpanEmitter（导出后
+   照常转发），uninstall 与析构还原槽位——析构兜底卸载保证全局槽位绝
+   不悬挂已亡实例的回调（测试进程实证过无兜底的悬挂 segfault）。
+6. **配置面 = `MachineDaemon::Config::otlpTrace`**：daemon 是控制面 span
+   属主；当前无生产宿主装配 daemon（仅测试实例化），配置面先行、装配随
+   宿主落地。scope 名 theseed.control.tracing、kind=INTERNAL、status 不
+   写（UNSET）；service.name 缺省 theseed。
+7. **测试**：新 theseed_otlp_trace_exporter_test 19 例（resolveEndpoint
+   正反 23+2 形态、状态行解码、默认关/非法端点、回环 e2e 200/500/拒绝
+   连接/静默超时/关连接/拆包状态行/不可路由建连即败、JSON 转义全族、
+   链式与还原、双 install 幂等、析构兜底、注入传输接缝、非有限 double
+   文本化；MockOtlpCollector 多连接回环收集器，Linux 门控同 TCP 测试惯
+   例）+ MachineDaemonTest 装配线用例（默认关不碰槽位、开启装导出器且
+   data_scope 落日志、stop 还原）。
+
+验证口径：gcc14-gate 全量重链 119/119 全绿、gcovr 行 100%（11970/11970）
+函数 100%（1667/1667）双过门（分支 97.9% 8635/8818 信息口径）；clang-
+debug 全量重链零警告、119/119 全绿。
+
 ## 上轮遗留收尾：LoadProfiler 时序 flake 修复 + gcovr BR 识别结论勘误（2026-09-30）✓
 
 前轮收尾两个尾巴一次清：①macOS CI 腿偶发 theseed_load_profiler_test
@@ -1129,7 +1173,8 @@ Phase 2「更完整的登录与会话运维命令」里前置已真实存在的�
 
 对齐 05-telemetry-and-debug 的导出层（OTel SDK/OTLP 判定过重：vcpkg 工具
 链未安装，引入需全量重建 protobuf/abseil 与 preset 改造——按既定降级路径
-先落只读导出面，OTel 迁移留待依赖就绪）：
+先落只读导出面，OTel 迁移留待依赖就绪；2026-09-30 trace 半边以零依赖
+OTLP/HTTP JSON 先行落地，见顶部「OTel 导出器」批）：
 
 1. **导出面盘点**：OpsServer 的 GET /metrics 早已接线
    `OpsInspector::renderMetrics()` → 全局 `MetricsRegistry::renderText()`
@@ -1480,7 +1525,9 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
   汇入中心可查询审计环形）
 - ~~与 `Telemetry` 的指标、日志、trace 联动~~（2026-09-26 完成控制面切片：
   machine/ops 双侧计数与水位仪表、结构化审计与生命周期日志、
-  execute SpanScope + 日志自动 trace 关联；OTel 导出器仍开放）
+  execute SpanScope + 日志自动 trace 关联；OTel 导出器 trace 半边
+  2026-09-30 零依赖 OTLP/HTTP JSON 落地，见顶部「OTel 导出器」批，
+  metrics 导出仍开放）
 - 更完整的单元测试与跨平台 CI 构建矩阵（矩阵部分 2026-09-27 落地：
   新增 macos-latest job（复用 clang-debug preset），矩阵成
   linux 三连 + coverage 门 + windows + macos；「更完整的单元测试」仍开放）
