@@ -1590,6 +1590,20 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 - 更完整的单元测试与跨平台 CI 构建矩阵（矩阵部分 2026-09-27 落地：
   新增 macos-latest job（复用 clang-debug preset），矩阵成
   linux 三连 + coverage 门 + windows + macos；「更完整的单元测试」仍开放）
+  - 分支口径第五批收割（2026-09-30）：gcovr 分支口径（8806/9007，
+    201 miss）逐文件对账 docs/KNOWN_UNCOVERABLE_ARMS.md——7 个在册
+    文件（MachineDaemon 77 / OpsControlCenter 34 / LoginApp 32 /
+    ProcessPortScanner 13 / SessionStore 4 / TcpConnection 2 /
+    TickDiagnostics 2）逐行吻合（MachineDaemon 因异步批量接线行号
+    下移已按当前源重编登记）；未登记的仅 OTel 两导出器
+    （OtlpTraceExporter 21 / OtlpMetricsExporter 16），其中 3 条真臂
+    已补测收口：resolveEndpoint 尾残留端口拒绝、decodeHttpStatus 码
+    后 >'9' 截断、postViaTcp 1xx 非 2xx 分类（OtlpTraceExporterTest
+    28→29 测试，三连跑无 flake）；其余 34 条为 LogAttribute
+    variant-noise 与 vector 列初始化 inline-noise，已按维护纪律入册。
+    测量纪律增补：分支口径缺口定位须用「清扫后两轮全量 ctest 并集」，
+    单轮扫描 e2e 时序臂整域缺席会伪报缺口（首轮 DBApp 伪报 88 条
+    二轮归零实证，已记入台账测量口径）。行/函数门禁保持 100% 不回退。
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 

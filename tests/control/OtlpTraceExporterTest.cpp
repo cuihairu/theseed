@@ -102,6 +102,7 @@ class MockOtlpCollector {
 public:
     enum class Mode {
         Reply200,
+        Reply100,
         Reply500,
         Silent,
         CloseOnAccept,
@@ -186,6 +187,11 @@ private:
         case Mode::Reply200:
             writeAll(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json"
                            "\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            break;
+        case Mode::Reply100:
+            // 1xx：状态码可解码但落入非 2xx 分类的下方边界（≥200 假臂）。
+            writeAll(conn, "HTTP/1.1 100 Continue\r\n"
+                           "Content-Length: 0\r\nConnection: close\r\n\r\n");
             break;
         case Mode::Reply500:
             writeAll(conn, "HTTP/1.1 500 Internal Server Error\r\n"
@@ -343,6 +349,7 @@ static void test_resolveEndpoint_rejects_invalid_urls() {
         "http://[::1]:4318/v1",        // IPv6
         "http://1.2.3.4:/v1",          // 空端口
         "http://1.2.3.4:abc/v1",       // 非数字端口
+        "http://1.2.3.4:6553x/v1",     // 数字前缀 + 尾部残留（ptr != end 臂）
         "http://1.2.3.4:70000/v1",     // 越界端口
         "http://1.2.3.4:0/v1",         // 0 端口
         "http://1.2.3.4:65536/v1",     // 越界端口
@@ -384,6 +391,9 @@ static void test_decodeHttpStatus_variants() {
     if (OtlpTraceExporter::decodeHttpStatus(
             "HTTP/1.1 500 Internal Server Error\r\n") != 500) {
         FAIL("500 not decoded");
+    }
+    if (OtlpTraceExporter::decodeHttpStatus("HTTP/1.1 200x\r\n\r\n") != 200) {
+        FAIL("code with trailing garbage above '9' -> 200");
     }
     PASS();
 }
@@ -652,6 +662,24 @@ static void test_non_2xx_response_counts_failed_and_warns() {
     }
     if (!sawWarn) FAIL("failed export must warn");
     if (status != 500) FAIL("warn must carry the http status");
+    PASS();
+}
+
+static void test_postViaTcp_classifies_informational_status_failed() {
+    TEST("postViaTcp classifies 1xx status as failed and carries the code");
+    MockOtlpCollector collector;
+    if (!collector.start(MockOtlpCollector::Mode::Reply100)) FAIL("collector start");
+
+    const auto target = OtlpTraceExporter::resolveEndpoint(
+        "http://127.0.0.1:" + std::to_string(collector.port()) + "/v1/traces");
+    if (!target) FAIL("target resolve");
+
+    // 直测缺省传输（不经 worker/重试）：1xx 状态码可解码但非 2xx，
+    // 须判失败且原样携带状态码（0 = 无响应语义保持不变）。
+    const auto result = OtlpTraceExporter::postViaTcp(
+        *target, "{}", std::chrono::milliseconds{2000});
+    if (result.ok) FAIL("1xx must not count as ok");
+    if (result.status != 100) FAIL("status must carry the decoded code");
     PASS();
 }
 
@@ -1231,6 +1259,7 @@ int main() {
     test_child_span_carries_parent_span_id();
     test_json_string_escaping();
     test_non_2xx_response_counts_failed_and_warns();
+    test_postViaTcp_classifies_informational_status_failed();
     test_connection_refused_fails_fast();
     test_silent_collector_times_out();
     test_collector_close_and_garbage_fail();

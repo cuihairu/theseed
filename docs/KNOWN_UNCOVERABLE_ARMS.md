@@ -6,6 +6,11 @@ arc 级甄别后的排除清单：**下列臂不为补测而硬凑**——测试
 库机械弧。每条带定性类别与背书来源；产品码在场的豁免均带行内
 `LCOV_EXCL_BR_LINE` / 码注释。
 
+测量口径【2026-09-30 增补】：本台账行号以「清扫 gcda 后连跑两轮全量
+ctest 的并集」为准——单轮扫描会因 e2e 进程内 tick 循环的时序臂整域
+缺席而虚报缺口（首轮 DBApp 曾伪报 88 条，二轮并集归零），勿据单轮
+数据补登记或硬凑测试。
+
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
 弧：hash 桶/字符串 SSO 副本/三目汇合副本）；`structural`（结构性不
@@ -15,15 +20,33 @@ arc 级甄别后的排除清单：**下列臂不为补测而硬凑**——测试
 
 ### MachineDaemon.cpp
 - 25 toBytes 空串防御臂 [structural]：全部调用点传非空串。
-- 171-173/191-193/362-363/385/457/462/715/717/803/933/994/995/1073/
-  1151/1225/1274-1276/1355-1356/1426-1427/1545-1546/1659-1660/1695-
-  1696/1727/1783/1826 [variant-noise / inline-noise]：log attr 行与
-  三目/字符串拼接汇合弧。
-- 529 `!nodeId_.empty()` 假臂 [structural]：auditSink publish 跳过臂，
+- 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
+  1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
+  1743/1799/1842 [variant-noise / inline-noise]：log attr 行与三目/
+  字符串拼接汇合弧。【2026-09-30 重编】源文件在异步批量接线后行号
+  整体下移（171 起同值、362-363→373-374 与 385→396 为 +11、457 及
+  之后 +16），定性不变。
+- 545 `!nodeId_.empty()` 假臂 [structural]：auditSink publish 跳过臂，
   nodeId 取自真机 hostname 恒非空（空身份臂已由 f3d7a47 在
   relayArtifacts 守卫面清掉，publish 面的对称臂由同一探针事实封死）。
-- 995 `ok ? 0x01 : 0x00` 假臂 [structural]：terminate ok=false = 枚举
+- 1011 `ok ? 0x01 : 0x00` 假臂 [structural]：terminate ok=false = 枚举
   ↔处置固有竞态，码注释自认 MVP SIGTERM 语义。
+
+### OtlpTraceExporter.cpp
+【2026-09-30 第五批分支收割】21 条登记缺口中 3 条真臂已补测收口：
+315 from_chars 解析成功但尾部残留臂（`http://…:6553x` 拒绝表新增）、
+375 状态码后紧随 >'9' 字符的 break 臂（`HTTP/1.1 200x` 纯函数断言
+新增）、409 真实传输收到 1xx 状态的 ≥200 假臂（回环收集端 Reply100
+直测 postViaTcp 新增）——余量重扫后登记如下：
+- 222-223/250-252/256/503/506 [variant-noise]：log attr 行（invalid
+  endpoint warn、enabled 六属性、failed warn）。
+- 337 单 span 重载委托行首尾 2 弧 [inline-noise]：std::vector 列表
+  初始化机械弧，行已执行；语义臂由批量重载共用实现覆盖。
+
+### OtlpMetricsExporter.cpp
+- 161-162/170-175/250/253 [variant-noise]：log attr 行（invalid
+  endpoint warn、enabled 四属性、failed warn）。【2026-09-30 第五批
+  分收割登记】
 
 ### OpsControlCenter.cpp
 - 62-64/103/121/210/230/259/286/297/337/358/380 [variant-noise]。
