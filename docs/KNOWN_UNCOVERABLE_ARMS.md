@@ -11,6 +11,13 @@ ctest 的并集」为准——单轮扫描会因 e2e 进程内 tick 循环的时
 缺席而虚报缺口（首轮 DBApp 曾伪报 88 条，二轮并集归零），勿据单轮
 数据补登记或硬凑测试。
 
+【2026-10-01 重审翻案轮】重点大户逐条重审：MachineDaemon 77→74 弧
+（25/545/1011 三条结构臂补测收口移出）、OpsControlCenter 34→33（311
+entityId 命中臂补测收口移出）、ProcessPortScanner 13→11（172 fd 耗尽
+臂、255 >64KB 截断臂补测收口移出，源内两处 LCOV_EXCL 区随之摘除、
+其后行号 -2 重编）、LoginApp 32 不变（论证补强留档）。34 条 OTel
+noise 不动。总缺口 198→192，行/函数门禁双 100% 不回退。
+
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
 弧：hash 桶/字符串 SSO 副本/三目汇合副本）；`structural`（结构性不
@@ -19,18 +26,21 @@ ctest 的并集」为准——单轮扫描会因 e2e 进程内 tick 循环的时
 ## control
 
 ### MachineDaemon.cpp
-- 25 toBytes 空串防御臂 [structural]：全部调用点传非空串。
 - 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
   1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
   1743/1799/1842 [variant-noise / inline-noise]：log attr 行与三目/
   字符串拼接汇合弧。【2026-09-30 重编】源文件在异步批量接线后行号
   整体下移（171 起同值、362-363→373-374 与 385→396 为 +11、457 及
-  之后 +16），定性不变。
-- 545 `!nodeId_.empty()` 假臂 [structural]：auditSink publish 跳过臂，
-  nodeId 取自真机 hostname 恒非空（空身份臂已由 f3d7a47 在
-  relayArtifacts 守卫面清掉，publish 面的对称臂由同一探针事实封死）。
-- 1011 `ok ? 0x01 : 0x00` 假臂 [structural]：terminate ok=false = 枚举
-  ↔处置固有竞态，码注释自认 MVP SIGTERM 语义。
+  之后 +16），定性不变。【2026-10-01 复核】余 35 行全部满足噪声签名
+  （行已执行 + 存在 0 弧）；396 系 logInfo("machine.daemon.stopped")
+  行，其 0 弧对为 attr variant 未用替代的构造弧（字符串实参恒走
+  string 替代），stop() 守卫本身在 395 且 sink×身份四象限全测。
+【2026-10-01 翻案】原三条结构臂补测收口移出：25 toBytes 空串防御臂
+（空载荷剖面下载——EmptyPayloadProfiler 真 + 空串驱动 memcpy 跳过，
+响应合法零字节）、545 auditSink publish 空身份跳过臂（空 hostname 假
+agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0x00`
+假臂（假 agent 处置恒失败——ESRCH 竞态语义的确定性替身，0x00 响应
+可及；"恒竞态不可稳定注入"论断不成立）。
 
 ### OtlpTraceExporter.cpp
 【2026-09-30 第五批分支收割】21 条登记缺口中 3 条真臂已补测收口：
@@ -54,28 +64,28 @@ ctest 的并集」为准——单轮扫描会因 e2e 进程内 tick 循环的时
   inserted 真/假两语义臂均已测（12 真/1 假）。
 - 150 `!insertionOrder_.empty()` 假臂 [structural]：order 与 nodes_ 同
   步维护，nodes_ 超容量时 order 必非空；空表防御臂无路径。
-- 311 entityId 命中臂 [structural]：ProfileMeta 的 entity/entityType
-  维度无生产者（码注释自认「如实落空」），中心侧查询恒空。
+【2026-10-01 翻案】原 311 entityId 命中臂 [structural] 补测收口移出：
+中心过滤与数据来源解耦——假生产者填 entityId 后实体维命中即出行、
+未命中仍过滤（生产侧恒空仍是事实，但查询臂可及，非结构不可达）。
 
 ### ProcessPortScanner.cpp
 - 96 迭代中途 error 臂 [structural]：进程消失/权限竞态不可稳定注入
   （LCOV_EXCL 区）。
 - 111 `native.back() != ']'` 真臂 [structural]：/proc fd 链接恒规范
   （socket:[inode]），畸形形态防御。
-- 134/138/142/172/174/189/191/200/202/214/221/223/231/232/234/235/240/
-  242/255 [structural]：资源异常与平台窗口臂（/proc 恒在、合法 fd 的
+- 134/138/142/187/189/198/200/212/219/221/229/230/232/233/238/240
+  [structural]：资源异常与平台窗口臂（/proc 恒在、合法 fd 的
   fcntl/getsockopt/setsockopt 不失败、Linux 非阻塞 TCP connect 恒
-  EINPROGRESS、回环已连接 send 失败需即刻 RST、/health 响应恒小于
-  2KB）。【2026-09-30 勘误】行内豁免（LCOV_EXCL_* / LCOV_EXCL_BR_*）
-  对 gcovr 8.6 同样生效（A/B 实证：HostProbe:318 挂/撤 BR_LINE 对
-  同一 gcda，gcovr JSON 臂 gcovr/excluded 随之翻转；本条 200 的 0T
-  弧现由 BR_LINE 排除出分母，SocketDetail.h 同值链 22 弧同证）——
-  旧记「不识别、仅 lcov 生效」系观察混淆，详见 todo.md 2026-09-30
-  批。登记仍保留：定性/背书台账与维护纪律载体，非 gcovr 排除的
-  唯一依据（200 于当轮从 LINE 对齐为 BR_LINE，行口径与分支口径的
-  豁免各归其位）。
-- 199 connect 同步成功臂（0F）[structural]：Linux 非阻塞 connect 完成
-  握手才返回 0，回环握手异步，恒 EINPROGRESS。
+  EINPROGRESS、回环已连接 send 失败需即刻 RST）。【2026-10-01 翻案
+  轮重编】原 172 fd<0 臂与 255 >64KB 截断臂补测收口（setrlimit 压
+  RLIMIT_NOFILE 注入 fd 耗尽；70KB 回环应答注入读循环越界截断——
+  总量守卫的语义本就是为异常大响应兜底），源内两处 LCOV_EXCL 区
+  摘除、两行转入实测，其后行号 -2 位移（本条行号已按新源校准）。
+  行内豁免对 gcovr 8.6 生效的勘误（2026-09-30 批，详见 todo.md）
+  不变：登记仍是定性/背书台账，非 gcovr 排除的唯一依据。
+- 197 connect 同步成功臂（0F）[structural]：Linux 非阻塞 connect 完成
+  握手才返回 0，回环握手异步，恒 EINPROGRESS（2026-10-01 本机实证：
+  非阻塞 connect 对 127.0.0.1:9/:1 与 240.0.0.1 恒 errno 115）。
 
 ### HostProbe.cpp
 - 318 冒号前全空白行防御臂 [structural]：sumNetworkBytes 匿名命名空间
@@ -87,7 +97,9 @@ ctest 的并集」为准——单轮扫描会因 e2e 进程内 tick 循环的时
 
 ### LoginApp.cpp
 - 243/354 [structural]：LCOV_EXCL_BR_LINE 已标——Linux 非阻塞 connect
-  恒 EINPROGRESS，factory/真实 connect 失败臂不可达。
+  恒 EINPROGRESS，factory/真实 connect 失败臂不可达（2026-10-01 本机
+  实证背书：非阻塞 connect 对 127.0.0.1:9/:1 与 240.0.0.1 恒
+  errno 115，与 ProcessPortScanner:197 同证）。
 - 306-307/413-414/474-475/478/493-494/499-500 [variant-noise]。
 - 318/425 `!hub_` 臂 [structural]：tick() 的 `if (hub_)` 包住全部
   supervise 调用，stop() 置 Backoff 后 tick 不再进监督。

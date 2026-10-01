@@ -170,9 +170,7 @@ std::string probeProcessVersion(std::uint16_t port, std::chrono::milliseconds ti
 
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        // LCOV_EXCL_START fd 耗尽等资源异常，无法稳定注入
-        return "";
-        // LCOV_EXCL_STOP
+        return "";  // fd 上限耗尽等资源异常（测试以 setrlimit 压 0 注入）
     }
     // RAII 收口：任何 return 路径都关 fd，不留泄漏描述符
     struct FdGuard {
@@ -253,9 +251,7 @@ std::string probeProcessVersion(std::uint16_t port, std::chrono::milliseconds ti
         }
         response.append(buffer, static_cast<std::size_t>(received));
         if (response.size() > 64 * 1024) {
-            // LCOV_EXCL_START /health 恒小于 2KB，越界臂不可达
-            break;
-            // LCOV_EXCL_STOP
+            break;  // 异常大响应截断（测试以 70KB 回环应答注入）
         }
     }
 

@@ -710,6 +710,39 @@ int main() {
         PASS();
     }
 
+    TEST("entity dimension match emits rows when a producer fills entityId");
+    {
+        // entityId 命中臂的补测收口：中心过滤逻辑与数据来源解耦——
+        // 当前机器 agent 确无 entity 维生产者（恒空是生产侧事实），
+        // 但查询臂本身可测：假生产者填 entityId 后，实体维命中即出行，
+        // 未命中仍过滤。登记面据此翻案（臂可及，非结构不可达）。
+        OpsControlCenter::Config cfg;
+        cfg.profilePolicy.canAccess = {1};
+        cfg.roleBindings = {{1, AccessRole::Admin}};
+        OpsControlCenter entityCenter(cfg);
+
+        auto report = makeReport("node-e", 1.0, std::chrono::system_clock::now());
+        ProfileMeta meta;
+        meta.handle = 11;
+        meta.entityId = "ent-42";
+        meta.entityType = "Monster";
+        report.profiles.push_back(meta);
+        entityCenter.publish(report);
+
+        ProfileQuery byEntity;
+        byEntity.entityId = "ent-42";
+        auto rows = entityCenter.queryProfiles(1, byEntity);
+        EXPECT(rows.size() == 1 && rows[0].nodeId == "node-e" &&
+                   rows[0].meta.entityId == "ent-42",
+               "entity match emits the row");
+
+        ProfileQuery byMiss;
+        byMiss.entityId = "ent-43";
+        EXPECT(entityCenter.queryProfiles(1, byMiss).empty(),
+               "entity mismatch still filters");
+        PASS();
+    }
+
     TEST("artifact relay: center stores copies, download reads them back");
     {
         OpsControlCenter::Config cfg;

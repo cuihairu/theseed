@@ -47,12 +47,16 @@
 using theseed::control::machine::AccessRole;
 using theseed::control::machine::HostSummary;
 using theseed::control::machine::IHostProbe;
+using theseed::control::machine::IMachineAgent;
+using theseed::control::machine::IProfileMetaSource;
 using theseed::control::machine::LocalHostProbe;
 using theseed::control::machine::LocalProcessSupervisor;
 using theseed::control::machine::MachineAgent;
 using theseed::control::machine::MachineDaemon;
 using theseed::control::machine::NodeAuditEntry;
 using theseed::control::machine::NodeReport;
+using theseed::control::machine::NodeSummary;
+using theseed::control::machine::ProcessSummary;
 using theseed::control::machine::ProfileQuery;
 using theseed::control::ops::OpsControlCenter;
 namespace foundation = theseed::foundation;
@@ -213,6 +217,49 @@ public:
                          std::string& /*out*/) const override {
         return false;
     }
+};
+
+// 空载荷剖面出口假件：句柄有效但字节为空——toBytes 的空串防御臂
+// （memcpy 跳过路径）由此可及，响应合法且零字节。
+class EmptyPayloadProfiler final : public theseed::runtime::ITickProfiler {
+public:
+    std::uint64_t trigger() override { return 77; }
+    bool sampling() const override { return false; }
+    std::vector<theseed::runtime::ITickProfiler::ArtifactMeta> listArtifacts()
+        const override {
+        theseed::runtime::ITickProfiler::ArtifactMeta meta;
+        meta.handle = 77;
+        meta.tickCount = 1;
+        return {meta};
+    }
+    bool artifactPayload(std::uint64_t /*handle*/,
+                         std::string& out) const override {
+        out.clear();
+        return true;
+    }
+};
+
+// 治理路径假件：空 hostname（身份口径不可注册形态）+ 单一可处置假
+// 进程 + 处置恒失败（SIGTERM ESRCH 竞态 ok=false 的确定性替身）。
+// pid 取 uint32 上界：真实 pid 恒 ≤ pid_max（≤2^22），永不与守护进程
+// 自身 pid 撞车，自保拒绝臂确定性不触发。
+class GovernorAgent final : public IMachineAgent {
+public:
+    NodeSummary snapshot() override { return {}; }
+    bool execute(const std::string& /*command*/,
+                 const std::string& /*args*/) override {
+        return false;
+    }
+    std::vector<ProcessSummary> enumerateHostProcesses() override {
+        ProcessSummary rogue;
+        rogue.name = "rogue-worker";
+        rogue.pid = 4294967295u;
+        return {rogue};
+    }
+    bool terminateHostProcess(std::uint32_t /*pid*/) override { return false; }
+    void report() override {}
+    void setDraining(bool /*draining*/) override {}
+    void setProfileMetaSource(IProfileMetaSource* /*source*/) override {}
 };
 
 // 会话命令部分失败臂的竞争模拟件：包一层内存提供者，armed 时对后缀
@@ -1862,6 +1909,83 @@ int main() {
         if (skipCenter.downloadProfileArtifact(kClientComponent, skipNodeId,
                                                77, out))
             FAIL("unreadable frame must not be stored");
+        PASS();
+    }
+
+    TEST("profile download of an empty payload succeeds with a zero-byte frame");
+    {
+        // 句柄有效、字节为空：artifactPayload 真 + 空串走 toBytes 的
+        // 空串防御臂（memcpy 跳过），响应仍合法——消费端拿到的就是
+        // 零字节帧，而非错误。
+        OpsControlCenter emptyCenter;
+        MachineAgent emptyAgent(std::make_unique<LocalHostProbe>(),
+                                std::make_unique<LocalProcessSupervisor>());
+        EmptyPayloadProfiler emptyProfiler;
+        MachineDaemon::Config emptyConfig;
+        emptyConfig.listenPort = 0;
+        emptyConfig.auditSink = &emptyCenter;
+        emptyConfig.tickProfiler = &emptyProfiler;
+        emptyConfig.diagnosticsPolicy.canAccess = {kClientComponent};
+        emptyConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
+        MachineDaemon emptyDaemon(emptyConfig, emptyAgent);
+        if (!emptyDaemon.start()) FAIL("empty-payload daemon start failed");
+        auto emptyTick = [&emptyDaemon] { emptyDaemon.tick(); };
+
+        RawClient emptyClient;
+        if (!emptyClient.connect(emptyDaemon.localPort()))
+            FAIL("empty-payload connect failed");
+        emptyClient.settle(emptyTick);
+
+        RuntimeInvocation resp;
+        if (!emptyClient.request(MachineMethod::kProfile, payloadOf("77"),
+                                 emptyTick, resp))
+            FAIL("no response to empty-payload download");
+        if (resp.method != MachineMethod::kProfileOk)
+            FAIL("wrong method: " + resp.method);
+        if (!resp.payload.empty())
+            FAIL("empty payload must yield a zero-byte frame, got " +
+                 std::to_string(resp.payload.size()) + " bytes");
+        emptyDaemon.stop();
+        PASS();
+    }
+
+    TEST("terminate failure reports 0x00; empty identity drops audit and skips deregister");
+    {
+        // 三臂一次收口：ok=false（枚举↔处置固有竞态的处置失败语义，
+        // 响应 0x00 而非拒绝）、appendAudit 的空身份跳过臂（auditSink
+        // 在、nodeId 空 → 不发布，中心环形保持空）、stop() 的空身份
+        // 注销跳过臂（reportSink 在、nodeId 空 → 不注销）。
+        OpsControlCenter sinkCenter;
+        GovernorAgent governorAgent;
+        MachineDaemon::Config governorConfig;
+        governorConfig.listenPort = 0;
+        governorConfig.reportSink = &sinkCenter;
+        governorConfig.auditSink = &sinkCenter;
+        governorConfig.processGovernPolicy.trustedComponents = {kClientComponent};
+        governorConfig.processGovernPolicy.killableNames = {"rogue-worker"};
+        governorConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
+        MachineDaemon governorDaemon(governorConfig, governorAgent);
+        if (!governorDaemon.start()) FAIL("governor daemon start failed");
+        auto governorTick = [&governorDaemon] { governorDaemon.tick(); };
+
+        RawClient governorClient;
+        if (!governorClient.connect(governorDaemon.localPort()))
+            FAIL("governor connect failed");
+        governorClient.settle(governorTick);
+
+        RuntimeInvocation resp;
+        if (!governorClient.request(MachineMethod::kTerminate,
+                                    payloadOf("4294967295"), governorTick, resp))
+            FAIL("no response to governor terminate");
+        if (resp.method != MachineMethod::kTerminateOk)
+            FAIL("wrong method: " + resp.method);
+        if (resp.payload.size() != 1 || resp.payload[0] != std::byte{0x00})
+            FAIL("failed disposition must report 0x00");
+        if (!sinkCenter.auditTrail().empty())
+            FAIL("empty identity must drop audit at the sink");
+        if (!sinkCenter.snapshotNodes().empty())
+            FAIL("empty identity must never register");
+        governorDaemon.stop();  // 空身份：注销臂跳过（不 crash 即语义）
         PASS();
     }
 

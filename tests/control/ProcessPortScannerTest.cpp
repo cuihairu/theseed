@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <string>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -342,6 +343,42 @@ int main(int argc, char** argv) {
         if (!probeProcessVersion(truncated.port).empty())
             FAIL("truncated value must give empty");
         truncated.thread.join();
+        PASS();
+    }
+
+    TEST("probeProcessVersion yields empty when the fd limit is exhausted");
+    {
+        // fd<0 臂的补测收口：RLIMIT_NOFILE 软限压 0 使 socket() 恒
+        // EMFILE，资源耗尽臂稳定注入（原登记「无法稳定注入」翻案）。
+        // 端口必须先于限额变更取得（freePort 自身要开 socket）；断言
+        // 前恢复限额，失败路径不污染后续用例。
+        const auto port = freePort();
+        rlimit oldLimit{};
+        if (::getrlimit(RLIMIT_NOFILE, &oldLimit) != 0)
+            FAIL("getrlimit failed");
+        rlimit zeroLimit = oldLimit;
+        zeroLimit.rlim_cur = 0;
+        if (::setrlimit(RLIMIT_NOFILE, &zeroLimit) != 0)
+            FAIL("setrlimit(0) failed");
+        const auto version = probeProcessVersion(port);
+        ::setrlimit(RLIMIT_NOFILE, &oldLimit);
+        if (!version.empty())
+            FAIL("exhausted fd limit must give empty");
+        PASS();
+    }
+
+    TEST("probeProcessVersion aborts reading an oversized response");
+    {
+        // >64KB 越界臂的补测收口：回环应答端回 70KB 无版本正文，读
+        // 循环的总量守卫触发 break（原登记「/health 恒小于 2KB」翻案
+        // ——守卫的语义本就是为这类异常响应兜底）。正文无版本键 →
+        // 探测返回空。
+        std::string giant = "HTTP/1.0 200 OK\r\nContent-Length: 70000\r\n\r\n";
+        giant.append(70000, 'x');
+        auto oversized = startReplyServer(giant);
+        if (!probeProcessVersion(oversized.port).empty())
+            FAIL("oversized response without version must give empty");
+        oversized.thread.join();
         PASS();
     }
 

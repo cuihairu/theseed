@@ -1604,6 +1604,26 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
     测量纪律增补：分支口径缺口定位须用「清扫后两轮全量 ctest 并集」，
     单轮扫描 e2e 时序臂整域缺席会伪报缺口（首轮 DBApp 伪报 88 条
     二轮归零实证，已记入台账测量口径）。行/函数门禁保持 100% 不回退。
+  - 分支登记面重审翻案轮（2026-10-01）：在册不可达臂逐条重审，重点
+    大户四件（MachineDaemon 77 / OpsControlCenter 34 / LoginApp 32 /
+    ProcessPortScanner 13）六条结构臂补测收口移出——MachineDaemon 25
+    （toBytes 空串防御臂，EmptyPayloadProfiler 空载荷下载）、545
+    （auditSink publish 空身份跳过臂，空 hostname 假 agent + 双 sink）、
+    1011（ok=false 0x00 臂，假 agent 处置恒失败的 ESRCH 竞态替身）、
+    OpsControlCenter 311（entityId 命中臂，假生产者填维度后命中出行）、
+    ProcessPortScanner 172（fd<0 资源耗尽臂，setrlimit 压 RLIMIT_NOFILE
+    注入，源内 LCOV_EXCL 区摘除转入实测）、255（>64KB 截断臂，70KB
+    回环应答注入总量守卫，源内 LCOV_EXCL 区摘除转入实测）。源内两处
+    摘除致 ProcessPortScanner ≥175 行号 -2 位移，登记已按新源重编。
+    LoginApp 32 弧不变、论证补强（243/354 增 2026-10-01 本机 errno 115
+    实证背书）。余 35 行噪声复核全部满足签名（行已执行 + 存在 0 弧），
+    396 系 logInfo 行 variant 噪声（守卫 395 已 sink×身份四象限全测）。
+    总缺口 198→192（MachineDaemon 77→74、Ops 34→33、Scanner 13→11），
+    行 12212/12212（+2 为摘除豁免后被测覆盖的两行）、函数 1689/1689
+    双 100% 不回退。34 条 OTel noise 不动。全量 ctest 120/120 两轮并集
+    全绿 + gcc14-gate 门禁 GATE_EXIT=0 + clang-debug 零警告；三支改动
+    测试三连跑无 flake（MachineDaemonTest/OpsControlCenterTest/
+    ProcessPortScannerTest）。
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 
