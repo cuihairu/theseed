@@ -26,13 +26,20 @@ SessionStore 44 照实重记（原描述误指向 41 行拼接，44 行实为 za
 索引键固定字面量构造）；TcpConnection 165 由 inline-noise 重归类为
 structural 平台窗口（ENOTCONN 真臂，Linux 本机实证不可达）；Ops 150、
 TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
-组补指令级背书（gcov -b -c 逐臂 taken 计数）；Entity.h 12 条模板
-内联副本边补登记 inline-noise。总缺口 192→204。
+组补指令级背书（gcov -b -c 逐臂 taken 计数）。【2026-10-01 照实
+重记】"Entity.h 12 条模板内联副本边、总缺口 192→204" 系非门禁口径
+单次扫描——现行两轮并集门禁实测该 12 行弧对全非零（231 taken
+[2,26]、326-331 [18]），Entity.h 真零弧 21 条（188/252/287/295/
+305/323，非 throw）全数被 --exclude-unreachable-branches 排除、不入
+缺口；总缺口维持 192（门禁 branches 8826/9018、行 12215/函数 1689
+双 100%、GATE_EXIT=0）。
 
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
 弧：hash 桶/字符串 SSO 副本/三目汇合副本）；`structural`（结构性不
-可达：守卫臂被上游不变量封死、平台窗口、枚举全覆盖的隐式出口）。
+可达：守卫臂被上游不变量封死、平台窗口、枚举全覆盖的隐式出口、
+异常展开落地 pad——仅语句内抛出 bad_alloc 级异常才可达的清理分派，
+测试不注入异常不可测）。
 
 ## control
 
@@ -60,6 +67,22 @@ TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
    双死块，三目 20/2 全走；1711 四弧 + 1712 两弧为 draining 嵌套三目，
    parsed 8/4 与 draining 6/2 全走）。行执行计数最低 2 次（1290/
    1291），余皆 ≥6。
+   【2026-10-01 续轮复核：74 弧机制翻案，variant-noise/inline-noise →
+   structural】上款逐臂 taken 计数事实不变（语义臂全 >0、零弧全
+   never），"未用 variant 替代/SSO 副本"机制归因不成立——objdump
+   指令级实证 74 弧全部为异常展开落地 pad（EH landing pad 清理分派）：
+   attr 行 variant 转换构造系 out-of-line call（170→20b7a8、171→
+   20e78c），库体不归因本行，且转换构造编译期定型、未用替代不生成码；
+   log 调用行本行无任何 variant 构造，死块 calls 14/15/18 内容为
+   ~vector/~LogAttribute/~basic_string 条件析构、位于 endbr64 pad
+   入口区；三目/拼接行无 variant，SSO/拷贝判据若在正常流必产生
+   taken 0 弧对，实测行内零弧全为成对 never、无一条非 throw 的
+   taken 0（无守卫可挡）。171（1e5683）与 373（1e88cd）死块指令级
+   同构 = endbr64 + r12b 构造完成标志 test/je + 条件 ~basic_string，
+   仅当语句内抛出 bad_alloc 级异常、栈展开清理已构造临时量时执行，
+   测试不可注入。74 弧登记不变，类别改判 structural 异常路径；
+   同签名 variant-noise 行（TickDiagnostics 39 等）机制同疑，留待
+   下轮逐文件重审。
 【2026-10-01 翻案】原三条结构臂补测收口移出：25 toBytes 空串防御臂
 （空载荷剖面下载——EmptyPayloadProfiler 真 + 空串驱动 memcpy 跳过，
 响应合法零字节）、545 auditSink publish 空身份跳过臂（空 hostname 假
@@ -186,7 +209,13 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
 - 231-232/326-331（成对）[inline-noise]：模板 `onPropertyChanged` 与
   `bindTypedMethodHandler` 多实例化内联展开的副本边——源码定型参数
   仅触发已测实例化，其余替代路径的构造/分支块为死码。gcov 指令级
-  显示对应行执行计数 >0 但分支/调用计数全 0。
+  显示对应行执行计数 >0 但分支/调用计数全 0。【2026-10-01 照实
+  重记】本条 12 弧在现行两轮并集门禁口径不可复现——231/232/326-331
+  弧对全非零（231 taken [2,26]、326-331 [18]），行执行 >0 而弧亦
+  >0；Entity.h 现行真零弧 21 条在 188/252/287/295/305/323（非
+  throw），全数被 --exclude-unreachable-branches 排除、不入门禁
+  缺口。"总缺口 192→204" 据此照实更正：门禁口径维持 192（实测
+  branches 8826/9018）。
 
 ---
 

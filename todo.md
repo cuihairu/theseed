@@ -1662,6 +1662,28 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
     零弧计数 204 不变，无产品码/测试改动。全量 ctest 120/120 两轮
     并集全绿 + gcc14-gate 门禁 GATE_EXIT=0（行 11573/11573、函数
     1673/1673 双 100%）。
+  - branch miss 复核重归类轮（2026-10-01）：上轮 74 弧 taken 计数复核
+    一致（语义臂全 >0、零弧全 never），机制归因翻案——objdump 指令级
+    实证 74 零弧全部为异常展开落地 pad（EH landing pad 清理分派）：
+    attr 行 variant 转换构造系 out-of-line call（170→20b7a8、171→
+    20e78c），库体不归因本行且转换构造编译期定型、未用替代不生成码；
+    log 调用行本行无任何 variant 构造，死块 calls 14/15/18 内容为
+    ~vector/~LogAttribute/~basic_string 条件析构（endbr64 pad 入口区）；
+    三目/拼接行无 variant，行内零弧全为成对 never、无一条非 throw 的
+    taken 0（无守卫可挡）。171（1e5683）与 373（1e88cd）死块指令级
+    同构 = endbr64 + r12b 构造完成标志 test/je + 条件 ~basic_string，
+    仅当语句内抛出 bad_alloc 级异常、栈展开清理已构造临时量时执行，
+    测试不可注入。74 弧类别改判 structural 异常路径，登记数量不变；
+    同签名 variant-noise 行（TickDiagnostics 39 等）机制同疑，留待
+    下轮逐文件重审。Entity.h 12 弧照实重记——现行两轮并集门禁口径
+    231/326-331 弧对全非零（231 taken [2,26]、326-331 [18]），真零弧
+    21 条（188/252/287/295/305/323，非 throw）全数被
+    --exclude-unreachable-branches 排除不入缺口，总缺口 204 照实更正
+    回门禁口径 192；上轮门禁行/函数计数 11573/1673 系非门禁树读数，
+    照实更正为 12215/1689。无产品码/测试改动。全量 ctest 120/120
+    两轮并集全绿（49.17s/66.86s）+ gcc14-gate 门禁 GATE_EXIT=0（行
+    12215/12215、函数 1689/1689 双 100%，branches 8826/9018、miss
+    192）+ clang-debug 零警告。
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 
