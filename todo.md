@@ -1646,7 +1646,8 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
     TcpConnection 116（4 次 SO_ERROR≠0 全走断连臂）、LoginApp
     318/320/322/328（1039/52/504 次评估计数与臂向）、Scanner
     96/111/142/187/212/219/238/197（百万次级评估 taken 0 计数）。
-    总缺口 192 不变，34 条 OTel noise 不动。全量 ctest 120/120 两轮
+    总缺口 192→204（Entity.h 模板内联副本边 12 条 inline-noise 补登记），
+34 条 OTel noise 不动。全量 ctest 120/120 两轮
     并集全绿 + gcc14-gate 门禁 GATE_EXIT=0 + clang-debug 零警告
     120/120；新增合成流测试三连跑无 flake。
 

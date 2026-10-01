@@ -26,7 +26,8 @@ SessionStore 44 照实重记（原描述误指向 41 行拼接，44 行实为 za
 索引键固定字面量构造）；TcpConnection 165 由 inline-noise 重归类为
 structural 平台窗口（ENOTCONN 真臂，Linux 本机实证不可达）；Ops 150、
 TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
-组补指令级背书（gcov -b -c 逐臂 taken 计数）。总缺口 192 不变。
+组补指令级背书（gcov -b -c 逐臂 taken 计数）；Entity.h 12 条模板
+内联副本边补登记 inline-noise。总缺口 192→204。
 
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
@@ -166,6 +167,12 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
   （2026-10-01 本机实证 errno 115，与 LoginApp:243/Scanner:197 同证），
   ENOTCONN 命中面在 macOS（码注释自认"命中率高，Linux 窗口极窄"），
   系平台窗口结构臂而非库机械弧。
+
+### Entity.h
+- 231-232/326-331（成对）[inline-noise]：模板 `onPropertyChanged` 与
+  `bindTypedMethodHandler` 多实例化内联展开的副本边——源码定型参数
+  仅触发已测实例化，其余替代路径的构造/分支块为死码。gcov 指令级
+  显示对应行执行计数 >0 但分支/调用计数全 0。
 
 ---
 
