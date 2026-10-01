@@ -46,6 +46,20 @@ TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
   （行已执行 + 存在 0 弧）；396 系 logInfo("machine.daemon.stopped")
   行，其 0 弧对为 attr variant 未用替代的构造弧（字符串实参恒走
   string 替代），stop() 守卫本身在 395 且 sink×身份四象限全测。
+   【2026-10-01 续轮指令级背书】gcov-14 -b -c 逐臂 taken 口径全 35 行
+   （74 弧）逐项甄别：全部存活非 throw 臂 taken 全 >0（无一条 taken 0
+   的语义真臂——无翻案候选，不硬造用例），全部零弧皆 never executed
+   死块。按死块来源拆分定类：variant-noise 60 弧——LogAttribute 单值
+   构造行（171/172/191/192/373/473/731/1290/1291/1371/1442/1561/1675：
+   branches 6/7 + call 8 死块，即未用 variant 替代构造）与 log 调用
+   行（173/193/374/396/478/733/819/1010/1089/1292/1372/1443/1562/
+   1676/1743/1799/1842：calls 14/15 + branches 16/17 + call 18 死块，
+   1712 为三目续行形态略异但同属死块）；inline-noise 14 弧——三目/
+   字符串拼接行（949/1167 各 2 弧为 to_string 侧 SSO/堆副本死块，
+   三目真/假语义臂 22/8 与 12/8 全走；1241 四弧为 key+"="+value 拼接
+   双死块，三目 20/2 全走；1711 四弧 + 1712 两弧为 draining 嵌套三目，
+   parsed 8/4 与 draining 6/2 全走）。行执行计数最低 2 次（1290/
+   1291），余皆 ≥6。
 【2026-10-01 翻案】原三条结构臂补测收口移出：25 toBytes 空串防御臂
 （空载荷剖面下载——EmptyPayloadProfiler 真 + 空串驱动 memcpy 跳过，
 响应合法零字节）、545 auditSink publish 空身份跳过臂（空 hostname 假

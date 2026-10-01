@@ -1650,6 +1650,18 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
 34 条 OTel noise 不动。全量 ctest 120/120 两轮
     并集全绿 + gcc14-gate 门禁 GATE_EXIT=0 + clang-debug 零警告
     120/120；新增合成流测试三连跑无 flake。
+  - branch miss 最大批次收口轮（2026-10-01）：剩余 204 弧中取最大可处
+    理批——MachineDaemon 74 弧（35 行，OTel 34 条按既有指令不动）。
+    gcov-14 -b -c 逐臂 taken 口径全行甄别：全部存活非 throw 臂 taken
+    全 >0，无 taken 0 语义真臂——无翻案候选，不硬造用例；74 零弧皆
+    never executed 死块，按来源拆分定类入册：variant-noise 60 弧
+    （LogAttribute 单值构造行 branches 6/7 + call 8、三目外 log 调用
+    行 calls 14/15 + branches 16/17 + call 18）与 inline-noise 14 弧
+    （949/1167 to_string 三目、1241 key=value 拼接、1711/1712 draining
+    嵌套三目，三目真/假臂 22/8、12/8、20/2、8/4、6/2 全走）。
+    零弧计数 204 不变，无产品码/测试改动。全量 ctest 120/120 两轮
+    并集全绿 + gcc14-gate 门禁 GATE_EXIT=0（行 11573/11573、函数
+    1673/1673 双 100%）。
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 
