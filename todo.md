@@ -1624,6 +1624,31 @@ LCOV_EXCL 豁免；口径与豁免定性见 docs/design/8-reference/coverage-rep
     全绿 + gcc14-gate 门禁 GATE_EXIT=0 + clang-debug 零警告；三支改动
     测试三连跑无 flake（MachineDaemonTest/OpsControlCenterTest/
     ProcessPortScannerTest）。
+  - 覆盖率噪声台账复核续轮（2026-10-01）：未裁定结构臂/行批次按
+    「可触达真臂补测收口、噪声臂按指令级证据登记豁免、翻案项照实
+    重记」推进。翻案收口移出一件——HostProbe 318：sumNetworkBytes
+    纯字符串计算面（istream 可注入）移出匿名命名空间作
+    probe_detail 测试缝（声明入 HostProbe.h，全平台编译），合成
+    istringstream 流直测四防御臂（表头无冒号/冒号前全空白/rx 列非
+    数值/tx 列缺失截断 + 回环排除求和），源内三组 LCOV_EXCL 区摘除
+    转实测，HostProbeTest 13→14；门禁行数 12212→12215、分支分母
+    9008→9018，新增 10 弧全数覆盖、零弧计数 192 不变。照实重记一件
+    ——SessionStore 44（原描述误指 41 行拼接，实为 zadd 索引键 14
+    字符 constexpr 固定字面量构造：恒走 SSO，堆分配/拷贝替代块死路，
+    token 以 const 引用传入本行不构造；行执行 302 次 && 两侧与语义
+    臂对全非零）。重归类一件——TcpConnection 165 由 inline-noise 改
+    structural 平台窗口（零弧系 || 链尾 notConnectedYet 真臂即
+    ENOTCONN 兜底：EPIPE 真错误臂已由 RST send 实测，Linux 握手窗口
+    非阻塞 send 恒 EAGAIN（errno 115 本机实证）、ENOTCONN 命中面在
+    macOS，码注释自认）。指令级背书补强一批——Ops 150（order/nodes_
+    成对增长不变式 + 16 次逐出评估真臂全走）、TickDiagnostics 39
+    （variant 未用替代构造块 never executed，行执行 42 次）、
+    TcpConnection 116（4 次 SO_ERROR≠0 全走断连臂）、LoginApp
+    318/320/322/328（1039/52/504 次评估计数与臂向）、Scanner
+    96/111/142/187/212/219/238/197（百万次级评估 taken 0 计数）。
+    总缺口 192 不变，34 条 OTel noise 不动。全量 ctest 120/120 两轮
+    并集全绿 + gcc14-gate 门禁 GATE_EXIT=0 + clang-debug 零警告
+    120/120；新增合成流测试三连跑无 flake。
 
 ## MySQL 持久化后端（Phase B，已在真实环境验证通过 2026-09-22）
 

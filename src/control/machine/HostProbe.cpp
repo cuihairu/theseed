@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -298,11 +299,15 @@ double queryLoadAverage() {
     // LCOV_EXCL_STOP
 }
 
-#if defined(__linux__)
+}  // namespace：sumNetworkBytes 移出匿名空间作 probe_detail 测试缝
+
 // 解析 /proc/net/dev 流并聚合除回环外的全部网卡流量。
 // 行格式 "iface: rxBytes packets errs drop fifo frame compressed multicast
 // txBytes packets errs drop fifo colls carrier compressed"；表头两行含 '|'。
-void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t& txBytes) {
+// 纯字符串计算、全平台编译——防御臂（无冒号行/冒号前全空白/rx 或 tx 列
+// 缺失）由单测合成流注入，真实 /proc/net/dev 形态只走主干路径。
+void probe_detail::sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes,
+                                   std::uint64_t& txBytes) {
     probe_detail::LinkCounters total{};
 
     std::string line;
@@ -315,26 +320,24 @@ void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t&
         // 接口名裁空白；聚合口径排除回环（与物理流量统计的目标一致）
         auto name = line.substr(0, colon);
         const auto nameBegin = name.find_first_not_of(" \t");
-        if (nameBegin == std::string::npos) {  // LCOV_EXCL_BR_LINE 冒号前全空白的行在真实 /proc/net/dev 不存在（数据行恒有接口名）
-            continue;                          // LCOV_EXCL_LINE
+        if (nameBegin == std::string::npos) {
+            continue;  // 冒号前全空白的畸形行（合成流注入）
         }
         name = name.substr(nameBegin, name.find_last_not_of(" \t") - nameBegin + 1);
 
         std::uint64_t rx = 0;
         std::uint64_t tx = 0;
         std::istringstream fields(line.substr(colon + 1));
-        if (!(fields >> rx)) {  // LCOV_EXCL_BR_LINE Linux 真实 /proc/net/dev 数据行首列恒为数值
-            continue;           // LCOV_EXCL_START 畸形数据行防御臂：真实环境不可达
+        if (!(fields >> rx)) {
+            continue;  // rx 列非数值的畸形行（合成流注入）
         }
-        // LCOV_EXCL_STOP
         for (int index = 0; index < 7; ++index) {
             std::string skipped;
             fields >> skipped;  // packets errs drop fifo frame compressed multicast
         }
-        if (!(fields >> tx)) {  // LCOV_EXCL_BR_LINE Linux 真实数据行 tx 列恒存在
-            continue;           // LCOV_EXCL_START 截断数据行防御臂：真实环境不可达
+        if (!(fields >> tx)) {
+            continue;  // tx 列缺失的截断行（合成流注入）
         }
-        // LCOV_EXCL_STOP
 
         // 回环只打标记、不在此处跳过——排除判据与求和走 macOS 共用的
         // probe_detail::accumulateLinkCounters 单份实现。
@@ -344,7 +347,8 @@ void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t&
     rxBytes = total.rxBytes;
     txBytes = total.txBytes;
 }
-#endif
+
+namespace {
 
 std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
 #if defined(__linux__)
@@ -356,7 +360,7 @@ std::pair<std::uint64_t, std::uint64_t> queryNetworkBytes() {
 
     std::uint64_t rxBytes = 0;
     std::uint64_t txBytes = 0;
-    sumNetworkBytes(input, rxBytes, txBytes);
+    probe_detail::sumNetworkBytes(input, rxBytes, txBytes);
     return {rxBytes, txBytes};
 #elif defined(__APPLE__)
     // AF_LINK 项即每网卡的链路计数器；回环以 IFF_LOOPBACK 标志识别，

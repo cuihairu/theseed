@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <iosfwd>
 #include <span>
 #include <string>
 #include <utility>
@@ -43,6 +44,11 @@ std::pair<std::uint64_t, std::uint64_t> aggregateLinkCounters(std::span<const Li
 // user+system+nice、idle = CPU_STATE_IDLE（与活动监视器同口径）。
 std::pair<std::uint64_t, std::uint64_t> splitCpuTicksApple(std::uint64_t user, std::uint64_t nice,
                                                            std::uint64_t system, std::uint64_t idle);
+
+// /proc/net/dev 流解析（纯字符串计算，全平台编译——Linux 生产调用，
+// 各平台单测以合成流直测）：表头/空行跳过、无冒号行跳过、冒号前全
+// 空白行跳过、rx/tx 列缺失跳过、回环聚合排除。
+void sumNetworkBytes(std::istream& input, std::uint64_t& rxBytes, std::uint64_t& txBytes);
 
 // used/total 百分比（0-100 线性）；total==0 返回 0（内存/磁盘共用的
 // 分母防护）。used>total 的异常读数不裁剪——上层展示按 [0,100] 处理。

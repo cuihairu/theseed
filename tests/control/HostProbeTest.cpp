@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -362,6 +363,44 @@ static void testUsagePercent() {
     else FAIL("zero-total arm or linear conversion mismatch");
 }
 
+// sumNetworkBytes 合成流直测：/proc/net/dev 解析器的四条防御臂（表头/空
+// 行无冒号、冒号前全空白、rx 列非数值、tx 列缺失截断）全部以合成行注入
+// 驱动，主干行经回环判据求和——源内 LCOV_EXCL 区摘除后转实测的弧在此
+// 一次性钉死。
+static void testSumNetworkBytesSyntheticStream() {
+    TEST("sumNetworkBytes parses synthetic stream with defensive arms");
+
+    std::istringstream input(
+        "Inter-|   Receive                                                Transmit\n"
+        " face |bytes    packets errs drop fifo frame multicast  |bytes\n"
+        "\n"
+        "    lo:  100 1 1 1 1 1 1 1  200 1 1 1 1 1 1 1\n"
+        "  eth0:    1 1 1 1 1 1 1 1    2 1 1 1 1 1 1 1\n"
+        "  eth1  :  4 1 1 1 1 1 1 1    8 1 1 1 1 1 1 1\n"
+        "   : 9 9 9 9 9 9 9 9 9\n"
+        "badrx: x 1 1 1 1 1 1 1 5\n"
+        "notx: 1 1 1 1 1 1 1 1\n");
+
+    std::uint64_t rx = 0;
+    std::uint64_t tx = 0;
+    probe_detail::sumNetworkBytes(input, rx, tx);
+
+    // 主干聚合：lo(100/200) 被回环判据排除，eth0(1/2) + eth1(4/8) 计入；
+    // 四类防御行（无冒号的表头×2 与空行、全空白名、badrx、notx）均跳过。
+    bool ok = rx == 5 && tx == 10;
+
+    // 空流：循环不进入，出参清零（每次调用先归零 total 的契约）
+    std::istringstream empty("");
+    std::uint64_t emptyRx = 7;
+    std::uint64_t emptyTx = 9;
+    probe_detail::sumNetworkBytes(empty, emptyRx, emptyTx);
+    ok = ok && emptyRx == 0 && emptyTx == 0;
+
+    if (ok) PASS();
+    else FAIL("rx=" + std::to_string(rx) + " tx=" + std::to_string(tx) +
+              " emptyRx=" + std::to_string(emptyRx) + " emptyTx=" + std::to_string(emptyTx));
+}
+
 // 默认探针（真实平台计数器源）：网络累计计数器只增不减，两次采样单调；
 // CPU/内存/磁盘读数在合法区间、平台串可辨。断言全平台中立——Linux/macOS
 // （CI macos job 首验 Apple 胶合）/Windows 上同一条测试都必须成立。
@@ -426,6 +465,7 @@ int main() {
     testWindowsLinkCounters();
     testSplitCpuTicksApple();
     testUsagePercent();
+    testSumNetworkBytesSyntheticStream();
     testRealProcSources();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

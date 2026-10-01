@@ -18,6 +18,16 @@ entityId 命中臂补测收口移出）、ProcessPortScanner 13→11（172 fd �
 其后行号 -2 重编）、LoginApp 32 不变（论证补强留档）。34 条 OTel
 noise 不动。总缺口 198→192，行/函数门禁双 100% 不回退。
 
+【2026-10-01 噪声台账复核续轮】未裁定结构臂/行批次：HostProbe 318
+翻案收口移出（sumNetworkBytes 移出匿名命名空间作 probe_detail 测试
+缝 + 合成流直测四防御臂，源内三组 LCOV_EXCL 区摘除转实测——总行数
+12212→12215、分支分母 9008→9018，新增弧全数覆盖、零弧计数不变）；
+SessionStore 44 照实重记（原描述误指向 41 行拼接，44 行实为 zadd
+索引键固定字面量构造）；TcpConnection 165 由 inline-noise 重归类为
+structural 平台窗口（ENOTCONN 真臂，Linux 本机实证不可达）；Ops 150、
+TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
+组补指令级背书（gcov -b -c 逐臂 taken 计数）。总缺口 192 不变。
+
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
 弧：hash 桶/字符串 SSO 副本/三目汇合副本）；`structural`（结构性不
@@ -63,16 +73,17 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
 - 98 try_emplace 六 0 弧 [inline-noise]：std 库内联（hash 冲突/重哈希），
   inserted 真/假两语义臂均已测（12 真/1 假）。
 - 150 `!insertionOrder_.empty()` 假臂 [structural]：order 与 nodes_ 同
-  步维护，nodes_ 超容量时 order 必非空；空表防御臂无路径。
-【2026-10-01 翻案】原 311 entityId 命中臂 [structural] 补测收口移出：
-中心过滤与数据来源解耦——假生产者填 entityId 后实体维命中即出行、
-未命中仍过滤（生产侧恒空仍是事实，但查询臂可及，非结构不可达）。
+  步维护（插入同步成对增长、逐出成对弹出），逐出路径只在 nodes_ 超
+  容量增长后可达，届时 order 必非空——空表防御臂无路径。【2026-10-01
+  续轮指令级背书】16 次逐出评估全走真臂，假臂 taken 0。
 
 ### ProcessPortScanner.cpp
 - 96 迭代中途 error 臂 [structural]：进程消失/权限竞态不可稳定注入
-  （LCOV_EXCL 区）。
+  （LCOV_EXCL 区）。【2026-10-01 续轮指令级背书】3,768,066 次迭代
+  评估 error 臂 taken 0。
 - 111 `native.back() != ']'` 真臂 [structural]：/proc fd 链接恒规范
-  （socket:[inode]），畸形形态防御。
+  （socket:[inode]），畸形形态防御。【2026-10-01 续轮指令级背书】
+  3,487,977 次读取评估真臂 2 弧 taken 0。
 - 134/138/142/187/189/198/200/212/219/221/229/230/232/233/238/240
   [structural]：资源异常与平台窗口臂（/proc 恒在、合法 fd 的
   fcntl/getsockopt/setsockopt 不失败、Linux 非阻塞 TCP connect 恒
@@ -82,16 +93,24 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
   总量守卫的语义本就是为异常大响应兜底），源内两处 LCOV_EXCL 区
   摘除、两行转入实测，其后行号 -2 位移（本条行号已按新源校准）。
   行内豁免对 gcovr 8.6 生效的勘误（2026-09-30 批，详见 todo.md）
-  不变：登记仍是定性/背书台账，非 gcovr 排除的唯一依据。
+  不变：登记仍是定性/背书台账，非 gcovr 排除的唯一依据。【2026-10-01
+  续轮指令级背书】187 行 26 次评估 3 弧、142/212/219/238 各 1 弧
+  均 taken 0。
 - 197 connect 同步成功臂（0F）[structural]：Linux 非阻塞 connect 完成
   握手才返回 0，回环握手异步，恒 EINPROGRESS（2026-10-01 本机实证：
   非阻塞 connect 对 127.0.0.1:9/:1 与 240.0.0.1 恒 errno 115）。
+  【2026-10-01 续轮指令级背书】26 次 connect 评估同步成功臂 taken 0。
 
 ### HostProbe.cpp
-- 318 冒号前全空白行防御臂 [structural]：sumNetworkBytes 匿名命名空间
-  解析器只吃真实 /proc/net/dev 流（istream 无注入缝），数据行恒有接口
-  名（码注释自认）。行豁免在 319 continue（LCOV_EXCL_LINE），分支归因
-  本行——BR_LINE 已照 ProcessPortScanner 200 先例对齐。
+- 318 冒号前全空白行防御臂【2026-10-01 翻案收口移出】：sumNetworkBytes
+  系纯字符串计算面（istream 可注入），匿名命名空间私属才是补测唯一
+  障碍——移出为 `probe_detail::sumNetworkBytes`（声明入 HostProbe.h，
+  全平台编译）后合成流直测四防御臂（表头无冒号/冒号前全空白/rx 列
+  非数值/tx 列缺失截断，HostProbeTest::testSumNetworkBytesSyntheticStream）。
+  源内三组 LCOV_EXCL 区（BR_LINE/EXCL_LINE/EXCL_START/STOP）随之摘除
+  转实测：门禁行数 12212→12215、分支分母 9008→9018，新增 10 弧全数
+  覆盖、零弧计数 192 不变，行/函数双 100% 不回退。原论断"匿名空间
+  解析器无注入缝、数据行恒有接口名"随测试缝成立而失效。
 
 ## login
 
@@ -102,29 +121,51 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
   errno 115，与 ProcessPortScanner:197 同证）。
 - 306-307/413-414/474-475/478/493-494/499-500 [variant-noise]。
 - 318/425 `!hub_` 臂 [structural]：tick() 的 `if (hub_)` 包住全部
-  supervise 调用，stop() 置 Backoff 后 tick 不再进监督。
+  supervise 调用，stop() 置 Backoff 后 tick 不再进监督。【2026-10-01
+  续轮指令级背书】318 执行 1039 次：machineHost 空臂 390/非空 649
+  全走，`!hub_` 真臂 taken 0。
 - 320/427 switch 隐式出口弧 [structural]：LinkState 三枚举全覆盖且无
-  default。
+  default。【2026-10-01 续轮指令级背书】320 三 case 计数 52/504/93、
+  隐式出口 taken 0。
 - 322/429/328/435 null-transport 臂 [structural]：PendingAck/Up 态
   transport 必非空（attempt 成功才置态，失败/markDown 即 reset+Backoff）。
+  【2026-10-01 续轮指令级背书】322 于 52 次 PendingAck、328 于 504 次
+  Up 评估中 null-transport 臂均 taken 0；isConnected 真/假两臂覆盖
+  （50/2 与 494/10）。
 
 ## foundation
 
 ### SessionStore.cpp
-- 44 尾部 4 零弧 [inline-noise]：`kSessionKeyPrefix + token` 字符串
-  拼接 SSO/堆副本库弧；双写契约语义臂已全测（SessionStoreTest）。
+- 44 尾部 4 零弧 [inline-noise]【2026-10-01 续轮照实重记】：
+  `redis_->zadd(std::string(kIndexKey), token, indexScore())` 的索引键
+  固定字面量构造弧——kIndexKey 为 14 字符 constexpr（恒走 SSO，堆
+  分配/拷贝替代块为死路；token 以 const 引用传入，本行不构造）。
+  gcov 指令级：行执行 302 次，&& 两侧与各语义臂对全非零，branches
+  19/20/22/23 + call 21 never executed。原描述"`kSessionKeyPrefix +
+  token` 拼接 SSO/堆副本库弧"误指 41 行拼接语句（该行无零弧），兹
+  更正；双写契约语义臂已全测（SessionStoreTest）。
 
 ## runtime
 
 ### TickDiagnostics.cpp
-- 39 [variant-noise]：logWarn 三属性行。
+- 39 [variant-noise]：logWarn 三属性行。【2026-10-01 续轮指令级背书】
+  行执行 42 次；calls 14/15 + branches 16/17 + call 18 never executed
+  = std::variant 构造的未用替代路径（三属性源码定型 int64，其余
+  替代的构造块恒不执行）。
 
 ### TcpConnection.cpp
 - 116 pending 空转臂 [structural]：SO_ERROR ∈ EINPROGRESS 系只在握手
   跨 tick 未落定的真实网络出现，内核回环握手同步完成；语义集由
   TcpConnectionTest 直测 connectStillPending 锚定，码注释背书。
-- 165 [inline-noise]：gcc `||` 链汇合副本弧（EPIPE 断连行为已由 RST
-  send 臂断言钉死）。
+  【2026-10-01 续轮指令级背书】4 次 SO_ERROR≠0 评估全走断连臂，
+  EINPROGRESS 复检假臂 taken 0。
+- 165【2026-10-01 续轮重归类：inline-noise → structural 平台窗口】零
+  弧为 `||` 链尾 notConnectedYet() 真臂（ENOTCONN 兜底 return false）：
+  wouldBlock 假侧 20 次全落假臂（EPIPE 真错误断连由 RST send 臂断言
+  钉死），真臂 taken 0——Linux 握手窗口内非阻塞 send 恒 EAGAIN
+  （2026-10-01 本机实证 errno 115，与 LoginApp:243/Scanner:197 同证），
+  ENOTCONN 命中面在 macOS（码注释自认"命中率高，Linux 窗口极窄"），
+  系平台窗口结构臂而非库机械弧。
 
 ---
 
