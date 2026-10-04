@@ -330,7 +330,7 @@ LocalStateStore
 | SQLite | 高 | 单机单写者、归档 generation、搬运和清理都更简单 |
 | RocksDB | 中 | 更适合高频 key-value 状态，但已更像 LocalStateStore |
 | LevelDB | 中低 | 能用，但整体生态和长期维护性不如 SQLite / RocksDB 两侧清晰 |
-| 自研文件格式 | 低 | 容易把归档、搬运、清理、校验全写成脆弱脚本 |
+| 自行开发文件格式 | 低 | 容易把归档、搬运、清理、校验全写成脆弱脚本 |
 
 所以当前阶段不直接拍死具体后端，是因为：
 
