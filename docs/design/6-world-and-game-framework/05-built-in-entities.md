@@ -1,89 +1,91 @@
-# Built-in Entities — 内建游戏对象
+# Built-in Entities — Built-in Game Objects
 
-> BigWorld/KBEngine 只提供 Entity/Proxy/Space 三个基础类，所有游戏对象从零实现。
-> theseed 内建常见游戏对象：DroppedItem、Projectile、Monster、NPC、Trigger、Vehicle、Pet、SpawnPoint。
-> C++ 核心逻辑 + 脚本可覆盖钩子，零配置可用。
+> **English** | [中文](05-built-in-entities.zh.md)
+
+> BigWorld/KBEngine only provide the three base classes Entity/Proxy/Space; all game objects are implemented from scratch.
+> theseed builds in common game objects: DroppedItem, Projectile, Monster, NPC, Trigger, Vehicle, Pet, SpawnPoint.
+> C++ core logic + script-overridable hooks, usable with zero configuration.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld Implements It
 
 ```
-BigWorld 更偏向提供底层抽象：
+BigWorld leans more toward providing low-level abstractions:
   - Entity
   - Proxy
   - Space
-  - Controller / Trigger 等机制
+  - Mechanisms such as Controller / Trigger
 
-具体游戏对象通常由项目自己实现。
+Specific game objects are usually implemented by the project itself.
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine Implements It
 
 ```
-KBEngine 也更接近基础框架，
-不会内建太多具体游戏对象类型。
+KBEngine is also closer to a basic framework
+and does not build in too many specific game object types.
 ```
 
-### 优缺点
+### Pros and Cons
 
 ```
-BigWorld / KBEngine 的优点：
-  - 引擎核心保持通用
-  - 不强绑具体玩法类型
+BigWorld / KBEngine's advantages:
+  - The engine core stays generic
+  - Does not force-bind specific gameplay types
 
-共同缺点：
-  - 项目起步成本高
-  - 大量常见对象会重复造轮子
+Common disadvantages:
+  - High project startup cost
+  - A large number of common objects get reinvented repeatedly
 ```
 
-### theseed 的取舍
+### theseed's Trade-offs
 
 ```
-theseed 选择少量内建高频对象，
-但数量克制，
-避免把引擎做成具体项目玩法库。
-```
-
----
-
-## 1. 设计原则
-
-```
-1. C++ 核心逻辑 + 脚本可覆盖钩子
-2. 零配置可用（创建即生效，自带生命周期管理）
-3. 可继承可覆盖
-4. 数量克制（只内建覆盖 90% 游戏场景的常见类型）
+theseed chooses to build in a small number of high-frequency objects,
+but keeps the count restrained,
+to avoid turning the engine into a project-specific gameplay library.
 ```
 
 ---
 
-## 2. 类型层级
+## 1. Design Principles
 
 ```
-Entity (C++ 核心)
+1. C++ core logic + script-overridable hooks
+2. Usable with zero configuration (effective on creation, with built-in lifecycle management)
+3. Inheritable and overridable
+4. Restrained count (only builds in common types that cover 90% of game scenarios)
+```
+
+---
+
+## 2. Type Hierarchy
+
+```
+Entity (C++ core)
 ├── BaseEntity
-│   ├── Account                    # 账号
-│   └── GlobalEntity               # 全局单例
+│   ├── Account                    # Account entity
+│   └── GlobalEntity               # Global singleton
 ├── CellEntity
-│   ├── Player                     # 玩家角色
-│   ├── Creature                   # 生物基类
-│   │   ├── NPC                    # NPC（交互、商店、任务）
-│   │   └── Monster                # 怪物（AI 状态机、掉落）
-│   ├── DroppedItem                # 掉落物品
-│   ├── Projectile                 # 投射物
-│   ├── Trigger                    # 触发区域
-│   ├── Vehicle                    # 载具/坐骑
-│   ├── Pet                        # 宠物/召唤物
-│   └── SpawnPoint                 # 刷怪点
+│   ├── Player                     # Player character
+│   ├── Creature                   # Creature base class
+│   │   ├── NPC                    # NPC (interaction, shop, quests)
+│   │   └── Monster                # Monster (AI state machine, drops)
+│   ├── DroppedItem                # Dropped item
+│   ├── Projectile                 # Projectile entity
+│   ├── Trigger                    # Trigger zone
+│   ├── Vehicle                    # Vehicle / mount
+│   ├── Pet                        # Pet / summon
+│   └── SpawnPoint                 # Spawn point
 └── Space
 ```
 
 ---
 
-## 3. DroppedItem（掉落物品）
+## 3. DroppedItem (Dropped Item)
 
 ```python
 class DroppedItem(CellEntity):
@@ -101,7 +103,7 @@ theseed.createEntity("DroppedItem", {
 
 ---
 
-## 4. Projectile（投射物）
+## 4. Projectile
 
 ```python
 class Projectile(CellEntity):
@@ -187,7 +189,7 @@ class SpawnPoint(CellEntity):
 
 ---
 
-## 7. Account（账号）
+## 7. Account
 
 ```python
 class Account(BaseEntity):
@@ -202,19 +204,19 @@ class Account(BaseEntity):
 
 ---
 
-## 8. 与 BigWorld/KBEngine 对比
+## 8. Comparison with BigWorld/KBEngine
 
 ```
-游戏对象类型         BigWorld        KBEngine        theseed
-───────────────────────────────────────────────────────────────
-掉落物品             ❌              ❌              ✅ DroppedItem
-投射物               ❌              ❌              ✅ Projectile
-NPC                  ❌              ❌              ✅ NPC
-怪物(带AI)           ❌(脚本模板)    ❌(脚本模板)     ✅ Monster
-触发区域             ❌(ProxCtrl底层) ❌(addProx底层) ✅ Trigger
-载具/坐骑            ❌(PassengerCtrl) ❌            ✅ Vehicle
-宠物/召唤            ❌              ❌              ✅ Pet
-刷怪点               ❌              ❌              ✅ SpawnPoint
-账号                 ❌(脚本实现)    ✅ Account       ✅ Account
-生物基类             ❌              ❌              ✅ Creature
+Game Object Type          BigWorld                  KBEngine                theseed
+───────────────────────────────────────────────────────────────────────────────────
+Dropped Item              ❌                        ❌                      ✅ DroppedItem
+Projectile                ❌                        ❌                      ✅ Projectile
+NPC                       ❌                        ❌                      ✅ NPC
+Monster (with AI)         ❌(script template)       ❌(script template)     ✅ Monster
+Trigger Zone              ❌(ProxCtrl underlying)   ❌(addProx underlying)  ✅ Trigger
+Vehicle/Mount             ❌(PassengerCtrl)         ❌                      ✅ Vehicle
+Pet/Summon                ❌                        ❌                      ✅ Pet
+Spawn Point               ❌                        ❌                      ✅ SpawnPoint
+Account                   ❌(script impl)           ✅ Account              ✅ Account
+Creature Base             ❌                        ❌                      ✅ Creature
 ```

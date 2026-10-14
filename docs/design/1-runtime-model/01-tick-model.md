@@ -1,179 +1,181 @@
-# Tick Model — 主循环模型
+# Tick Model — Main Loop Model
 
-> theseed 引擎的主循环设计。所有游戏逻辑、网络处理、属性同步都在 tick 中执行。
+> **English** | [中文](01-tick-model.zh.md)
+
+> The main loop design of the theseed engine. All game logic, network processing, and property synchronization are executed inside the tick.
 >
-> 来源源头：BigWorld 主循环与进程级并行模型。
-> 参考实现：KBEngine `EventDispatcher::processUntilBreak` 的轻量 tick 落地方式。
-> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
+> Origin: the BigWorld main loop and process-level parallelism model.
+> Reference implementation: the lightweight tick approach of KBEngine's `EventDispatcher::processUntilBreak`.
+> The current implementation baseline follows [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
-
-```
-BigWorld 以主循环 tick 为中心：
-  - 网络收包
-  - 逻辑执行
-  - 属性同步
-  - 定时器驱动
-
-它把并行度主要放在进程级，而不是线程级。
-```
-
-### KBEngine 是怎么实现的
+### How BigWorld Implements It
 
 ```
-KBEngine 也以单线程 tick 为核心：
-  - EventDispatcher 驱动事件
-  - Entity 逻辑在 tick 内串行推进
-  - 多进程扩展承担横向并行
+BigWorld centers on the main-loop tick:
+  - Network packet intake
+  - Logic execution
+  - Property synchronization
+  - Timer driving
+
+It places parallelism mainly at the process level, not the thread level.
 ```
 
-### 优缺点
+### How KBEngine Implements It
 
 ```
-共同优点：
-  - 确定性强
-  - 脚本侧心智负担低
-  - 更适合高频实体状态更新
-
-共同缺点：
-  - 单进程内并行度有限
-  - 复杂计算必须外拆到异步或别的进程
+KBEngine also centers on a single-threaded tick:
+  - EventDispatcher drives events
+  - Entity logic advances serially within the tick
+  - Multi-process scaling carries horizontal parallelism
 ```
 
-### theseed 的取舍
+### Pros and Cons
 
 ```
-theseed 选择保留单线程 tick 模型，
-因为它是 BigWorld 源头设计与 KBEngine 参考实现共同验证过的运行时底座。
+Shared pros:
+  - Strong determinism
+  - Low mental burden on the script side
+  - Better suited to high-frequency entity state updates
 
-差异只放在：
-  - 任务拆分
-  - 异步边界
-  - 控制面与数据面的分层
+Shared cons:
+  - Limited parallelism within a single process
+  - Complex computation must be offloaded to async or another process
 ```
 
----
-
-## 1. 核心问题
+### theseed's Trade-offs
 
 ```
-一个实体存在于服务器集群中，它需要：
+theseed chooses to keep the single-threaded tick model,
+because it is a runtime foundation jointly validated by the BigWorld origin design and the KBEngine reference implementation.
 
-1. 在正确的进程上运行（Base 或 Cell）
-2. 在正确的空间中有位置（Cell 侧）
-3. 被正确的客户端看到（Witness）
-4. 被跨边界的邻居感知到（Ghost）
-5. 属性变更能高效同步给所有相关方
-6. 可以安全地跨进程迁移
-7. 状态能持久化和恢复
-```
-
-这 7 件事决定了 Runtime Core 的所有组件。
-
----
-
-## 2. 为什么是单线程 tick
-
-KBEngine 和 BigWorld 都是 **单线程 tick 模型**。这不是落后，而是游戏逻辑的正确抽象：
-
-```
-原因 1：确定性
-  - 游戏逻辑必须可预测：同一输入 → 同一输出
-  - 多线程并发写同一实体会打破这个保证
-  - 锁的开销在高频 tick（10-20Hz）下不可接受
-
-原因 2：简单性
-  - 脚本层不需要关心线程安全
-  - Python GIL 本身就是单线程
-  - 开发者心智负担最低
-
-原因 3：性能
-  - 单线程无锁，cache 友好
-  - 游戏逻辑通常不是 CPU 瓶颈（网络 I/O 和 AOI 才是）
-  - 真正的并行靠分布式（多进程），不是多线程
+Differences are confined to:
+  - Task splitting
+  - Async boundaries
+  - Separation of control plane and data plane
 ```
 
 ---
 
-## 3. Tick 生命周期
+## 1. Core Problem
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  一个 Tick (典型 10Hz → 100ms 预算)                       │
-│                                                          │
-│  1. Network Ingress                                      │
-│     ├─ 接收所有就绪消息                                    │
-│     ├─ 反序列化到消息队列                                  │
-│     ├─ 投递上一轮异步任务完成事件                            │
-│     └─ 按 Channel / Entity 顺序分发                         │
-│                                                          │
-│  2. Timer                                                │
-│     ├─ 触发到期定时器                                      │
-│     └─ 将回调加入当前 tick 的执行队列                        │
-│                                                          │
-│  3. Entity Logic                                         │
-│     ├─ AOI 节点移动                                        │
-│     ├─ Controller tick                                   │
-│     ├─ 运行 C++ 核心逻辑                                   │
-│     └─ 只允许 owning tick thread 改实体状态                │
-│                                                          │
-│  4. Script Callback                                      │
-│     ├─ 执行消息触发的脚本回调                                │
-│     ├─ 执行定时器触发的脚本回调                              │
-│     └─ 属性变更只标 dirty，不立即外发                        │
-│                                                          │
-│  5. Sync Build                                           │
-│     ├─ 收集生命周期事件                                    │
-│     ├─ 构造 real → ghost state-delta Bundle              │
-│     ├─ 构造 witness → client Bundle                      │
-│     └─ 计算本 tick 的 flush 列表                           │
-│                                                          │
-│  6. Flush                                                │
-│     ├─ flush Runtime Data Plane                          │
-│     ├─ flush Client Channel                              │
-│     └─ 更新 tick 统计与背压指标                             │
-│                                                          │
-│  7. Idle                                                 │
-│     └─ 等待下一个 tick 唤醒                                 │
-└─────────────────────────────────────────────────────────┘
+An entity lives in a server cluster, and it needs to:
+
+1. Run on the correct process (Base or Cell)
+2. Have a position in the correct space (Cell side)
+3. Be seen by the correct clients (Witness)
+4. Be perceived by neighbors across boundaries (Ghost)
+5. Have property changes synchronized efficiently to all relevant parties
+6. Migrate safely across processes
+7. Have its state persisted and restored
 ```
 
-### 3.1 关键约束
+These 7 things determine every component of the Runtime Core.
+
+---
+
+## 2. Why a Single-Threaded Tick
+
+Both KBEngine and BigWorld use a **single-threaded tick model**. This is not backwardness, but the correct abstraction for game logic:
 
 ```
-MVP 时序规则：
+Reason 1: Determinism
+  - Game logic must be predictable: same input → same output
+  - Multi-threaded concurrent writes to the same entity would break this guarantee
+  - The cost of locking is unacceptable under high-frequency ticks (10-20Hz)
 
-  - tick 内允许改属性
-  - tick 内只记脏，不外发
-  - tick 末统一构造同步数据
-  - tick 末统一 flush
+Reason 2: Simplicity
+  - The script layer need not care about thread safety
+  - The Python GIL is itself single-threaded
+  - Lowest mental burden for developers
 
-例外只有：
-  - 明确的 RPC / 事件消息
-  - 创建 / 销毁 / 迁移等生命周期控制消息
-```
-
-### 3.2 与异步任务的边界
-
-```
-异步任务可以在后台线程执行，但结果不能直接写 Entity。
-
-必须：
-  - 先投递完成事件到 owning tick thread
-  - 在下一次 Network Ingress 或事件分发阶段进入主循环
-
-禁止：
-  - 在后台线程直接 setProperty()
-  - 在 tick 线程阻塞等待 Future.get()
+Reason 3: Performance
+  - Single-threaded means lock-free and cache-friendly
+  - Game logic is usually not the CPU bottleneck (network I/O and AOI are)
+  - Real parallelism comes from distribution (multi-process), not multi-threading
 ```
 
 ---
 
-## 4. 核心接口
+## 3. Tick Lifecycle
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  One Tick (typically 10Hz → 100ms budget)                            │
+│                                                                      │
+│  1. Network Ingress                                                  │
+│     ├─ Receive all ready messages                                    │
+│     ├─ Deserialize into the message queue                            │
+│     ├─ Deliver previous round's async task completions               │
+│     └─ Dispatch in Channel / Entity order                            │
+│                                                                      │
+│  2. Timer                                                            │
+│     ├─ Fire due timers                                               │
+│     └─ Add callbacks to the current tick's execution queue           │
+│                                                                      │
+│  3. Entity Logic                                                     │
+│     ├─ AOI node movement                                             │
+│     ├─ Controller tick                                               │
+│     ├─ Run C++ core logic                                            │
+│     └─ Only the owning tick thread may modify entity state           │
+│                                                                      │
+│  4. Script Callback                                                  │
+│     ├─ Execute message-triggered script callbacks                    │
+│     ├─ Execute timer-triggered script callbacks                      │
+│     └─ Property changes only mark dirty, never sent out immediately  │
+│                                                                      │
+│  5. Sync Build                                                       │
+│     ├─ Collect lifecycle events                                      │
+│     ├─ Build real → ghost state-delta Bundle                         │
+│     ├─ Build witness → client Bundle                                 │
+│     └─ Compute the flush list for this tick                          │
+│                                                                      │
+│  6. Flush                                                            │
+│     ├─ flush Runtime Data Plane                                      │
+│     ├─ flush Client Channel                                          │
+│     └─ Update tick statistics and backpressure metrics               │
+│                                                                      │
+│  7. Idle                                                             │
+│     └─ Wait for the next tick to wake up                             │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.1 Key Constraints
+
+```
+MVP timing rules:
+
+  - Modifying properties is allowed within the tick
+  - Within the tick, only dirty marking is recorded; nothing is sent out
+  - At the end of the tick, synchronization data is built uniformly
+  - At the end of the tick, a uniform flush occurs
+
+The only exceptions are:
+  - Explicit RPC / event messages
+  - Lifecycle control messages such as create / destroy / migrate
+```
+
+### 3.2 Boundary with Async Tasks
+
+```
+Async tasks may execute on background threads, but their results cannot directly write to an Entity.
+
+Required:
+  - First deliver the completion event to the owning tick thread
+  - Enter the main loop at the next Network Ingress or event dispatch stage
+
+Forbidden:
+  - Calling setProperty() directly on a background thread
+  - Blocking the tick thread waiting on Future.get()
+```
+
+---
+
+## 4. Core Interfaces
 
 ```cpp
 // runtime/TickModel.h
@@ -211,7 +213,7 @@ private:
 
 ---
 
-## 5. 与 KBEngine 的对应
+## 5. Correspondence with KBEngine
 
 ```
 KBEngine:
@@ -233,8 +235,8 @@ theseed:
 ```
 
 ```
-差异点：
-  - theseed 明确把 “构造同步数据” 和 “发送” 拆成两个阶段
-  - 这让背压、统计、重试和调试更容易做清楚
-  - 也避免把属性复制混在脚本执行路径里
+Differences:
+  - theseed explicitly splits "build synchronization data" and "send" into two stages
+  - This makes backpressure, statistics, retries, and debugging much clearer
+  - It also avoids mixing property replication into the script execution path
 ```

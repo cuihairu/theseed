@@ -1,73 +1,75 @@
-# Timer & Object Pool — 定时器与内存管理
+# Timer & Object Pool — Timers and Memory Management
 
-> TimerWheel 提供高性能定时回调；对象池减少高频分配开销。
+> **English** | [中文](03-timer-and-memory.zh.md)
+
+> TimerWheel provides high-performance timer callbacks; object pools reduce high-frequency allocation overhead.
 >
-> TimerWheel 来源：通用算法（非 BigWorld/KBEngine）。
-> 对象池来源：KBEngine `OBJECTPOOL_POINT`。
+> TimerWheel origin: a general algorithm (not BigWorld/KBEngine).
+> Object pool origin: KBEngine `OBJECTPOOL_POINT`.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
-
-```
-BigWorld 通常把定时与对象生命周期放进运行时主循环和管理器体系里：
-  - tick 驱动定时回调
-  - 组件内自管对象生命周期
-  - 配合引擎级内存管理减少频繁分配
-```
-
-### KBEngine 是怎么实现的
+### How BigWorld Implements It
 
 ```
-KBEngine 更强调可落地的工程做法：
-  - 事件分发驱动定时逻辑
-  - 通过对象池降低高频分配成本
-  - 让脚本和实体层尽量少感知底层分配细节
+BigWorld usually places timing and object lifecycle into the runtime main loop and the manager hierarchy:
+  - The tick drives timer callbacks
+  - Components manage object lifecycles themselves
+  - Engine-level memory management reduces frequent allocation
 ```
 
-### 优缺点
+### How KBEngine Implements It
 
 ```
-共同优点：
-  - 适合高频、短生命周期对象
-  - 运行期开销可控
-
-共同缺点：
-  - 需要谨慎处理泄漏和悬挂引用
-  - 复杂生命周期调试成本高
+KBEngine emphasizes implementable engineering practices:
+  - Event dispatch drives timing logic
+  - Object pools reduce the cost of high-frequency allocation
+  - The script and entity layers are kept as unaware as possible of low-level allocation details
 ```
 
-### theseed 的取舍
+### Pros and Cons
 
 ```
-theseed 用 TimerWheel + 对象池，
-是为了把“高频定时”和“高频分配”拆成两个独立可审计的基础设施，
-而不是继续把它们隐含在实体实现里。
+Shared pros:
+  - Suited to high-frequency, short-lived objects
+  - Controllable runtime overhead
+
+Shared cons:
+  - Leaks and dangling references must be handled carefully
+  - Debugging complex lifecycles is costly
 ```
 
----
-
-## 1. 定时器模型
+### theseed's Trade-offs
 
 ```
-游戏服务器的定时器需求：
-  1. 高频（每秒数十万次触发）
-  2. 精度要求不高（10ms 级别即可）
-  3. 主要用于 tick 驱动的回调
-  4. 支持一次性 / 周期性
-  5. 支持取消
-
-经典方案：时间轮（Hashed Timing Wheel）
-  - O(1) 添加/取消
-  - 精度取决于 wheel 的 tick duration
-  - 适合大量定时器场景
+theseed uses TimerWheel + object pools
+to split "high-frequency timing" and "high-frequency allocation" into two independent, auditable pieces of infrastructure,
+rather than continuing to leave them implicit inside the entity implementation.
 ```
 
 ---
 
-## 2. 核心接口
+## 1. Timer Model
+
+```
+Timer requirements of a game server:
+  1. High frequency (hundreds of thousands of triggers per second)
+  2. Low precision requirements (10ms level is sufficient)
+  3. Mainly used for tick-driven callbacks
+  4. Support for one-shot / periodic
+  5. Support for cancellation
+
+Classic approach: the timing wheel (Hashed Timing Wheel)
+  - O(1) add/cancel
+  - Precision depends on the wheel's tick duration
+  - Suited to scenarios with a large number of timers
+```
+
+---
+
+## 2. Core Interfaces
 
 ```cpp
 // runtime/TimerWheel.h
@@ -108,17 +110,17 @@ private:
 
 ---
 
-## 3. 与 KBEngine 的对比
+## 3. Comparison with KBEngine
 
 ```
 KBEngine:
-  ScriptTimers（时间堆）
-  → 按到期时间排序的优先队列
-  → 添加 O(log n)，取消 O(log n)
+  ScriptTimers (time heap)
+  → priority queue ordered by expiry time
+  → add O(log n), cancel O(log n)
 
 theseed:
-  TimerWheel（4 级时间轮）
-  → 添加 O(1)，取消 O(1)
-  → 适合大量定时器（百万级）
-  → 精度 10ms（游戏服务器足够）
+  TimerWheel (4-level time wheel)
+  → add O(1), cancel O(1)
+  → suitable for large numbers of timers (millions)
+  → 10 ms precision (sufficient for game servers)
 ```

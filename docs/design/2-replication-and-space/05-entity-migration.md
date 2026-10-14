@@ -1,165 +1,167 @@
-# Entity Migration — 实体迁移
+# Entity Migration — Entity Migration
 
-> 实体迁移是 theseed 分布式架构的核心能力：实体可以在不同 CellApp 之间安全迁移。
+> **English** | [中文](05-entity-migration.zh.md)
+
+> Entity migration is a core capability of theseed's distributed architecture: entities can migrate safely between different CellApps.
 >
-> 来源源头：BigWorld Offload / Cell 迁移 / 退役迁出机制。
-> 参考实现：KBEngine teleport + Ghost 路由窗口。
-> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
+> Origin: BigWorld Offload / Cell migration / retire-offload mechanisms.
+> Reference implementation: KBEngine teleport + Ghost routing window.
+> The current implementation baseline is defined by [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
-
-```
-BigWorld 的迁移不是单纯的 teleport：
-  - 有 offload / retire / controlled shutdown 语义
-  - 有跨 Cell 迁移窗口
-  - 有更完整的负载均衡和退役链条
-```
-
-### KBEngine 是怎么实现的
+### How BigWorld Implements It
 
 ```
-KBEngine 更偏向 teleport 和 ghost 路由窗口：
-  - 迁移路径更直接
-  - 系统级退役链条更轻
-  - 适合先把实体可迁移跑通
+BigWorld's migration is not a simple teleport:
+  - It has offload / retire / controlled shutdown semantics
+  - It has a cross-Cell migration window
+  - It has a more complete load balancing and retirement chain
 ```
 
-### 优缺点
+### How KBEngine Implements It
 
 ```
-BigWorld 的优点：
-  - 迁移和退役体系完整
-  - 能支撑更复杂的集群调度
-
-KBEngine 的优点：
-  - 简单
-  - 容易先落地
-
-共同缺点：
-  - 迁移快照和窗口期控制都很敏感
-  - 一旦和脚本 I/O、协程绑死，复杂度会迅速上升
+KBEngine leans more toward teleport and the ghost routing window:
+  - The migration path is more direct
+  - The system-level retirement chain is lighter
+  - Suitable for first getting entity migratability working
 ```
 
-### theseed 的取舍
+### Pros and Cons
 
 ```
-theseed 先实现单 Realm 内迁移和跨 Space 传送，
-把脚本调用栈和外部 I/O 明确排除在快照之外，
-避免把 BigWorld 的 HA 复杂度一次性吞进 MVP。
+BigWorld's advantages:
+  - Complete migration and retirement system
+  - Can support more complex cluster scheduling
+
+KBEngine's advantages:
+  - Simple
+  - Easy to land first
+
+Common disadvantages:
+  - Both the migration snapshot and the window-period control are sensitive
+  - Once tightly bound to script I/O and coroutines, complexity rises quickly
 ```
 
----
-
-## 0. MVP 边界
+### theseed's Trade-offs
 
 ```
-MVP 只支持：
-  - 单 Realm 内 Cell 迁移
-  - 跨 Space 传送
-
-MVP 不支持：
-  - 跨机房 / 跨 Realm 实体迁移
-  - 脚本调用栈迁移
-  - 挂起协程 / Future continuation 迁移
-  - 外部 I/O 上下文迁移
+theseed first implements intra-Realm migration and cross-Space teleport,
+explicitly excludes the script call stack and external I/O from the snapshot,
+avoiding swallowing BigWorld's HA complexity into the MVP all at once.
 ```
 
 ---
 
-## 1. 迁移场景
+## 0. MVP Boundary
 
 ```
-场景 1: Teleport（跨 Space 传送）
-  玩家从 Space A 传送到 Space B
-  可能跨 CellApp
+The MVP only supports:
+  - Intra-Realm Cell migration
+  - Cross-Space teleport
 
-场景 2: Cell 边界移动
-  Space 拓扑变化导致 Cell 边界移动
-  实体需要迁移到新的 CellApp
-
-场景 3: 负载均衡
-  CellApp 过载，部分实体迁移到其他 CellApp
-
-场景 4: 跨服（远期）
-  实体从一个 Realm 迁移到另一个 Realm
-  不属于 MVP 范围
+The MVP does not support:
+  - Cross-datacenter / cross-Realm entity migration
+  - Script call stack migration
+  - Suspended coroutine / Future continuation migration
+  - External I/O context migration
 ```
 
 ---
 
-## 2. 迁移流程
+## 1. Migration Scenarios
+
+```
+Scenario 1: Teleport (cross-Space teleport)
+  A player teleports from Space A to Space B
+  May cross CellApps
+
+Scenario 2: Cell boundary movement
+  A Space topology change causes the Cell boundary to move
+  The entity needs to migrate to a new CellApp
+
+Scenario 3: Load balancing
+  A CellApp is overloaded, and some entities migrate to other CellApps
+
+Scenario 4: Cross-server (long-term)
+  An entity migrates from one Realm to another
+  Not within MVP scope
+```
+
+---
+
+## 2. Migration Flow
 
 ```
 Phase 1: Prepare
-  ├─ 源 CellApp: 冻结实体收件箱
-  ├─ 标记 entity epoch / migration token
-  ├─ 设置 GhostManager 路由（转发窗口期的消息）
-  └─ 通知目标 CellApp 准备接收
+  ├─ Source CellApp: freeze the entity's inbox
+  ├─ Mark the entity epoch / migration token
+  ├─ Set up the GhostManager route (forward messages during the window period)
+  └─ Notify the target CellApp to prepare to receive
 
 Phase 2: Serialize
-  ├─ 序列化实体状态：
-  │   - PropertyBlock（持久化 + 运行时必要属性）
-  │   - 位置 / 朝向 / Space 信息
-  │   - 定时器列表
-  │   - 控制器状态
-  │   - Witness 基础状态
-  └─ 发送到目标 CellApp
+  ├─ Serialize the entity state:
+  │   - PropertyBlock (persistence + runtime-necessary properties)
+  │   - Position / orientation / Space information
+  │   - Timer list
+  │   - Controller state
+  │   - Witness base state
+  └─ Send to the target CellApp
 
-  不进入迁移快照：
-    - Python / Lua 调用栈
-    - yield 挂起中的 continuation
-    - 正在执行的 HTTP / DB / 跨服请求上下文
+  Not included in the migration snapshot:
+    - Python / Lua call stacks
+    - Continuations suspended at yield
+    - In-flight HTTP / DB / cross-server request contexts
 
 Phase 3: Restore
-  ├─ 目标 CellApp: 创建新实体
-  ├─ 反序列化属性
-  ├─ 恢复定时器
-  ├─ 加入 Space / CoordinateSystem
-  ├─ 恢复 Witness（如果有客户端）
-  └─ 建立新的 entity epoch
+  ├─ Target CellApp: create a new entity
+  ├─ Deserialize properties
+  ├─ Restore timers
+  ├─ Add to the Space / CoordinateSystem
+  ├─ Restore the Witness (if there is a client)
+  └─ Establish a new entity epoch
 
 Phase 4: Route Update
-  ├─ 更新 EntityCall 路由：旧 CellApp → 新 CellApp
-  ├─ 通知 BaseApp 更新 cellEntityCall 目标
-  ├─ GhostManager 路由窗口期：将运行时消息转发到新位置
-  └─ 通知已知持有方更新地址
+  ├─ Update the EntityCall route: old CellApp → new CellApp
+  ├─ Notify BaseApp to update the cellEntityCall target
+  ├─ GhostManager route window period: forward runtime messages to the new location
+  └─ Notify known holders to update the address
 
 Phase 5: Cleanup
-  ├─ 旧 CellApp: 销毁旧实体（callScript=false）
-  ├─ 清理 GhostManager 路由
-  └─ 丢弃旧 epoch 的迟到回调
+  ├─ Old CellApp: destroy the old entity (callScript=false)
+  ├─ Clean up the GhostManager route
+  └─ Discard late callbacks from the old epoch
 ```
 
 ---
 
-## 3. 迁移窗口期的消息处理
+## 3. Message Handling During the Migration Window
 
 ```
-问题：迁移过程中，运行时消息可能发到旧的 CellApp
+Problem: during migration, runtime messages may be sent to the old CellApp
 
-KBEngine 的解决方案（来自源码注释）：
-  "如果期间有base的消息发送过来，entity的ghost机制能够转到real上去"
+KBEngine's solution (from source comments):
+  "If a base message is sent over during this period, the entity's ghost mechanism can forward it to the real"
 
-theseed 的设计：
+theseed's design:
   GhostManager.setRoute(target, ttl=10s)
-  → 旧 CellApp 在路由窗口期内，把运行时消息转发到新位置
-  → 路由过期后，如果还有消息发来，说明路由表没更新完，记录告警
+  → During the route window period, the old CellApp forwards runtime messages to the new location
+  → After the route expires, if messages still arrive, it means the routing table has not finished updating; record an alert
 
-覆盖范围：
+Coverage:
   - EntityCall
-  - Ghost / Witness 同步
-  - 迁移窗口内的运行时控制消息
+  - Ghost / Witness synchronization
+  - Runtime control messages during the migration window
 
-不覆盖：
-  - 已经发出的外部 HTTP 请求
-  - 已提交的 DB 异步请求
-  - 跨 Realm 异步任务的远端执行上下文
+Not covered:
+  - Already-dispatched external HTTP requests
+  - Already-submitted DB async requests
+  - The remote execution context of cross-Realm async tasks
 
-因此：
-  迁移窗口机制的目标是“运行时消息无感切换”，
-  不是对所有异步副作用承诺绝对零丢失。
+Therefore:
+  The goal of the migration window mechanism is "seamless switching of runtime messages",
+  not an absolute zero-loss guarantee for all asynchronous side effects.
 ```

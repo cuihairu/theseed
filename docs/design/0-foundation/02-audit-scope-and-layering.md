@@ -1,161 +1,163 @@
-# Audit Scope & Layering — 审计口径与分层原则
+# Audit Scope & Layering — Audit Scope and Layering Principles
 
-> 本轮文档重组按 BigWorld 14.4.1 的服务端实现与服务端工具链对标，
-> 同时参考 KBEngine 的轻量运行时落地方式。
-> 顶层定位见 [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md)。
-> 不把客户端渲染、资源编辑器 UI、WorldEditor 交互细节纳入当前必做项。
+> **English** | [中文](02-audit-scope-and-layering.zh.md)
+
+> This round of document restructuring is benchmarked against the server-side implementation and server-side toolchain of BigWorld 14.4.1,
+> while referencing KBEngine's lightweight runtime implementation.
+> See [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md) for the top-level positioning.
+> Client rendering, resource editor UI, and WorldEditor interaction details are not included in the current must-do items.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld implements it
 
 ```
-BigWorld 是这些系统边界的源头参考：
-  - runtime 主干
+BigWorld is the origin reference for these system boundaries:
+  - runtime backbone
   - Space / AOI / Witness / Ghost
   - HA
-  - 数据运维
-  - 登录与控制面
-  - 世界资产与工具链
+  - data ops
+  - login and control plane
+  - world assets and toolchain
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine implements it
 
 ```
-KBEngine 更偏向轻量运行时闭环：
+KBEngine leans more toward a lightweight runtime loop:
   - tick / entity / AOI / witness / migration
-  - 系统层和工具链相对更薄
+  - the system layer and toolchain are relatively thinner
 ```
 
-### 优缺点
+### Pros and cons
 
 ```
-BigWorld 的优点：
-  - 系统面完整
-  - 能直接支撑更重的运维和运营能力
+BigWorld's pros:
+  - Complete system areas
+  - Can directly support heavier ops and live-ops capabilities
 
-KBEngine 的优点：
-  - 轻
-  - 更适合作为运行时闭环的参考实现
+KBEngine's pros:
+  - Light
+  - Better suited as a reference implementation for the runtime loop
 
-共同缺点：
-  - 如果不先立审计口径，很容易把“长期边界”和“当前实现”混在一起
+Shared cons:
+  - If the audit scope is not established first, it is very easy to mix "long-term boundaries" with "current implementation"
 ```
 
-### theseed 的取舍
+### theseed's trade-offs
 
 ```
-theseed 以 BigWorld 的系统分层作为长期边界，
-以 KBEngine 的轻量运行时参考校验 MVP 路径，
-再把现代化基础设施放回明确层级。
-这样文档不会低估 BigWorld 的源头价值，
-也不会把 KBEngine 的简化实现误当成能力上限。
+theseed takes BigWorld's system layering as its long-term boundary,
+validates the MVP path against KBEngine's lightweight runtime reference,
+and then places modern infrastructure back into explicit layers.
+In this way the documents neither underestimate BigWorld's origin value
+nor mistake KBEngine's simplified implementation for the capability upper bound.
 ```
 
 ---
 
-## 0. 审计口径
+## 0. Audit Scope
 
-当前文档的审计范围固定为：
+The audit scope of the current documents is fixed as:
 
 ```
-纳入范围：
-  - BaseApp / CellApp / BaseAppMgr / CellAppMgr 一类运行时
-  - LoginApp / Gateway / Challenge / 受控停服
+In scope:
+  - Runtimes of the BaseApp / CellApp / BaseAppMgr / CellAppMgr kind
+  - LoginApp / Gateway / Challenge / controlled shutdown
   - AOI / Witness / Ghost / EntityCall / Migration
-  - BackupHash / SecondaryDB / 数据运维工具链
-  - Watcher / Profiler / 运维控制面
-  - Chunk / Compiled Space 的服务端资产边界
+  - BackupHash / SecondaryDB / data ops toolchain
+  - Watcher / Profiler / ops control plane
+  - Server-side asset boundaries of Chunk / Compiled Space
 
-不纳入当前必做项：
-  - 客户端渲染
-  - WorldEditor 的交互 UI 细节
-  - 美术生产工具的完整实现
+Not included in the current must-do items:
+  - Client rendering
+  - WorldEditor interaction UI details
+  - Full implementation of art production tools
 ```
 
-因此这套文档要回答的不是：
+Therefore what this document set must answer is not:
 
 ```
-如何做一个完整 MMO 编辑器生态
+How to build a complete MMO editor ecosystem
 ```
 
-而是：
+but rather:
 
 ```
-theseed 作为分布式游戏服务端引擎，
-在 BigWorld / KBEngine 的能力版图里应该覆盖哪些系统面，
-哪些只是 Phase 2 / Phase 3 的边界占位。
-```
-
----
-
-## 1. 为什么要按系统面重组
-
-旧目录的主要问题不是“文件名不好看”，而是抽象层次混杂：
-
-```
-旧的 runtime/core 目录
-  同时混了 runtime model、replication、topology、HA
-
-旧的 infrastructure 目录
-  同时混了 access plane、cluster lifecycle、runtime feedback
-
-旧的 gameplay 目录
-  实际包含大量 world / space / chunk / server framework 内容
-
-旧的 observability 目录
-  旧目录名，已拆分为 telemetry、ops control plane、script debug 三个边界
-```
-
-这样会导致两个后果：
-
-```
-1. BigWorld 的系统级实现面被拆散，看不出完整边界
-2. KBEngine 的轻量运行时参考和 theseed 自己加的现代基础设施缠在一起
-```
-
-所以本轮重组采用新的判断标准：
-
-```
-不是按“功能散点”分类，
-而是按“引擎系统面”分类。
+As a distributed game server engine,
+which system areas theseed should cover within the capability landscape of BigWorld / KBEngine,
+and which are merely boundary placeholders for Phase 2 / Phase 3.
 ```
 
 ---
 
-## 2. 新的分层原则
+## 1. Why Reorganize by System Area
+
+The main problem with the old directory was not "ugly file names" but mixed levels of abstraction:
+
+```
+The old runtime/core directory
+  mixed runtime model, replication, topology, and HA together
+
+The old infrastructure directory
+  mixed access plane, cluster lifecycle, and runtime feedback together
+
+The old gameplay directory
+  actually contained a large amount of world / space / chunk / server framework content
+
+The old observability directory
+  an old directory name, already split into the three boundaries of telemetry, ops control plane, and script debug
+```
+
+This leads to two consequences:
+
+```
+1. BigWorld's system-level implementation areas are broken apart, making the complete boundary invisible
+2. KBEngine's lightweight runtime reference and the modern infrastructure theseed added itself are tangled together
+```
+
+So this round of restructuring adopts a new criterion:
+
+```
+Classify not by "feature scatter points",
+but by "engine system areas".
+```
+
+---
+
+## 2. New Layering Principles
 
 ### 2.1 0-foundation
 
-负责：
+Responsible for:
 
 ```
-  - MVP 基线
-  - 审计范围
-  - 文档分层原则
+  - MVP baseline
+  - Audit scope
+  - Document layering principles
 ```
 
 ### 2.2 1-runtime-model
 
-负责：
+Responsible for:
 
 ```
-  - tick 模型
-  - entity 基本对象模型
+  - tick model
+  - entity basic object model
   - timer / object pool / runtime memory
 ```
 
-这一层只回答：
+This layer answers only:
 
 ```
-引擎在单个 tick 线程内如何正确运行。
+How the engine runs correctly within a single tick thread.
 ```
 
 ### 2.3 2-replication-and-space
 
-负责：
+Responsible for:
 
 ```
   - AOI / Space / Topology
@@ -167,24 +169,24 @@ theseed 作为分布式游戏服务端引擎，
   - BSP Rebalance / Offload
 ```
 
-这一层对应 BigWorld / KBEngine 最核心的运行时分布式能力。
+This layer corresponds to the most core runtime distributed capabilities of BigWorld / KBEngine.
 
 ### 2.4 3-cluster-and-availability
 
-负责：
+Responsible for:
 
 ```
   - fault tolerance
   - BackupHash / HA
   - service fragment / retire / controlled shutdown
-  - profiler → 调度反馈闭环
+  - profiler → scheduling feedback loop
 ```
 
-这一层主要对标 BigWorld 真正拉开差距的系统层。
+This layer mainly benchmarks the system layer where BigWorld truly pulls ahead.
 
 ### 2.5 4-data-and-ops
 
-负责：
+Responsible for:
 
 ```
   - data definition
@@ -194,11 +196,11 @@ theseed 作为分布式游戏服务端引擎，
   - server merge
 ```
 
-这一层把“在线存储主路径”和“离线数据运维工具链”明确拆开。
+This layer clearly separates the "online storage main path" from the "offline data ops toolchain".
 
 ### 2.6 5-access-and-control-plane
 
-负责：
+Responsible for:
 
 ```
   - gateway / login service
@@ -208,16 +210,16 @@ theseed 作为分布式游戏服务端引擎，
   - telemetry / debug / diagnostics
 ```
 
-这里的重点是：
+The focus here is:
 
 ```
-接入面、控制面、观测面属于系统外缘，
-但它们在 BigWorld 里同样是服务端能力边界的一部分。
+The access plane, control plane, and observation plane are on the outer edge of the system,
+but in BigWorld they are likewise part of the server-side capability boundary.
 ```
 
 ### 2.7 6-world-and-game-framework
 
-负责：
+Responsible for:
 
 ```
   - physics / navigation
@@ -227,11 +229,11 @@ theseed 作为分布式游戏服务端引擎，
   - lifecycle / script binding
 ```
 
-这一层不再叫 gameplay，是因为其中有大量“世界系统”和“服务端游戏框架”。
+This layer is no longer called gameplay because it contains a large amount of "world system" and "server-side game framework".
 
 ### 2.8 7-scripting-and-client
 
-负责：
+Responsible for:
 
 ```
   - script security
@@ -242,65 +244,65 @@ theseed 作为分布式游戏服务端引擎，
 
 ### 2.9 8-reference
 
-负责：
+Responsible for:
 
 ```
-  - 来源追溯
-  - 覆盖判断
-  - BigWorld / KBEngine / theseed 的差异说明
+  - Source tracing
+  - Coverage judgment
+  - Explanation of the differences between BigWorld / KBEngine / theseed
 ```
 
 ---
 
-## 3. 与 BigWorld / KBEngine 的映射
+## 3. Mapping to BigWorld / KBEngine
 
-| 系统面 | BigWorld 主要来源 | KBEngine 主要来源 | theseed 文档层 |
+| System area | Main BigWorld source | Main KBEngine source | theseed document layer |
 |------|------|------|------|
 | Tick / Entity / Runtime Memory | BaseApp / CellApp runtime | EventDispatcher / Entity | 1-runtime-model |
 | AOI / Witness / Ghost / Migration | CellApp AOI / Ghost / Mailbox | AOI / Witness / EntityCall | 2-replication-and-space |
-| BSP / Load Bounds / Offload | CellAppMgr / BSP / load balancing | 基本无完整系统 | 2-replication-and-space |
-| HA / BackupHash / Retire | BaseAppMgr / BackupSender / Service Fragment | 相对弱 | 3-cluster-and-availability |
-| SecondaryDB / DB Tools | DBMgr / SecondaryDB / transfer_db | 持久化主路径较简化 | 4-data-and-ops |
-| Login / Watcher / Status Check | LoginApp / Watcher / message_logger | LoginApp / Watcher 简化版 | 5-access-and-control-plane |
-| Space Asset / Chunk / Compiled Space | Geometry Mapping / Chunk / Compiled Space | 基本无完整等价层 | 6-world-and-game-framework |
+| BSP / Load Bounds / Offload | CellAppMgr / BSP / load balancing | basically no complete system | 2-replication-and-space |
+| HA / BackupHash / Retire | BaseAppMgr / BackupSender / Service Fragment | relatively weak | 3-cluster-and-availability |
+| SecondaryDB / DB Tools | DBMgr / SecondaryDB / transfer_db | the persistence main path is fairly simplified | 4-data-and-ops |
+| Login / Watcher / Status Check | LoginApp / Watcher / message_logger | simplified version of LoginApp / Watcher | 5-access-and-control-plane |
+| Space Asset / Chunk / Compiled Space | Geometry Mapping / Chunk / Compiled Space | basically no complete equivalent layer | 6-world-and-game-framework |
 | Script / Client | Python integration / client protocol | Python + client SDK | 7-scripting-and-client |
 
 ---
 
-## 4. 当前覆盖判断
+## 4. Current Coverage Judgment
 
-按 KBEngine 轻量参考实现检查：
-
-```
-运行时闭环已经基本进入“可设计、可落地”的状态。
-```
-
-按 BigWorld 源头系统面检查：
+Checked against the KBEngine lightweight reference implementation:
 
 ```
-这些文档现在不再只覆盖 runtime core，
-而是把 HA、数据运维、登录运维、控制面、load feedback 这些系统边界也立住了。
+The runtime loop has basically reached a state that is "designable and implementable".
 ```
 
-但仍要明确分阶段：
+Checked against BigWorld's origin system areas:
 
-| 能力域 | 当前状态 |
+```
+These documents no longer cover only the runtime core,
+but also establish the system boundaries of HA, data ops, login ops, control plane, and load feedback.
+```
+
+But staging must still be made explicit:
+
+| Capability domain | Current status |
 |------|------|
-| Base / Cell / Tick / AOI / Ghost / Witness | 已覆盖 |
-| SingleCell / Static Partition | 已覆盖 |
-| BigWorld 级 BSP grow-shrink / auto rebalance | 已定义边界，非 MVP |
-| 主持久化与数据定义 | 已覆盖 |
-| LocalArchiveStore / SecondaryDB | 已定义边界，非 MVP |
-| BackupHash / 热备恢复链 | 已定义边界，非 MVP |
-| Login 运维面 / Challenge lifecycle | 已覆盖设计边界 |
-| Watcher 式控制面 | 已覆盖设计边界 |
-| Runtime profiler → 调度反馈闭环 | 已覆盖设计边界 |
+| Base / Cell / Tick / AOI / Ghost / Witness | Covered |
+| SingleCell / Static Partition | Covered |
+| BigWorld-level BSP grow-shrink / auto rebalance | Boundary defined, not MVP |
+| Primary persistence and data definition | Covered |
+| LocalArchiveStore / SecondaryDB | Boundary defined, not MVP |
+| BackupHash / hot-standby recovery chain | Boundary defined, not MVP |
+| Login ops plane / Challenge lifecycle | Design boundary covered |
+| Watcher-style control plane | Design boundary covered |
+| Runtime profiler → scheduling feedback loop | Design boundary covered |
 
 ---
 
-## 5. 阅读顺序建议
+## 5. Suggested Reading Order
 
-### 5.1 先看运行时闭环
+### 5.1 Start with the runtime loop
 
 ```
 01-mvp-architecture-baseline
@@ -308,7 +310,7 @@ theseed 作为分布式游戏服务端引擎，
   → 2-replication-and-space
 ```
 
-### 5.2 再看 BigWorld 源头系统面
+### 5.2 Then the BigWorld origin system areas
 
 ```
 3-cluster-and-availability
@@ -316,7 +318,7 @@ theseed 作为分布式游戏服务端引擎，
   → 5-access-and-control-plane
 ```
 
-### 5.3 最后看游戏框架与客户端边界
+### 5.3 Finally the game framework and client boundaries
 
 ```
 6-world-and-game-framework
@@ -325,14 +327,14 @@ theseed 作为分布式游戏服务端引擎，
 
 ---
 
-## 6. 当前定位
+## 6. Current Positioning
 
-这轮整理后的 theseed 文档应当被理解为：
+After this round of reorganization, the theseed documents should be understood as:
 
 ```
-以 BigWorld 14.4.1 的服务端系统面作为源头边界，
-以 KBEngine 的轻量运行时落地方式作为参考实现之一，
-同时把 theseed 自己新增的现代化基础设施明确放回合适层级。
+Taking the server-side system areas of BigWorld 14.4.1 as the origin boundary,
+taking KBEngine's lightweight runtime implementation as one of the reference implementations,
+and at the same time placing the modern infrastructure theseed added itself explicitly back into the appropriate layers.
 ```
 
-这比“Runtime Core + 一堆扩展”更接近真正可审计、可演进的引擎文档结构。
+This is closer to a truly auditable, evolvable engine document structure than "Runtime Core + a pile of extensions".

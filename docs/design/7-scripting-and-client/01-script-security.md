@@ -1,98 +1,100 @@
-# Script Security — 脚本层安全与稳定性
+# Script Security — Script-Layer Security and Stability
 
-> 核心原则：**不防自己人，防客户端、防 bug、防泄露**。
-> 游戏服务器脚本是开发者自己的业务代码，不需要沙箱白名单。
+> **English** | [中文](01-script-security.zh.md)
+
+> Core principle: **do not defend against insiders; defend against clients, bugs, and leaks**.
+> Game server scripts are the developer's own business code and require no sandbox allowlist.
 >
-> 来源判断：BigWorld 与 KBEngine 都没有完整脚本安全治理层。
-> theseed 新增脚本防护、稳定性和暴露面治理。
+> Source assessment: neither BigWorld nor KBEngine has a complete script security governance layer.
+> theseed adds script protection, stability, and exposure-surface governance.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
-
-```
-BigWorld 的脚本侧重点不是“安全体系”，而是：
-  - Python 集成
-  - 错误输出
-  - watcher / reload 辅助
-  - 运行时绑定
-```
-
-### KBEngine 是怎么实现的
+### How BigWorld Implements It
 
 ```
-KBEngine 也没有内建完整脚本安全层。
-它更偏向：
-  - Python 业务脚本
-  - 运行时校验
-  - 少量手工保护
+BigWorld's script focus is not a "security system" but rather:
+  - Python integration
+  - error output
+  - watcher / reload assistance
+  - runtime binding
 ```
 
-### 优缺点
+### How KBEngine Implements It
 
 ```
-BigWorld / KBEngine 的优点：
-  - 简单直接
-  - 不增加太多脚本侧复杂度
-
-BigWorld / KBEngine 的缺点：
-  - 缺少源码保护
-  - 缺少统一参数防线
-  - 缺少脚本稳定性治理
+KBEngine likewise has no built-in complete script security layer.
+It leans more toward:
+  - Python business scripts
+  - runtime validation
+  - a small amount of manual protection
 ```
 
-### theseed 的取舍
+### Pros and Cons
 
 ```
-theseed 选择把脚本安全单独抽层，
-因为脚本不只是业务实现，还会成为对外暴露面和事故源。
+BigWorld / KBEngine pros:
+  - simple and direct
+  - do not add much complexity on the script side
 
-代价是：
-  - 构建链更复杂
-  - 需要统一 def、频率、超时、异常保护
+BigWorld / KBEngine cons:
+  - lack of source-code protection
+  - lack of a unified argument defense line
+  - lack of script stability governance
+```
+
+### theseed's Trade-offs
+
+```
+theseed chooses to extract script security into a separate layer,
+because scripts are not only business implementations but also an external exposure surface and a source of incidents.
+
+The cost is:
+  - a more complex build chain
+  - the need for unified def, rate, timeout, and exception protection
 ```
 
 ---
 
-## 1. 源码保护
+## 1. Source-Code Protection
 
-### 1.1 Python：.pyc 部署
+### 1.1 Python: .pyc Deployment
 
 ```bash
-# 构建流程
+# build process
 theseed-build compile-scripts --source scripts/ --output deploy/scripts/ --strip-source
-# deploy/scripts/ 只包含 .pyc 字节码，不包含 .py 源文件
+# deploy/scripts/ contains only .pyc bytecode, not .py source files
 ```
 
-### 1.2 Lua：预编译字节码
+### 1.2 Lua: Precompiled Bytecode
 
 ```bash
 theseed-build compile-scripts --source scripts/ --output deploy/scripts/
-# 生成 .luac 字节码
+# generates .luac bytecode
 ```
 
-### 1.3 保护层级
+### 1.3 Protection Levels
 
 ```
-L1: .pyc / .luac 预编译部署     → 成本零，防直接拷贝源码
-L2: 加密打包                     → AES 加密 + 引擎内存解密
-L3: 自定义 opcode（Lua）          → 修改 Lua 虚拟机 opcode 映射
-L4: 核心逻辑下沉 C++             → 脚本只做配置和调度
+L1: .pyc / .luac precompiled deployment  → zero cost, prevents direct source copying
+L2: encrypted packaging                  → AES encryption + in-memory decryption by the engine
+L3: custom opcode (Lua)                  → modify the Lua VM opcode mapping
+L4: push core logic down to C++          → scripts only do configuration and scheduling
 ```
 
 ---
 
-## 2. 客户端防线
+## 2. Client Defense Line
 
-### 2.1 三层防线
+### 2.1 Three-Layer Defense
 
 ```
-客户端请求 → [Gateway 限流] → [def 参数校验] → [脚本业务校验]
+client request → [Gateway rate limiting] → [def argument validation] → [script business validation]
 ```
 
-### 2.2 def 层声明防线
+### 2.2 def-Layer Declaration Defense
 
 ```xml
 <Method name="attack" exposed="true" rateLimit="5/1s">
@@ -105,34 +107,34 @@ L4: 核心逻辑下沉 C++             → 脚本只做配置和调度
 </Method>
 ```
 
-### 2.3 频率限制
+### 2.3 Rate Limiting
 
 ```cpp
 class MethodRateLimiter {
 public:
     bool check(EntityId entityId, const std::string& method,
                int maxCalls, int windowSeconds);
-    // 滑动窗口计数器
+    // sliding-window counter
 };
 ```
 
 ---
 
-## 3. 运行时韧性
+## 3. Runtime Resilience
 
-> 不是"安全"，是"稳定性"。防的是 bug，不是攻击。
+> This is not "security" but "stability". What it defends against is bugs, not attacks.
 
-### 3.1 超时保护
+### 3.1 Timeout Protection
 
 ```cpp
 class ScriptGuard {
     ScriptGuard(const std::string& context, Duration timeout);
-    ~ScriptGuard();  // 自动记录执行时间，超时告警
+    ~ScriptGuard();  // automatically records execution time, alerts on timeout
     bool checkTimeout() const;
 };
 ```
 
-### 3.2 异常捕获
+### 3.2 Exception Catching
 
 ```cpp
 void ScriptEngine::executeSafe(const std::string& context, std::function<void()> fn) {
@@ -141,12 +143,12 @@ void ScriptEngine::executeSafe(const std::string& context, std::function<void()>
     } catch (const ScriptException& e) {
         LOG_ERROR("script error", {{"context", context}, {"error", e.what()}});
         METRIC_COUNTER("theseed.script.error", 1);
-        // 不崩溃，继续运行
+        // do not crash, keep running
     }
 }
 ```
 
-### 3.3 递归深度限制
+### 3.3 Recursion Depth Limit
 
 ```cpp
 void ScriptEngine::executeMethod(EntityId id, const std::string& method) {
@@ -162,19 +164,19 @@ void ScriptEngine::executeMethod(EntityId id, const std::string& method) {
 }
 ```
 
-脚本安全只管“别炸”和“别泄露”，
-脚本调试见 `03-script-debug`，不要混为一谈。
+Script security only cares about "don't blow up" and "don't leak";
+for script debugging see `03-script-debug`, do not conflate the two.
 
 ---
 
-## 4. 与 KBEngine 的对比
+## 4. Comparison with KBEngine
 
-| 能力 | KBEngine | theseed |
+| Capability | KBEngine | theseed |
 |------|---------|---------|
-| 源码保护 | .pyc（手动） | 构建工具自动编译 + 可选加密 |
-| 客户端输入校验 | 运行时类型检查 | def 声明 + 自动生成校验代码 |
-| 参数范围校验 | 无 | minValue/maxValue/maxLength |
-| 频率限制 | 无 | per-entity per-method 滑动窗口 |
-| 异常捕获 | 部分覆盖 | 100% 覆盖，脚本 bug 不崩溃 |
-| 超时保护 | 无 | ScriptGuard 自动超时 |
-| 递归保护 | Python 默认 | 自定义限制 + 监控 |
+| Source-code protection | .pyc (manual) | build tool auto-compiles + optional encryption |
+| Client input validation | runtime type checking | def declaration + auto-generated validation code |
+| Argument range validation | none | minValue/maxValue/maxLength |
+| Rate limiting | none | per-entity per-method sliding window |
+| Exception catching | partial coverage | 100% coverage, script bugs do not crash |
+| Timeout protection | none | ScriptGuard automatic timeout |
+| Recursion protection | Python default | custom limit + monitoring |

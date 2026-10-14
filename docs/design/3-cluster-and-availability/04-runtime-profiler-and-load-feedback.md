@@ -1,140 +1,142 @@
-# Runtime Profiler & Load Feedback — 负载剖面、过载判定与调度反馈链
+# Runtime Profiler & Load Feedback — Load Profile, Overload Determination, and Scheduling Feedback Chain
 
-> 来源源头：BigWorld `EntityProfiler / EntityTypeProfiler / artificialMinLoad / CellAppMgr::loadBalance / overloadCheck / shouldOffload`。
-> KBEngine 只有基础负载判断参考，缺少完整 profiler → 调度反馈闭环。
-> 这篇讲的是“负载信号如何回到调度与限流”，不是通用 Telemetry，也不是 Ops 查询入口。
+> **English** | [中文](04-runtime-profiler-and-load-feedback.zh.md)
 
----
-
-## 0.5 引擎实现对照与取舍
-
-### BigWorld 是怎么实现的
-
-```
-BigWorld 的 profiler 不只是观察工具：
-  - EntityProfiler / EntityTypeProfiler 产生运行时负载信号
-  - 这些信号会反馈到 loadBalance / shouldOffload / 登录限流
-```
-
-### KBEngine 是怎么实现的
-
-```
-KBEngine 也会做负载判断，
-但缺少 BigWorld 那种 profiler → 调度反馈 的完整链路。
-```
-
-### 优缺点
-
-```
-BigWorld 的优点：
-  - 负载信号能真正参与调度
-  - 系统反馈闭环更完整
-
-KBEngine 的优点：
-  - 简单
-  - 不需要先建设完整剖面体系
-
-共同缺点：
-  - 这层一旦和 Telemetry 或 Ops 混写，边界就会非常模糊
-```
-
-### theseed 的取舍
-
-```
-theseed 把 profiler feedback 单独成篇，
-因为它既不是“多打一组指标”，
-也不是“多一个在线查询入口”，
-而是系统调度输入层。
-```
-
-### 为什么不能并回 Telemetry 或 Ops
-
-```
-如果并回 Telemetry，
-会误以为 profiler 的任务只是“采样后展示”。
-
-如果并回 Ops，
-又会误以为 profiler 的任务只是“给人看状态”。
-
-但 BigWorld 这层的本质是：
-  profiler 输出要继续进入调度器，
-  最终影响 offload、rebalance、login throttling。
-```
+> Origin: BigWorld `EntityProfiler / EntityTypeProfiler / artificialMinLoad / CellAppMgr::loadBalance / overloadCheck / shouldOffload`.
+> KBEngine only has a basic load judgment reference, lacking a complete profiler → scheduling feedback feedback loop.
+> This document discusses "how load signals return to scheduling and throttling", not general Telemetry, nor an Ops query entry point.
 
 ---
 
-## 0. 设计边界
+## 0.5 Engine Implementation Comparison and Trade-offs
+
+### How BigWorld Implements It
 
 ```
-本篇负责：
-  - runtime profiler 采样对象与层级
-  - 负载平滑、人工最小负载、过载判定
-  - profiler 信号如何进入负载均衡、offload、登录限流
-
-本篇不负责：
-  - traces / metrics / logs 后端
-  - 在线命令和 watcher 查询入口
-  - 具体 Cell 划分算法的实现细节
+BigWorld's profiler is not just an observation tool:
+  - EntityProfiler / EntityTypeProfiler produce runtime load signals
+  - These signals feed back into loadBalance / shouldOffload / login throttling
 ```
 
-和其他文档的关系：
+### How KBEngine Implements It
+
+```
+KBEngine also does load judgment,
+but lacks BigWorld's complete profiler → scheduling feedback chain.
+```
+
+### Pros and Cons
+
+```
+BigWorld's advantages:
+  - Load signals genuinely participate in scheduling
+  - The system feedback loop is more complete
+
+KBEngine's advantages:
+  - Simple
+  - No need to first build a complete profiling system
+
+Shared disadvantages:
+  - Once this layer is mixed with Telemetry or Ops, the boundary becomes very blurry
+```
+
+### theseed's Trade-offs
+
+```
+theseed makes profiler feedback a separate document,
+because it is neither "emitting one more set of metrics",
+nor "one more online query entry point",
+but the system scheduling input layer.
+```
+
+### Why It Cannot Be Merged Back into Telemetry or Ops
+
+```
+If merged back into Telemetry,
+it would be mistakenly thought that the profiler's job is only "sample and display".
+
+If merged back into Ops,
+it would be mistakenly thought that the profiler's job is only "show state to humans".
+
+But the essence of this BigWorld layer is:
+  profiler output must continue into the scheduler,
+  ultimately affecting offload, rebalance, login throttling.
+```
+
+---
+
+## 0. Design Boundary
+
+```
+This document covers:
+  - runtime profiler sampling objects and levels
+  - Load smoothing, artificial minimum load, overload determination
+  - How profiler signals enter load balancing, offload, login throttling
+
+This document does not cover:
+  - traces / metrics / logs backends
+  - Online commands and watcher query entry points
+  - The implementation details of the concrete Cell partitioning algorithm
+```
+
+Relationship with other documents:
 
 ```
 05-telemetry-and-debug
-  - 讲 Telemetry / Debug / 基础 Profiling
+  - Discusses Telemetry / Debug / basic Profiling
 
 04-ops-control-plane
-  - 讲怎样 inspect / command
+  - Discusses how to inspect / command
 
-本篇
-  - 讲 profiler 信号如何成为系统调度输入
+This document
+  - Discusses how profiler signals become system scheduling input
 ```
 
 ---
 
-## 1. 为什么这层不能继续放在 OTel 里
+## 1. Why This Layer Cannot Continue to Live in OTel
 
-BigWorld 的 `EntityProfiler` 不是“多一组 metrics”。
+BigWorld's `EntityProfiler` is not "one more set of metrics".
 
-它更接近：
-
-```
-运行时负载定价器
-```
-
-因为它的输出会影响：
+It is closer to:
 
 ```
-1. entity / entity type load 统计
-2. Cell / Space 的负载判断
+Runtime load pricer
+```
+
+Because its output affects:
+
+```
+1. entity / entity type load statistics
+2. Load judgment of Cell / Space
 3. loadBalance / updateRanges
 4. shouldOffload
-5. overloadCheck 触发登录限制
+5. overloadCheck triggering login limits
 ```
 
-如果还把这层写成：
+If this layer is still written as:
 
 ```
-profiling = 火焰图 + 慢 tick 告警
+profiling = flame graph + slow tick alerts
 ```
 
-就会继续低估 BigWorld 的系统差异。
+then BigWorld's system difference will continue to be underestimated.
 
-更准确的边界应该是：
+A more accurate boundary should be:
 
 ```
-火焰图、trace、slow tick 告警
-  属于诊断输出
+Flame graphs, traces, slow tick alerts
+  belong to diagnostic output
 
-entity load、space load、overloadCheck 输入
-  属于系统调度输入
+entity load, space load, overloadCheck input
+  belong to system scheduling input
 ```
 
 ---
 
-## 2. BigWorld 的信号链
+## 2. BigWorld's Signal Chain
 
-BigWorld 可以抽象成下面这条反馈链：
+BigWorld can be abstracted into the following feedback chain:
 
 ```
 Entity / Base call time
@@ -145,116 +147,116 @@ Entity / Base call time
   → offload / retire / login throttling
 ```
 
-这里最重要的是：
+The most important thing here is:
 
 ```
-Profiler 不是只向外暴露，
-还向内喂给调度器。
+The Profiler does not only expose outward,
+it also feeds inward to the scheduler.
 ```
 
 ---
 
-## 3. 三层 profiler 语义
+## 3. Three-Level profiler Semantics
 
 ### 3.1 EntityProfiler
 
-职责：
+Responsibilities:
 
 ```
-记录单个实体一个 tick 内花掉的执行时间
-输出 raw / smoothed / adjusted load
+Record the execution time spent by a single entity within one tick
+Output raw / smoothed / adjusted load
 ```
 
 ### 3.2 EntityTypeProfiler
 
-职责：
+Responsibilities:
 
 ```
-把同类实体的负载聚合成类型级画像
+Aggregate the load of entities of the same type into a type-level profile
 ```
 
 ### 3.3 Space / Cell / App load
 
-职责：
+Responsibilities:
 
 ```
-把实体级负载进一步聚合成 CellApp / Space 的调度输入
+Further aggregate entity-level load into scheduling input for CellApp / Space
 ```
 
-这三层不能再只当成 “metrics label aggregation”。
+These three levels can no longer be treated merely as "metrics label aggregation".
 
 ---
 
-## 4. 关键概念
+## 4. Key Concepts
 
 ### 4.1 Raw Load
 
 ```
-当前 tick 原始执行成本
+Raw execution cost of the current tick
 ```
 
 ### 4.2 Smoothed Load
 
 ```
-经过指数平滑后的负载
-避免单 tick 抖动直接触发调度
+Load after exponential smoothing
+Avoids a single-tick jitter directly triggering scheduling
 ```
 
 ### 4.3 Adjusted Load
 
 ```
-在 smoothed load 之上应用人工修正后的负载
+Load after applying artificial correction on top of smoothed load
 ```
 
 ### 4.4 artificialMinLoad
 
-BigWorld 的一个关键系统面就是：
+A key system surface of BigWorld is:
 
 ```
-人工最小负载可以覆盖统计负载下限
+The artificial minimum load can override the statistical load floor
 ```
 
-它的意义不是调试方便，而是：
+Its meaning is not debugging convenience, but:
 
 ```
-把“世界或实体即使当前 CPU 不高，也应视作更重”
-这种运营/调度意图注入系统。
+Injecting operational / scheduling intent such as "a world or entity should be treated as heavier even if its current CPU is not high"
+into the system.
 ```
 
 ---
 
-## 5. artificialMinLoad 到底解决什么
+## 5. What artificialMinLoad Actually Solves
 
-BigWorld 同时在实体和空间层使用 `artificialMinLoad`，说明它解决的是两类问题：
+BigWorld uses `artificialMinLoad` at both the entity and space levels, showing that it solves two kinds of problems:
 
-### 5.1 统计负载不足以表达真实成本
+### 5.1 Statistical Load Is Insufficient to Express Real Cost
 
-例如：
-
-```
-1. 某空间仍在加载 chunk
-2. 某实体后续会触发大批广播或脚本逻辑
-3. 某区域虽然当前安静，但不应再继续收新负载
-```
-
-### 5.2 调度器需要人为偏置
-
-例如：
+For example:
 
 ```
-1. 暂时不希望某空间被继续压入更多 Cell 工作
-2. 某类实体要被“看起来更重”，以便优先迁走
+1. A certain space is still loading chunks
+2. A certain entity will subsequently trigger a large batch of broadcasts or script logic
+3. A certain region is quiet at present, but should not continue to take on new load
 ```
 
-所以 theseed 不应把它误建模成一个“调试变量”。
+### 5.2 The Scheduler Needs Artificial Bias
+
+For example:
+
+```
+1. Temporarily do not want a certain space to be pressed with more Cell work
+2. A certain type of entity should "look heavier" so as to be migrated away first
+```
+
+So theseed should not mistakenly model it as a "debug variable".
 
 ---
 
-## 6. 负载信号如何进入调度
+## 6. How Load Signals Enter Scheduling
 
-### 6.1 平衡输入
+### 6.1 Balancing Input
 
-调度器至少需要下面几类输入：
+The scheduler needs at least the following kinds of input:
 
 ```
   - entity adjusted load
@@ -264,9 +266,9 @@ BigWorld 同时在实体和空间层使用 `artificialMinLoad`，说明它解决
   - artificialMinLoad overrides
 ```
 
-### 6.2 调度输出
+### 6.2 Scheduling Output
 
-在 BigWorld 里，这些信号会影响：
+In BigWorld, these signals affect:
 
 ```
   - loadBalance
@@ -277,44 +279,44 @@ BigWorld 同时在实体和空间层使用 `artificialMinLoad`，说明它解决
   - login overload status
 ```
 
-这表明 profiler 和 lifecycle / login / topology 是连通的，不是孤立模块。
+This shows that the profiler is connected with lifecycle / login / topology, not an isolated module.
 
 ---
 
-## 7. overloadCheck 不只是告警
+## 7. overloadCheck Is Not Just an Alert
 
-BigWorld 的 `overloadCheck` 还有一个设计重点：
+BigWorld's `overloadCheck` has another design emphasis:
 
 ```
-过载要满足持续时间阈值
-然后才升级为系统级状态
+Overload must meet a duration threshold
+before it is escalated to a system-level state
 ```
 
-也就是：
+That is:
 
 ```
 instant overload
   != admitted overload
 ```
 
-这条边界很重要，因为它避免了：
+This boundary is important because it avoids:
 
 ```
-单个尖峰 tick
-  → 立刻触发限流 / 扩容 / 退役
+A single spike tick
+  → immediately triggering throttling / scaling / retirement
 ```
 
-theseed 应显式写入：
+theseed should explicitly write in:
 
 ```
-系统调度信号必须带持续时间判定
+System scheduling signals must carry duration determination
 ```
 
 ---
 
-## 8. theseed 的建议建模
+## 8. theseed's Proposed Modeling
 
-### 8.1 运行时 profiler
+### 8.1 Runtime profiler
 
 ```cpp
 // runtime/IEntityLoadProfiler.h
@@ -339,7 +341,7 @@ public:
 };
 ```
 
-### 8.2 类型级聚合
+### 8.2 Type-Level Aggregation
 
 ```cpp
 // runtime/IEntityTypeLoadAggregator.h
@@ -361,7 +363,7 @@ public:
 };
 ```
 
-### 8.3 调度反馈接口
+### 8.3 Scheduling Feedback Interface
 
 ```cpp
 // runtime/ILoadFeedbackController.h
@@ -386,83 +388,83 @@ public:
 
 ---
 
-## 9. 必须拆开的三层
+## 9. Three Layers That Must Be Separated
 
-这条链里必须区分三层：
+In this chain, three layers must be distinguished:
 
-| 层 | 问题 | 典型输出 |
+| Layer | Question | Typical Output |
 |------|------|----------|
-| Telemetry | 让人看到发生了什么 | metrics / trace / logs |
-| Diagnostics | 让人定位谁重 | entity / type / space profiler |
-| Control Feedback | 让系统据此调整 | offload / balance / throttle |
+| Telemetry | Let people see what happened | metrics / trace / logs |
+| Diagnostics | Let people locate who is heavy | entity / type / space profiler |
+| Control Feedback | Let the system adjust accordingly | offload / balance / throttle |
 
-如果混成一层，会出现：
+If they are mixed into one layer, the following will occur:
 
 ```
-1. OTel 文档看起来像已覆盖了 BigWorld profiler
-2. 实际却没有定义 profiler 如何影响调度
-3. 运维看到指标，但系统本身没有反馈回路
+1. The OTel document looks like it already covers the BigWorld profiler
+2. But in fact it does not define how the profiler affects scheduling
+3. Ops sees the metrics, but the system itself has no feedback loop
 ```
 
 ---
 
-## 10. 与 Login / Lifecycle / Topology 的关系
+## 10. Relationship with Login / Lifecycle / Topology
 
-### 10.1 与 Login Service
+### 10.1 With Login Service
 
 ```
 overload admitted
-  → 更新 login gate 状态
-  → 触发限流或暂停新登录
+  → update login gate state
+  → trigger throttling or pause new logins
 ```
 
-### 10.2 与 Cluster Lifecycle
+### 10.2 With Cluster Lifecycle
 
 ```
 underloaded group
-  → 候选 retire
+  → retire candidate
 
 overloaded group
-  → 候选 add cell / rebalance
+  → add cell / rebalance candidate
 ```
 
-### 10.3 与 Topology
+### 10.3 With Topology
 
 ```
 space / cell load
   → updateRanges / loadBalance
 ```
 
-也就是说，这篇其实补的是 BigWorld 的“系统内反馈闭环”。
+In other words, this document actually fills in BigWorld's "in-system feedback loop".
 
 ---
 
-## 11. 分阶段边界
+## 11. Phased Boundaries
 
 ```
-MVP：
-  - 只保留基础 tick / process profiler
-  - 不承诺 entity / type / space 的系统性反馈闭环
+MVP:
+  - Only retains basic tick / process profiler
+  - Does not commit to a systematic feedback loop for entity / type / space
 
-Phase 2：
-  - 引入 entity / entity-type load profiler
-  - 引入 overload duration 判定
-  - 与 login overload gate、基础 offload 联动
+Phase 2:
+  - Introduce entity / entity-type load profiler
+  - Introduce overload duration determination
+  - Interlock with the login overload gate and basic offload
 
-Phase 3：
-  - 引入 space artificialMinLoad
-  - 与 loadBalance / updateRanges / retire / rollout 联动
-  - 形成完整的 runtime load feedback loop
+Phase 3:
+  - Introduce space artificialMinLoad
+  - Interlock with loadBalance / updateRanges / retire / rollout
+  - Form a complete runtime load feedback loop
 ```
 
 ---
 
-## 12. 与 BigWorld / KBEngine / theseed 的对比
+## 12. Comparison with BigWorld / KBEngine / theseed
 
-| 维度 | BigWorld | KBEngine | theseed |
+| Dimension | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| EntityProfiler | 有 | 弱 | Phase 2 目标 |
-| EntityTypeProfiler | 有 | 弱 | Phase 2 目标 |
-| artificialMinLoad | 有 | 基本无 | 明确建模 |
-| overload duration gate | 有 | 弱 | 应显式建模 |
-| profiler → balance feedback | 有 | 弱 | 当前缺失，本篇补齐 |
+| EntityProfiler | Yes | Weak | Phase 2 goal |
+| EntityTypeProfiler | Yes | Weak | Phase 2 goal |
+| artificialMinLoad | Yes | Basically none | Explicitly modeled |
+| overload duration gate | Yes | Weak | Should be explicitly modeled |
+| profiler → balance feedback | Yes | Weak | Currently missing, filled in by this document |

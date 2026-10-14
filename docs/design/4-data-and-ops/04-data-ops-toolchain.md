@@ -1,101 +1,103 @@
-# Data Ops Toolchain — Snapshot、Transfer、Consolidate、Sync 与 Repair
+# Data Ops Toolchain — Snapshot, Transfer, Consolidate, Sync and Repair
 
-> 来源源头：BigWorld `transfer_db / consolidate_dbs / sync_db / DBApp consolidateData`。
-> KBEngine 工具链较薄，主要作为基础持久化管理参考。
-> 这篇承接的是“数据运维工具链”，不是 Runtime Core，也不是单纯合服。
+> **English** | [中文](04-data-ops-toolchain.zh.md)
+
+> Origin: BigWorld `transfer_db / consolidate_dbs / sync_db / DBApp consolidateData`.
+> KBEngine's toolchain is thin, and mainly serves as a reference for basic persistence management.
+> This document takes over the "data ops toolchain", not Runtime Core, and not server merge alone.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld implements it
 
 ```
-BigWorld 把数据运维工具链拆得很细：
+BigWorld splits the data ops toolchain very finely:
   - transfer_db
   - consolidate_dbs
   - sync_db
   - repair / consolidateData
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine implements it
 
 ```
-KBEngine 的工具链相对薄，
-更多是围绕基础持久化和简单管理展开。
+KBEngine's toolchain is relatively thin,
+and revolves more around basic persistence and simple management.
 ```
 
-### 优缺点
+### Pros and cons
 
 ```
-BigWorld 的优点：
-  - 每个工具的责任清晰
-  - 运维流程可组合
+BigWorld's pros:
+  - Each tool's responsibility is clear
+  - Ops flows are composable
 
-KBEngine 的优点：
-  - 轻量
-  - 不会把工具链做得过重
+KBEngine's pros:
+  - Lightweight
+  - Does not make the toolchain too heavy
 
-共同缺点：
-  - 工具越多，边界越容易被混淆
+Shared cons:
+  - The more tools there are, the more easily the boundaries get confused
 ```
 
-### theseed 的取舍
+### theseed's trade-off
 
 ```
-theseed 保留工具链分层，
-但把 transfer / consolidate / sync / repair 分开定义，
-不把它们揉成一个模糊的“运维工具”。
+theseed keeps the toolchain layering,
+but defines transfer / consolidate / sync / repair separately,
+rather than kneading them into one vague "ops tool".
 ```
 
 ---
 
-## 0. 设计边界
+## 0. Design boundary
 
 ```
-本篇负责：
-  - 本地归档 generation 的 snapshot / transfer / consolidate
-  - 主库与暂存层之间的数据运维流程
-  - schema / consistency 的 sync 与 repair 边界
+This document is responsible for:
+  - snapshot / transfer / consolidate of local archive generations
+  - Data ops flows between the primary database and the staging layer
+  - The sync and repair boundary for schema / consistency
 
-本篇不负责：
-  - Entity load / save 主路径
-  - 合服业务冲突解决
-  - Base 实体热备路由
+This document is not responsible for:
+  - The Entity load / save main path
+  - Server merge business conflict resolution
+  - Base entity hot-standby routing
 ```
 
-和其他文档的关系：
+Relationship with other documents:
 
 ```
 02-persistence
-  - 在线主持久化接口
+  - Online primary persistence interface
 
 03-server-merge
-  - 多服业务数据合并
+  - Merging business data across servers
 
 03-local-archive-and-secondary-db
-  - LocalArchiveStore 是什么
+  - What LocalArchiveStore is
 
-本篇
-  - 运维如何搬运、归并、校验这些数据
+This document
+  - How ops moves, consolidates and validates this data
 ```
 
 ---
 
-## 1. 为什么必须独立成篇
+## 1. Why it must be a separate document
 
-BigWorld 的数据层差异，不只是“有 SecondaryDB”。
+BigWorld's data-layer difference is not just "having a SecondaryDB".
 
-真正的系统面在于它有配套的运维链：
+The real system surface lies in its accompanying ops chain:
 
 ```
-1. 在线归档先落到本地暂存
-2. 暂存可 snapshot / transfer
-3. DBApp 可在启动或停服阶段做 consolidate
-4. 还存在 sync / repair 一类库外修复能力
+1. Online archives first land in local staging
+2. The staging can be snapshot / transferred
+3. DBApp can consolidate during startup or shutdown phases
+4. There is also an out-of-database repair capability such as sync / repair
 ```
 
-如果这些能力继续只散落在：
+If these capabilities continue to be scattered only across:
 
 ```
 Persistence
@@ -103,77 +105,77 @@ SecondaryDB
 Server Merge
 ```
 
-会出现两个问题：
+Two problems arise:
 
 ```
-1. 在线主路径和离线工具链边界混乱
-2. “合服”被误当成全部数据运维能力
+1. The boundary between the online main path and the offline toolchain becomes confused
+2. "Server merge" is mistaken for the entirety of data ops capability
 ```
 
 ---
 
-## 2. 数据运维面的四条线
+## 2. The four lines of the data ops surface
 
-theseed 应明确把数据运维面拆成四条线：
+theseed should explicitly split the data ops surface into four lines:
 
-| 线 | 目标 | 典型触发 |
+| Line | Goal | Typical trigger |
 |------|------|----------|
-| snapshot / transfer | 搬运暂存数据或主库快照 | 迁机、备份、停服 |
-| consolidate | 把 generation 归并回 Primary Store | 启动、停服、定时窗口 |
-| sync | 做 schema / metadata 对齐 | 升级、环境修复 |
-| repair | 做 consistency 检查与修复 | 故障后、离线巡检 |
+| snapshot / transfer | Moving staging data or primary database snapshots | Machine migration, backup, shutdown |
+| consolidate | Consolidating generations back into the Primary Store | Startup, shutdown, scheduled windows |
+| sync | Aligning schema / metadata | Upgrade, environment repair |
+| repair | Consistency checks and repair | After a failure, offline inspection |
 
-不要再把它们统称成“数据库工具”。
+Do not lump them together under the general name "database tools" any more.
 
 ---
 
-## 3. 核心对象模型
+## 3. Core object model
 
 ### 3.1 Primary Store
 
 ```
-最终权威
+The final authority
 ```
 
 ### 3.2 Archive Generation
 
 ```
-某次 rotate 形成的一批本地归档快照集合
+A set of local archive snapshots formed by some rotate
 ```
 
 ### 3.3 Snapshot Package
 
 ```
-可搬运、可校验的快照包
+A movable, verifiable snapshot package
 ```
 
 ### 3.4 Consolidation Job
 
 ```
-把 generation 归并回主库的离线或半在线作业
+An offline or semi-online job that consolidates a generation back into the primary database
 ```
 
 ### 3.5 Sync / Repair Job
 
 ```
-以 schema、索引、引用关系、一致性校验为目标的作业
+A job targeting schema, indexes, reference relationships and consistency validation
 ```
 
 ---
 
-## 4. 典型数据流
+## 4. Typical data flows
 
-### 4.1 在线归档增强路径
+### 4.1 Online archive enhancement path
 
 ```
 Runtime / Archiver
   → append snapshot
   → LocalArchiveStore.flush
   → rotate generation
-  → Data Ops 接管
+  → Data Ops takes over
 ```
 
-### 4.2 搬运路径
+### 4.2 Transfer path
 
 ```
 generation
@@ -182,7 +184,7 @@ generation
   → transfer to remote node or object storage
 ```
 
-### 4.3 归并路径
+### 4.3 Consolidation path
 
 ```
 generation
@@ -192,7 +194,7 @@ generation
   → cleanup old generation
 ```
 
-### 4.4 修复路径
+### 4.4 Repair path
 
 ```
 schema diff / consistency scan
@@ -206,143 +208,143 @@ schema diff / consistency scan
 
 ## 5. Snapshot
 
-### 5.1 职责
+### 5.1 Responsibility
 
 ```
-snapshot 负责：
-  - 把一批 generation 或主库导出为可搬运包
-  - 生成 manifest、checksum、版本信息
-  - 为 transfer / restore / audit 提供输入
+snapshot is responsible for:
+  - Exporting a batch of generations or the primary database into a movable package
+  - Generating manifest, checksum and version information
+  - Providing input for transfer / restore / audit
 ```
 
-### 5.2 不要写成什么
+### 5.2 What it must not be written as
 
 ```
-snapshot 不是：
-  - 运行时实时查询副本
-  - 热备恢复链
-  - 合服导入格式
+snapshot is not:
+  - A runtime real-time query replica
+  - A hot-standby recovery chain
+  - A server-merge import format
 ```
 
-### 5.3 设计要求
+### 5.3 Design requirements
 
 ```
-1. snapshot 包必须可校验
-2. snapshot 版本必须显式记录 schema version
-3. snapshot 不能隐式写回主库
+1. A snapshot package must be verifiable
+2. A snapshot must explicitly record the schema version
+3. A snapshot must not implicitly write back to the primary database
 ```
 
 ---
 
 ## 6. Transfer
 
-BigWorld 的 `transfer_db` 说明传输本身就是一个单独工具面。
+BigWorld's `transfer_db` shows that transfer is itself a separate tool surface.
 
-### 6.1 职责
-
-```
-transfer 负责：
-  - 把 snapshot / generation 搬运到目标节点
-  - 控制带宽、重试、断点重传
-  - 保证目标侧能验证完整性
-```
-
-### 6.2 设计要求
+### 6.1 Responsibility
 
 ```
-1. transfer 不直接修改 Primary Store
-2. transfer 必须有 manifest 校验
-3. transfer 成功不等于 consolidate 成功
+transfer is responsible for:
+  - Moving a snapshot / generation to the target node
+  - Controlling bandwidth, retries and resumable retransmission
+  - Guaranteeing that the target side can verify integrity
+```
+
+### 6.2 Design requirements
+
+```
+1. transfer does not directly modify the Primary Store
+2. transfer must have manifest validation
+3. A successful transfer does not equal a successful consolidation
 ```
 
 ---
 
 ## 7. Consolidate
 
-BigWorld 的 `DBApp::consolidateData()` 说明归并是独立阶段，而不是归档 append 的顺带动作。
+BigWorld's `DBApp::consolidateData()` shows that consolidation is an independent stage, not an incidental action of archive append.
 
-### 7.1 职责
-
-```
-consolidate 负责：
-  - 读取一个或多个 generation
-  - 去重、顺序化、合并到 Primary Store
-  - 标记成功 / 失败 / 可重试状态
-```
-
-### 7.2 语义要求
+### 7.1 Responsibility
 
 ```
-1. consolidate 是“主库写入阶段”
-2. consolidate 必须可重试
-3. consolidate 失败不能默认删除 generation
-4. consolidate 需要 operator 可见状态
+consolidate is responsible for:
+  - Reading one or more generations
+  - Deduplicating, ordering and merging into the Primary Store
+  - Marking success / failure / retryable states
 ```
 
-### 7.3 触发时机
+### 7.2 Semantic requirements
 
 ```
-启动阶段：
-  - 处理遗留 generation
+1. consolidate is the "primary database write stage"
+2. consolidate must be retryable
+3. A failed consolidate must not delete the generation by default
+4. consolidate needs operator-visible state
+```
 
-停服阶段：
-  - 尽量完成最后一轮归并
+### 7.3 Trigger timing
 
-运维窗口：
-  - 周期性归并与清理
+```
+Startup phase:
+  - Handle leftover generations
+
+Shutdown phase:
+  - Try to complete the last round of consolidation
+
+Ops window:
+  - Periodic consolidation and cleanup
 ```
 
 ---
 
 ## 8. Sync
 
-`sync` 不应再被混进 `merge` 或 `migration`。
+`sync` should no longer be mixed into `merge` or `migration`.
 
-### 8.1 职责
-
-```
-sync 负责：
-  - schema / index / metadata 对齐
-  - 环境间配置化同步
-  - 数据面只做“格式 / 元信息一致性”层面的修正
-```
-
-### 8.2 典型场景
+### 8.1 Responsibility
 
 ```
-1. 升级后 schema drift
-2. 某环境缺失索引或约束
-3. generation manifest 与主库 metadata 不一致
+sync is responsible for:
+  - schema / index / metadata alignment
+  - Configuration-based sync between environments
+  - The data plane only performs corrections at the "format / metadata consistency" level
+```
+
+### 8.2 Typical scenarios
+
+```
+1. Schema drift after an upgrade
+2. Some environment missing indexes or constraints
+3. A generation manifest inconsistent with the primary database metadata
 ```
 
 ---
 
 ## 9. Repair
 
-repair 的定位必须比 sync 更保守。
+repair's positioning must be more conservative than sync.
 
-### 9.1 职责
-
-```
-repair 负责：
-  - 发现并修复坏数据
-  - 处理 orphan reference / broken unique index / partial write 残留
-  - 输出修复报告和审计记录
-```
-
-### 9.2 设计约束
+### 9.1 Responsibility
 
 ```
-1. repair 默认先 report，再 apply
-2. repair 必须支持 dry-run
-3. repair 不允许伪装成在线主路径能力
+repair is responsible for:
+  - Discovering and repairing corrupt data
+  - Handling orphan references / broken unique indexes / partial-write residue
+  - Outputting repair reports and audit records
+```
+
+### 9.2 Design constraints
+
+```
+1. repair reports by default first, then applies
+2. repair must support dry-run
+3. repair is not allowed to disguise itself as an online main-path capability
 ```
 
 ---
 
-## 10. theseed 的工具链模型
+## 10. theseed's toolchain model
 
-### 10.1 CLI 建议
+### 10.1 CLI proposal
 
 ```bash
 # snapshot
@@ -363,22 +365,22 @@ theseed-data repair scan --check references,unique,json
 theseed-data repair apply --plan repair-plan.json
 ```
 
-### 10.2 职责分层
+### 10.2 Responsibility layering
 
 ```
 Runtime
-  - 只负责生成归档快照
+  - Only responsible for generating archive snapshots
 
 Data Ops Agent / CLI
   - snapshot / transfer / consolidate / sync / repair
 
 Ops Control Plane
-  - 只负责触发、查看状态、审计
+  - Only responsible for triggering, viewing state and auditing
 ```
 
 ---
 
-## 11. 核心接口建议
+## 11. Core interface proposal
 
 ### 11.1 Snapshot
 
@@ -471,47 +473,47 @@ public:
 
 ---
 
-## 12. 与合服的关系
+## 12. Relationship with server merge
 
-必须持续强调：
+It must be continuously emphasized:
 
 ```
 merge
-  是多服业务数据整合
+  is the integration of business data across servers
 
 snapshot / transfer / consolidate / sync / repair
-  是单服或单集群的数据运维能力
+  are the data ops capabilities of a single server or a single cluster
 ```
 
-两者都属于数据工具链，但不是一条线。
+Both belong to the data toolchain, but they are not one line.
 
 ---
 
-## 13. 分阶段边界
+## 13. Phased boundary
 
 ```
-MVP：
-  - 先只保留主持久化与基础 backup / restore 方案
-  - 不承诺完整 Data Ops Toolchain
+MVP:
+  - First keep only primary persistence and a basic backup / restore scheme
+  - Does not promise a complete Data Ops Toolchain
 
-Phase 2：
+Phase 2:
   - LocalArchiveStore + snapshot / consolidate
-  - transfer 基础能力
-  - sync 的最小 schema 对齐
+  - Basic transfer capability
+  - Minimal schema alignment for sync
 
-Phase 3：
-  - repair / consistency 平台
-  - 与停服、迁机、跨环境运维流程联动
-  - 更丰富的对象存储与远程搬运后端
+Phase 3:
+  - repair / consistency platform
+  - Interlock with shutdown, machine migration and cross-environment ops flows
+  - Richer object storage and remote transfer backends
 ```
 
 ---
 
-## 14. 与 BigWorld / KBEngine / theseed 的对比
+## 14. Comparison with BigWorld / KBEngine / theseed
 
-| 维度 | BigWorld | KBEngine | theseed |
+| Dimension | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| SecondaryDB 搬运 | 有 `transfer_db` | 基本无 | Phase 2 目标 |
-| consolidation | 有 | 较弱 | Phase 2 目标 |
-| sync / repair | 有工具链雏形 | 较弱 | 需单独设计 |
-| merge 与 data ops 分层 | 事实存在但文档不统一 | 弱 | 显式拆分 |
+| SecondaryDB transfer | Has `transfer_db` | Basically none | Phase 2 goal |
+| consolidation | Has | Weaker | Phase 2 goal |
+| sync / repair | Has a toolchain prototype | Weaker | Needs separate design |
+| Layering of merge and data ops | Factually present but documentation not unified | Weak | Explicitly split |

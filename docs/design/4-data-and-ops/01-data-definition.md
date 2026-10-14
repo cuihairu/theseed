@@ -1,296 +1,298 @@
-# Data Definition — 数据定义与 XML/XSD
+# Data Definition — Data Definition and XML/XSD
 
-> theseed 的数据定义系统：一份 XML 定义 → 内存/网络/存储三层映射。
+> **English** | [中文](01-data-definition.zh.md)
+
+> theseed's data definition system: one XML definition → three-layer mapping across memory/network/storage.
 >
-> 格式：XML + XSD Schema 校验 + XInclude 文件拆分。
-> 来源源头：BigWorld 属性级映射（15+ 种 PropertyMapping）。
-> 参考实现：KBEngine 将映射简化为 5 种 TABLE_ITEM_TYPE。
-> theseed 在保留属性级表达力的前提下做现代化收敛。
+> Format: XML + XSD Schema validation + XInclude file splitting.
+> Origin: BigWorld's property-level mapping (15+ kinds of PropertyMapping).
+> Reference implementation: KBEngine simplifies the mapping to 5 kinds of TABLE_ITEM_TYPE.
+> theseed performs a modern convergence while preserving property-level expressiveness.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
-
-```
-BigWorld 的数据定义非常细：
-  - 每个属性可以独立映射
-  - 数据定义同时影响内存、网络和数据库
-  - PropertyMapping 种类丰富
-```
-
-### KBEngine 是怎么实现的
+### How BigWorld implements it
 
 ```
-KBEngine 保留了数据定义主线，
-但把映射类型收缩得更简单，
-更强调“定义能跑起来”。
+BigWorld's data definition is very fine-grained:
+  - Each property can be mapped independently
+  - The data definition simultaneously affects memory, network and database
+  - PropertyMapping has a rich variety of kinds
 ```
 
-### 优缺点
+### How KBEngine implements it
 
 ```
-BigWorld 的优点：
-  - 表达力强
-  - 适合复杂数据模型和查询需求
-
-KBEngine 的优点：
-  - 规则更少
-  - 上手和实现成本更低
-
-共同缺点：
-  - 定义层一旦失控，会同时污染内存、网络和存储三层
+KBEngine retains the data definition mainline,
+but shrinks the mapping types to something simpler,
+emphasizing more that "the definition can run".
 ```
 
-### theseed 的取舍
+### Pros and cons
 
 ```
-theseed 继承 BigWorld 的“属性级映射”思想，
-但避免无节制扩张映射种类，
-优先保留当前确实需要的表达力。
+BigWorld's pros:
+  - Strong expressiveness
+  - Suited to complex data models and query requirements
+
+KBEngine's pros:
+  - Fewer rules
+  - Lower cost to learn and implement
+
+Shared cons:
+  - Once the definition layer spirals out of control, it pollutes memory, network and storage all at once
+```
+
+### theseed's trade-off
+
+```
+theseed inherits BigWorld's idea of "property-level mapping",
+but avoids unbounded expansion of mapping kinds,
+prioritizing the expressiveness that is actually needed today.
 ```
 
 ---
 
-## 1. BigWorld PropertyMapping（源头）
+## 1. BigWorld PropertyMapping (the origin)
 
-BigWorld 是这些设计的源头。它的核心思想是：**每个属性可以有独立的数据库映射策略**，而不是整个 Entity 一刀切。
+BigWorld is the origin of these designs. Its core idea is: **each property can have an independent database mapping strategy**, rather than the whole Entity being treated uniformly.
 
-BigWorld 定义了 `PropertyMapping` 基类，所有映射类型继承自它。源码在 `bigworld/src/server/db/db_mgr.hpp`。
+BigWorld defines a `PropertyMapping` base class, from which all mapping types inherit. The source is in `bigworld/src/server/db/db_mgr.hpp`.
 
-### 1.1 标量映射—— 一个属性对应一列
+### 1.1 Scalar mappings — one property corresponds to one column
 
 ```
 IntMapping       INT8/16/32/64 → TINYINT / SMALLINT / INT / BIGINT
 FloatMapping     FLOAT32/64    → FLOAT / DOUBLE
-StringMapping    STRING        → VARCHAR(N) 或 TEXT
+StringMapping    STRING        → VARCHAR(N) or TEXT
 BoolMapping      BOOL          → TINYINT(1)
 BlobMapping      BLOB          → BLOB
 ```
 
-这是最简单的，属性是什么类型，数据库就存什么类型的列，没有转换。
+This is the simplest case: whatever type the property is, the database stores a column of that type, with no conversion.
 
-### 1.2 展开映射—— 一个属性展开为多列或多行
+### 1.2 Expansion mappings — one property expands into multiple columns or rows
 
-这是 BigWorld 最有价值的设计：
+This is BigWorld's most valuable design:
 
-**VectorMapping** — Vector3 展开为 3 列：
+**VectorMapping** — Vector3 expands into 3 columns:
 
 ```
-Entity 属性：  position = Vector3(100.0, 0.0, 50.0)
+Entity property:  position = Vector3(100.0, 0.0, 50.0)
                     ↓ VectorMapping
-MySQL 表：     positionX = 100.0, positionY = 0.0, positionZ = 50.0
+MySQL table:      positionX = 100.0, positionY = 0.0, positionZ = 50.0
 ```
 
-为什么展开？因为 3 个独立 FLOAT 列可以分别建索引、做范围查询（`WHERE positionX > 90 AND positionX < 110`）。如果存成一个 BLOB，这些都做不了。
+Why expand? Because 3 independent FLOAT columns can each be indexed and support range queries (`WHERE positionX > 90 AND positionX < 110`). If it were stored as a single BLOB, none of this would be possible.
 
-**CompositeMapping** — FIXED_DICT 展开为多列：
+**CompositeMapping** — FIXED_DICT expands into multiple columns:
 
 ```
-Entity 属性：  stats = FIXED_DICT { kill_count=100, death_count=20, play_time=3600 }
+Entity property:  stats = FIXED_DICT { kill_count=100, death_count=20, play_time=3600 }
                     ↓ CompositeMapping
-MySQL 表：     stats_kill_count = 100
-               stats_death_count = 20
-               stats_play_time = 3600
+MySQL table:      stats_kill_count = 100
+                  stats_death_count = 20
+                  stats_play_time = 3600
 ```
 
-字段名前缀是属性名，保证不冲突。每个字段是独立列，可以单独建索引、做 `WHERE stats_kill_count > 50`。
+The field names are prefixed with the property name to guarantee no collision. Each field is an independent column, so it can be indexed on its own and support `WHERE stats_kill_count > 50`.
 
-**ClassMapping** — 嵌套 FIXED_DICT 递归展开：
-
-```
-Entity 属性：  equipment = FIXED_DICT {
-                   weapon = FIXED_DICT { id=500, level=3 },
-                   armor  = FIXED_DICT { id=300, level=2 }
-               }
-                    ↓ ClassMapping（递归）
-MySQL 表：     equipment_weapon_id = 500
-               equipment_weapon_level = 3
-               equipment_armor_id = 300
-               equipment_armor_level = 2
-```
-
-用点分路径做列名前缀，支持任意深度嵌套。本质上是 CompositeMapping 的递归版本。
-
-**SequenceMapping** — ARRAY 展开为子表：
+**ClassMapping** — nested FIXED_DICT expands recursively:
 
 ```
-Entity 属性：  inventory = ARRAY [ {item_id=1, count=5}, {item_id=2, count=3} ]
+Entity property:  equipment = FIXED_DICT {
+                      weapon = FIXED_DICT { id=500, level=3 },
+                      armor  = FIXED_DICT { id=300, level=2 }
+                  }
+                    ↓ ClassMapping (recursive)
+MySQL table:      equipment_weapon_id = 500
+                  equipment_weapon_level = 3
+                  equipment_armor_id = 300
+                  equipment_armor_level = 2
+```
+
+It uses a dot-separated path as the column name prefix, supporting nesting of arbitrary depth. In essence it is the recursive version of CompositeMapping.
+
+**SequenceMapping** — ARRAY expands into a subtable:
+
+```
+Entity property:  inventory = ARRAY [ {item_id=1, count=5}, {item_id=2, count=3} ]
                     ↓ SequenceMapping
-MySQL 子表：   player_inventory (parent_id FK → Entity 表)
-               row 1: parent_id=42, idx=0, item_id=1, count=5
-               row 2: parent_id=42, idx=1, item_id=2, count=3
+MySQL subtable:   player_inventory (parent_id FK → Entity table)
+                  row 1: parent_id=42, idx=0, item_id=1, count=5
+                  row 2: parent_id=42, idx=1, item_id=2, count=3
 ```
 
-每个元素一行，关联到父 Entity。子表每列可以独立查询/索引——"找出所有持有 item_id=1 的玩家"一条 SQL 就搞定。
+Each element is a row, associated with the parent Entity. Each column of the subtable can be queried/indexed independently — "find all players holding item_id=1" is done with a single SQL statement.
 
-### 1.3 特殊映射
-
-```
-EnumMapping       枚举 → INT 列 + 字符串映射表
-                  内存中是枚举名（"WARRIOR"），数据库存 INT (1)
-                  读取时做反向映射
-
-MailboxMapping    Entity 引用 → 存 EntityID + 进程地址
-                  用于持久化 EntityCall/Mailbox
-
-UserTypeMapping   用户自定义类型 → BLOB 兜底
-                  引擎不认识的类型，序列化为二进制存 BLOB
-
-XmlDataSource     不是映射到 SQL，而是映射到 XML 文件
-                  BigWorld 的二级存储方案（适合低频访问数据）
-                  不需要数据库表，直接读写 XML
-```
-
-### 1.4 BigWorld 映射总表
+### 1.3 Special mappings
 
 ```
-映射类型            │ 做什么                          │ DB 结果
+EnumMapping       Enum → INT column + string mapping table
+                  In memory it is the enum name ("WARRIOR"), in the database an INT (1)
+                  A reverse mapping is applied when reading
+
+MailboxMapping    Entity reference → store EntityID + process address
+                  Used to persist EntityCall/Mailbox
+
+UserTypeMapping   User-defined type → BLOB fallback
+                  For types the engine does not recognize, serialize to binary and store as BLOB
+
+XmlDataSource     Not mapped to SQL, but mapped to an XML file
+                  BigWorld's secondary storage scheme (suited to low-frequency-access data)
+                  No database table needed, read and write XML directly
+```
+
+### 1.4 BigWorld mapping master table
+
+```
+Mapping type        │ What it does                    │ DB result
 ────────────────────┼─────────────────────────────────┼────────────────────
-IntMapping          │ 整数 → 整数列                    │ 1 列 INT
-FloatMapping        │ 浮点 → 浮点列                    │ 1 列 FLOAT/DOUBLE
-StringMapping       │ 字符串 → VARCHAR/TEXT             │ 1 列
-BoolMapping         │ 布尔 → TINYINT                   │ 1 列
-BlobMapping         │ 二进制 → BLOB                    │ 1 列 BLOB
-VectorMapping       │ Vector3 → 3 个 FLOAT 列          │ 3 列
-EnumMapping         │ 枚举名 → INT + 映射表             │ 1 列 INT
-CompositeMapping    │ FIXED_DICT → 多列（一层展开）     │ N 列
-ClassMapping        │ 嵌套 FIXED_DICT → 多列（递归展开）│ N 列（点分前缀）
-SequenceMapping     │ ARRAY → 子表（每元素一行）        │ 子表 + FK
-MailboxMapping      │ Entity 引用 → ID + 地址          │ 2 列
-UserTypeMapping     │ 自定义类型 → BLOB 兜底            │ 1 列 BLOB
-XmlDataSource       │ 整个 Entity → XML 文件            │ 不走 SQL
+IntMapping          │ Integer → integer column         │ 1 INT column
+FloatMapping        │ Float → float column             │ 1 FLOAT/DOUBLE column
+StringMapping       │ String → VARCHAR/TEXT            │ 1 column
+BoolMapping         │ Bool → TINYINT                   │ 1 column
+BlobMapping         │ Binary → BLOB                    │ 1 BLOB column
+VectorMapping       │ Vector3 → 3 FLOAT columns        │ 3 columns
+EnumMapping         │ Enum name → INT + mapping table  │ 1 INT column
+CompositeMapping    │ FIXED_DICT → multiple columns (one-level expansion) │ N columns
+ClassMapping        │ Nested FIXED_DICT → multiple columns (recursive expansion) │ N columns (dot-separated prefix)
+SequenceMapping     │ ARRAY → subtable (one row per element) │ Subtable + FK
+MailboxMapping      │ Entity reference → ID + address  │ 2 columns
+UserTypeMapping     │ Custom type → BLOB fallback      │ 1 BLOB column
+XmlDataSource       │ Whole Entity → XML file          │ No SQL involved
 ```
 
-**BigWorld 的局限**：只支持 MySQL（+ XML 作为二级存储）。不支持 JSON（2005 年 MySQL 没有 JSON 类型）。不支持 PostgreSQL / MongoDB。
+**BigWorld's limitation**: it only supports MySQL (+ XML as secondary storage). It does not support JSON (MySQL had no JSON type in 2005). It does not support PostgreSQL / MongoDB.
 
 ---
 
-## 2. KBEngine 的取舍
+## 2. KBEngine's trade-off
 
-KBEngine 参考了 BigWorld 的 Entity 模型，但在数据库映射上做了大幅简化。
+KBEngine referenced BigWorld's Entity model, but greatly simplified the database mapping.
 
-### 2.1 KBEngine 只保留 5 种 TABLE_ITEM_TYPE
+### 2.1 KBEngine keeps only 5 kinds of TABLE_ITEM_TYPE
 
 ```
 TABLE_ITEM_TYPE_STRING   → VARCHAR / TEXT
-TABLE_ITEM_TYPE_DIGIT    → INT / BIGINT（根据位数自动选择）
-TABLE_ITEM_TYPE_VECTOR3  → 3 × FLOAT（保留了这个展开）
+TABLE_ITEM_TYPE_DIGIT    → INT / BIGINT (chosen automatically by digit count)
+TABLE_ITEM_TYPE_VECTOR3  → 3 × FLOAT (this expansion was kept)
 TABLE_ITEM_TYPE_BLOB     → BLOB
 TABLE_ITEM_TYPE_UNICODE  → UTF8 VARCHAR / TEXT
 ```
 
-### 2.2 砍掉了什么，为什么
+### 2.2 What was cut, and why
 
 ```
-砍掉的                    │ BigWorld 原设计          │ KBEngine 的替代
+Cut                       │ BigWorld's original design │ KBEngine's replacement
 ──────────────────────────┼──────────────────────────┼──────────────────────
-CompositeMapping          │ FIXED_DICT → 多列展开    │ 全部 BLOB（pickle 序列化）
-ClassMapping              │ 嵌套 FIXED_DICT → 递归   │ 同上，BLOB
-SequenceMapping           │ ARRAY → 子表             │ 同上，BLOB
-EnumMapping               │ 枚举名 ↔ INT 映射        │ 直接用 INT，没有映射层
-MailboxMapping            │ Entity 引用持久化        │ 不支持持久化 EntityCall
-XmlDataSource             │ XML 文件存储             │ 不支持
+CompositeMapping          │ FIXED_DICT → multi-column expansion │ All BLOB (pickle serialization)
+ClassMapping              │ Nested FIXED_DICT → recursive │ Same as above, BLOB
+SequenceMapping           │ ARRAY → subtable           │ Same as above, BLOB
+EnumMapping               │ Enum name ↔ INT mapping    │ Use INT directly, no mapping layer
+MailboxMapping            │ Entity reference persistence │ Persisting EntityCall not supported
+XmlDataSource             │ XML file storage           │ Not supported
 ```
 
-### 2.3 砍掉的后果
+### 2.3 The consequences of cutting
 
 ```python
-# KBEngine 的 FIXED_DICT 在数据库里是什么样：
-# 玩家 stats = FIXED_DICT { kill_count=100, death_count=20 }
+# What KBEngine's FIXED_DICT looks like in the database:
+# Player stats = FIXED_DICT { kill_count=100, death_count=20 }
 
-# 数据库中实际存储：
-# stats = b'\x80\x04\x95...\x94\x8c\x0bkill_count...'  (pickle 序列化二进制)
+# What is actually stored in the database:
+# stats = b'\x80\x04\x95...\x94\x8c\x0bkill_count...'  (pickle-serialized binary)
 
-# 你想做 "找出 kill_count > 50 的玩家"？
-# 做不到。必须把所有玩家加载到内存，反序列化，再过滤。
+# You want to do "find players with kill_count > 50"?
+# Impossible. You must load all players into memory, deserialize, then filter.
 
-# 你想在 kill_count 上建索引？
-# 做不到。它是一个 BLOB 列。
+# You want to build an index on kill_count?
+# Impossible. It is a BLOB column.
 
-# 运维想看某个玩家的 stats？
+# Ops wants to look at some player's stats?
 # SELECT stats FROM tbl_Avatar WHERE id=42;
-# 返回乱码。
+# Returns garbage.
 ```
 
-KBEngine 选择 BLOB 的原因可以理解：
-- 实现简单（`pickle.dumps` / `pickle.loads` 搞定）
-- 不需要处理 Schema 迁移（展开列的增删改是复杂的 DDL）
-- Python 的 pickle 天然支持任意 Python 对象
+KBEngine's reason for choosing BLOB is understandable:
+- Simple to implement (`pickle.dumps` / `pickle.loads` does it)
+- No need to handle Schema migration (adding/removing/changing expanded columns is complex DDL)
+- Python's pickle natively supports arbitrary Python objects
 
-但代价是**丧失了数据库的所有查询能力**。排行榜、统计、搜索——全部要绕过数据库在内存里做，或者直接写裸 SQL 绕过引擎。
+But the cost is **losing all of the database's query capabilities**. Leaderboards, statistics, search — everything must bypass the database and be done in memory, or raw SQL must be written to bypass the engine.
 
-### 2.4 KBEngine 保留的少数展开
+### 2.4 The few expansions KBEngine kept
 
 ```
-VECTOR3 → 3 × FLOAT 列     ← 唯一保留的展开映射
+VECTOR3 → 3 × FLOAT columns     ← the only expansion mapping kept
 
-原因：位置查询是游戏服务器最频繁的查询之一。
-  - "谁在这个坐标附近" → 需要范围查询
-  - 如果 position 存成 BLOB → 不可能做范围查询
-  - 所以 KBEngine 保留了这个展开
+Reason: position queries are among the most frequent queries on a game server.
+  - "Who is near this coordinate" → requires a range query
+  - If position is stored as a BLOB → range queries become impossible
+  - So KBEngine kept this expansion
 ```
 
-连这个都保留，说明 BigWorld 的展开设计是对的——KBEngine 只是在实现复杂度上做了妥协，不是不想要这个能力。
+Keeping even this shows that BigWorld's expansion design is correct — KBEngine merely compromised on implementation complexity, not on wanting the capability.
 
 ---
 
-## 3. theseed 的设计
+## 3. theseed's design
 
-### 3.1 设计原则
-
-```
-1. 继承 BigWorld 属性级映射思想（不是 KBEngine 的表级）
-2. 保留 BigWorld 的展开能力（CompositeMapping / SequenceMapping）
-3. 新增 JSON 作为"可查询的整存"方案（BigWorld 时代没有这个选项）
-4. 用户自选整存还是展开，不强制
-5. 提供合理默认值，简单场景零配置
-```
-
-### 3.2 映射对应关系
+### 3.1 Design principles
 
 ```
-BigWorld 映射             │ theseed 对应           │ 说明
+1. Inherit BigWorld's property-level mapping idea (not KBEngine's table-level)
+2. Keep BigWorld's expansion capabilities (CompositeMapping / SequenceMapping)
+3. Add JSON as a "queryable whole-store" scheme (this option did not exist in BigWorld's era)
+4. Let the user choose whole-store or expansion, no forcing
+5. Provide sensible defaults, zero configuration for simple scenarios
+```
+
+### 3.2 Mapping correspondence
+
+```
+BigWorld mapping          │ theseed equivalent      │ Notes
 ──────────────────────────┼────────────────────────┼──────────────────────
-IntMapping                │ 自动推断               │ 标量类型不需要显式声明，根据 DataType 自动选列类型
-FloatMapping              │ 自动推断               │ 同上
-StringMapping             │ VARCHAR / TEXT         │ size <= 255 → VARCHAR，否则 TEXT
-BoolMapping               │ 自动 → TINYINT         │ 同上
-BlobMapping               │ BLOB                   │ 保留
-VectorMapping             │ 自动 → 3×FLOAT 列     │ 继承 BigWorld 展开，保留位置查询能力
-EnumMapping               │ INT 列                 │ 简化，不做字符串映射表
-CompositeMapping          │ EXPAND                 │ 保留 BigWorld 展开，FIXED_DICT → 多列
-ClassMapping              │ EXPAND（递归）          │ 保留，嵌套 FIXED_DICT 递归展开为点分前缀列
-SequenceMapping           │ SUBTABLE               │ 保留 BigWorld 子表映射，ARRAY → 关联子表
-MailboxMapping            │ ENTITY_ID 列           │ 简化，只存 EntityID
-UserTypeMapping           │ BLOB 兜底              │ 保留
-XmlDataSource             │ 不支持                 │ 用 MongoDB 文档模式替代
-（无）                    │ JSON                   │ 新增：可查询的整存（BigWorld/KBEngine 都没有）
-（无）                    │ COMMA_SEP              │ 新增：简单枚举的轻量方案
-（无）                    │ BITMAP                 │ 新增：标签/权限位图
+IntMapping                │ Auto-inferred           │ Scalar types need no explicit declaration; the column type is chosen automatically from DataType
+FloatMapping              │ Auto-inferred           │ Same as above
+StringMapping             │ VARCHAR / TEXT          │ size <= 255 → VARCHAR, otherwise TEXT
+BoolMapping               │ Auto → TINYINT          │ Same as above
+BlobMapping               │ BLOB                    │ Kept
+VectorMapping             │ Auto → 3×FLOAT columns  │ Inherits BigWorld's expansion, keeps position query capability
+EnumMapping               │ INT column              │ Simplified, no string mapping table
+CompositeMapping          │ EXPAND                  │ Keeps BigWorld's expansion, FIXED_DICT → multiple columns
+ClassMapping              │ EXPAND (recursive)      │ Kept, nested FIXED_DICT recursively expands into dot-separated prefix columns
+SequenceMapping           │ SUBTABLE                │ Keeps BigWorld's subtable mapping, ARRAY → associated subtable
+MailboxMapping            │ ENTITY_ID column        │ Simplified, stores only EntityID
+UserTypeMapping           │ BLOB fallback           │ Kept
+XmlDataSource             │ Not supported           │ Replaced by MongoDB document mode
+(none)                    │ JSON                    │ New: queryable whole-store (neither BigWorld nor KBEngine has it)
+(none)                    │ COMMA_SEP               │ New: lightweight scheme for simple enums
+(none)                    │ BITMAP                  │ New: tag/permission bitmap
 ```
 
-### 3.3 整存 vs 展开——用户自选
+### 3.3 Whole-store vs expansion — user's choice
 
-BigWorld 只有一种选择（展开），KBEngine 也只有一种选择（BLOB 整存）。theseed 两种都支持。
+BigWorld had only one choice (expansion), and KBEngine also had only one choice (BLOB whole-store). theseed supports both.
 
-**场景：玩家 stats 属性**
+**Scenario: the player stats property**
 
 ```xml
-<!-- 方案 A：整存为 JSON（简单，推荐默认） -->
+<!-- Option A: whole-store as JSON (simple, recommended default) -->
 <property name="stats" type="FIXED_DICT" flags="BASE" persistent="true">
     <Storage columnType="JSON">
         <jsonIndex path="$.kill_count" name="idx_kills"/>
     </Storage>
 </property>
-<!-- 结果：stats = {"kill_count":100, "death_count":20, "play_time":3600} -->
-<!-- 可查询：SELECT * WHERE JSON_EXTRACT(stats, '$.kill_count') > 50 -->
-<!-- 简单：一列搞定，增删字段不需要 DDL -->
+<!-- Result: stats = {"kill_count":100, "death_count":20, "play_time":3600} -->
+<!-- Queryable: SELECT * WHERE JSON_EXTRACT(stats, '$.kill_count') > 50 -->
+<!-- Simple: one column does it, adding/removing fields needs no DDL -->
 ```
 
 ```xml
-<!-- 方案 B：展开为多列（BigWorld CompositeMapping 风格） -->
+<!-- Option B: expand into multiple columns (BigWorld CompositeMapping style) -->
 <property name="stats" type="FIXED_DICT" flags="BASE" persistent="true">
     <Storage columnType="EXPAND">
         <column name="kill_count" type="UINT32" index="btree"/>
@@ -298,24 +300,24 @@ BigWorld 只有一种选择（展开），KBEngine 也只有一种选择（BLOB 
         <column name="play_time" type="UINT64"/>
     </Storage>
 </property>
-<!-- 结果：stats_kill_count=100, stats_death_count=20, stats_play_time=3600 -->
-<!-- 可查询：SELECT * WHERE stats_kill_count > 50（原生 SQL，更快） -->
-<!-- 索引友好：每列独立索引，查询优化器能用 -->
+<!-- Result: stats_kill_count=100, stats_death_count=20, stats_play_time=3600 -->
+<!-- Queryable: SELECT * WHERE stats_kill_count > 50 (native SQL, faster) -->
+<!-- Index-friendly: each column indexed independently, usable by the query optimizer -->
 ```
 
-**方案 A 适合**：字段经常变动的配置型数据（装备属性、成就列表、活动数据）
-**方案 B 适合**：需要高频查询/排序的核心字段（战力、等级、击杀数）
+**Option A suits**: configuration-style data whose fields change often (equipment attributes, achievement lists, event data)
+**Option B suits**: core fields that need high-frequency queries/sorting (combat power, level, kill count)
 
-**场景：玩家背包**
+**Scenario: the player inventory**
 
 ```xml
-<!-- 方案 A：整存为 JSON -->
+<!-- Option A: whole-store as JSON -->
 <property name="inventory" type="ARRAY" flags="BASE" persistent="true">
     <Storage columnType="JSON"/>
 </property>
-<!-- 背包不大（<200 格），整存 JSON 足够，JSON_EXTRACT 也能查 -->
+<!-- The inventory is not large (<200 slots), whole-store JSON is enough, and JSON_EXTRACT can query it -->
 
-<!-- 方案 B：展开为子表（BigWorld SequenceMapping 风格） -->
+<!-- Option B: expand into a subtable (BigWorld SequenceMapping style) -->
 <property name="inventory" type="ARRAY" flags="BASE" persistent="true">
     <Storage columnType="SUBTABLE" table="player_inventory" foreignKey="player_dbid">
         <column name="item_id" type="UINT32" index="btree"/>
@@ -323,45 +325,45 @@ BigWorld 只有一种选择（展开），KBEngine 也只有一种选择（BLOB 
         <column name="expire_at" type="UINT64"/>
     </Storage>
 </property>
-<!-- "找出所有持有 item_id=500 的玩家" → 一条 SQL 搞定 -->
-<!-- 适合跨玩家查询、排行榜、统计 -->
+<!-- "Find all players holding item_id=500" → done with a single SQL statement -->
+<!-- Suited to cross-player queries, leaderboards, statistics -->
 ```
 
-### 3.4 默认策略（不指定 Storage 时）
+### 3.4 Default strategy (when Storage is not specified)
 
 ```
-类型          │ 关系型默认       │ 原因
-──────────────┼──────────────────┼──────────────────────
-标量类型       │ 自动推断列类型     │ INT→INT, FLOAT→FLOAT, STRING→VARCHAR(N)
-VECTOR3       │ 3×FLOAT 列       │ 继承 BigWorld 展开，位置必须可查询
-FIXED_DICT    │ JSON              │ 现代数据库 JSON 可查询，不需要展开
-ARRAY         │ JSON              │ 同上
-BLOB          │ BLOB              │ 二进制没有其他选择
+Type          │ Relational default │ Reason
+──────────────┼────────────────────┼──────────────────────
+Scalar type    │ Auto-inferred column type │ INT→INT, FLOAT→FLOAT, STRING→VARCHAR(N)
+VECTOR3        │ 3×FLOAT columns    │ Inherits BigWorld's expansion, position must be queryable
+FIXED_DICT     │ JSON               │ Modern databases can query JSON, no expansion needed
+ARRAY          │ JSON               │ Same as above
+BLOB           │ BLOB               │ Binary has no other choice
 ```
 
-如果用户的 FIXED_DICT/ARRAY 需要展开，显式写 `columnType="EXPAND"` 或 `columnType="SUBTABLE"` 即可。默认选 JSON 是因为现在 MySQL/PG 的 JSON 查询能力已经很成熟，大多数场景够用。
+If the user's FIXED_DICT/ARRAY needs expansion, they simply write `columnType="EXPAND"` or `columnType="SUBTABLE"` explicitly. JSON is the default because MySQL/PG JSON querying is now mature enough for most scenarios.
 
-### 3.5 MongoDB 后端
+### 3.5 MongoDB backend
 
 ```
-MongoDB 是文档数据库，Entity 本身就是文档。
-上面关系型的"整存 vs 展开"差异在 MongoDB 上不存在：
+MongoDB is a document database, and an Entity is itself a document.
+The "whole-store vs expansion" difference of the relational case does not exist in MongoDB:
 
-  标量     → 字段
-  FIXED_DICT → 嵌入子文档
-  ARRAY    → 嵌入数组
-  VECTOR3  → [x, y, z] 数组
-  BLOB     → BinData
-  索引     → createIndex on field path
+  Scalar     → field
+  FIXED_DICT → embedded subdocument
+  ARRAY      → embedded array
+  VECTOR3    → [x, y, z] array
+  BLOB       → BinData
+  Index      → createIndex on field path
 
-BigWorld 只支持 MySQL，MongoDB 是 theseed 自己加的后端。
-MongoDB 的优势：不需要设计映射策略，天然文档结构。
-MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）。
+BigWorld only supported MySQL; MongoDB is a backend theseed added itself.
+MongoDB's advantage: no mapping strategy needs to be designed, the document structure is natural.
+MongoDB's disadvantage: weak cross-Entity join queries, late transaction support (only from 4.0).
 ```
 
 ---
 
-## 4. XSD Schema 定义
+## 4. XSD Schema definition
 
 ### 4.1 entity.xsd
 
@@ -372,7 +374,7 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
             xmlns:t="https://theseed.dev/schema/entity"
             elementFormDefault="qualified">
 
-    <!-- 基础类型枚举 -->
+    <!-- Base type enumeration -->
     <xsd:simpleType name="DataType">
         <xsd:restriction base="xsd:string">
             <xsd:enumeration value="UINT8"/>
@@ -398,7 +400,7 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
         </xsd:restriction>
     </xsd:simpleType>
 
-    <!-- 存储列类型 -->
+    <!-- Storage column type -->
     <xsd:simpleType name="ColumnType">
         <xsd:restriction base="xsd:string">
             <xsd:enumeration value="VARCHAR"/>
@@ -412,8 +414,8 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
         </xsd:restriction>
     </xsd:simpleType>
 
-    <!-- Flags, IndexType, JsonIndex, StorageConfig, PropertyDef, MethodDef, NamedQuery 等类型定义 -->
-    <!-- 完整 Schema 见原始文档 -->
+    <!-- Type definitions such as Flags, IndexType, JsonIndex, StorageConfig, PropertyDef, MethodDef, NamedQuery -->
+    <!-- See the original document for the complete Schema -->
 
     <xsd:element name="Entity">
         <xsd:complexType>
@@ -434,12 +436,12 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
 
 ---
 
-## 5. XML 定义示例
+## 5. XML definition examples
 
-### 5.1 XInclude 文件拆分
+### 5.1 XInclude file splitting
 
 ```xml
-<!-- entities/Avatar/Avatar.def — 主文件 -->
+<!-- entities/Avatar/Avatar.def — main file -->
 <Entity name="Avatar" sides="base,cell"
         xmlns="https://theseed.dev/schema/entity"
         xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -464,7 +466,7 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
 </Entity>
 ```
 
-### 5.2 数据库映射文件
+### 5.2 Database mapping file
 
 ```xml
 <!-- entities/Avatar/db_mapping.xml -->
@@ -478,14 +480,14 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
         <Storage index="btree"/>
     </property>
 
-    <!-- JSON 整存 -->
+    <!-- JSON whole-store -->
     <property name="equipment">
         <Storage columnType="JSON">
             <jsonIndex path="$.weapon" name="idx_weapon"/>
         </Storage>
     </property>
 
-    <!-- EXPAND 展开（BigWorld CompositeMapping） -->
+    <!-- EXPAND expansion (BigWorld CompositeMapping) -->
     <property name="stats">
         <Storage columnType="EXPAND">
             <column name="kill_count" type="UINT32" index="btree"/>
@@ -494,7 +496,7 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
         </Storage>
     </property>
 
-    <!-- SUBTABLE 子表（BigWorld SequenceMapping） -->
+    <!-- SUBTABLE subtable (BigWorld SequenceMapping) -->
     <property name="inventory">
         <Storage columnType="SUBTABLE" table="player_inventory" foreignKey="player_dbid">
             <column name="item_id" type="UINT32" index="btree"/>
@@ -505,10 +507,10 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
 </xi:include>
 ```
 
-### 5.3 共享属性片段
+### 5.3 Shared property fragment
 
 ```xml
-<!-- entities/shared/combat_props.xml — 战斗属性（多个实体复用） -->
+<!-- entities/shared/combat_props.xml — combat properties (reused by multiple entities) -->
 <xi:include xmlns:xi="http://www.w3.org/2001/XInclude">
 
     <property name="hp" type="FLOAT32" flags="OWN_CLIENT" persistent="true">
@@ -531,7 +533,7 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
 ```
 
 ```xml
-<!-- entities/Monster/Monster.def — 复用战斗属性 -->
+<!-- entities/Monster/Monster.def — reuses the combat properties -->
 <Entity name="Monster" sides="cell"
         xmlns="https://theseed.dev/schema/entity"
         xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -548,42 +550,42 @@ MongoDB 的劣势：跨 Entity 关联查询弱，事务支持晚（4.0 才有）
 </Entity>
 ```
 
-### 5.4 XInclude 合并规则
+### 5.4 XInclude merge rules
 
 ```
-同名 property = 合并属性，不是覆盖：
+A property with the same name = merge the properties, not override:
 
   properties.xml: playerName { type=STRING, size=64, flags=BASE_AND_CLIENT }
   db_mapping.xml: playerName { Storage { columnType=VARCHAR, index=unique } }
 
-  → 合并结果: playerName { type=STRING, size=64, flags=BASE_AND_CLIENT,
-                           Storage { columnType=VARCHAR, length=64, index=unique } }
+  → merged result: playerName { type=STRING, size=64, flags=BASE_AND_CLIENT,
+                                Storage { columnType=VARCHAR, length=64, index=unique } }
 
-冲突检测:
-  - 不同 type → 编译报错
-  - 不同 flags → 编译报错
-  - Storage 与类型不兼容 → 警告
+Conflict detection:
+  - Different type → compile error
+  - Different flags → compile error
+  - Storage incompatible with the type → warning
 ```
 
 ---
 
-## 6. 与 KBEngine/BigWorld 的对比
+## 6. Comparison with KBEngine/BigWorld
 
-| 能力 | KBEngine | BigWorld | theseed |
+| Capability | KBEngine | BigWorld | theseed |
 |------|---------|---------|---------|
-| 定义格式 | XML (.def) 无 XSD | XML (.def) 无 XSD | XML + XSD + XInclude |
-| 映射粒度 | 表级（5 种） | 属性级（15+ 种） | 属性级（整存 + 展开双策略） |
-| ARRAY 存储 | BLOB | 子表（SequenceMapping） | JSON / SUBTABLE |
-| FIXED_DICT 存储 | BLOB | 多列（CompositeMapping） | JSON / EXPAND |
-| 嵌套 FIXED_DICT | BLOB | 递归展开（ClassMapping） | JSON / EXPAND（递归） |
-| VECTOR3 | 3×FLOAT 列 | 3×FLOAT 列 | 3×FLOAT 列（一致） |
-| 整存 vs 展开 | 只有 BLOB | 只有展开 | 两种都支持，用户自选 |
-| JSON 支持 | 无 | 无 | 原生 |
-| JSON 索引 | 无 | 无 | json_path 索引 |
-| 自定义查询 | 无 | 无 | 参数化 SQL + 命名查询 |
-| 合服工具 | 无 | consolidate_dbs | theseed-merge |
-| 结构校验 | 无 | 无 | XSD 实时校验 |
-| 语义校验 | 无 | 无 | defcheck |
-| 文件拆分 | 无 | 无 | XInclude |
-| 存储后端 | MySQL + Redis | MySQL + XML | MySQL/PG/MongoDB/Redis/Memory |
-| Schema 迁移 | syncToDB（有限） | 手动 | 自动 diff + 迁移计划 |
+| Definition format | XML (.def) without XSD | XML (.def) without XSD | XML + XSD + XInclude |
+| Mapping granularity | Table-level (5 kinds) | Property-level (15+ kinds) | Property-level (dual strategy of whole-store + expansion) |
+| ARRAY storage | BLOB | Subtable (SequenceMapping) | JSON / SUBTABLE |
+| FIXED_DICT storage | BLOB | Multiple columns (CompositeMapping) | JSON / EXPAND |
+| Nested FIXED_DICT | BLOB | Recursive expansion (ClassMapping) | JSON / EXPAND (recursive) |
+| VECTOR3 | 3×FLOAT columns | 3×FLOAT columns | 3×FLOAT columns (identical) |
+| Whole-store vs expansion | Only BLOB | Only expansion | Both supported, user's choice |
+| JSON support | None | None | Native |
+| JSON index | None | None | json_path index |
+| Custom query | None | None | Parameterized SQL + named queries |
+| Server merge tool | None | consolidate_dbs | theseed-merge |
+| Structural validation | None | None | XSD real-time validation |
+| Semantic validation | None | None | defcheck |
+| File splitting | None | None | XInclude |
+| Storage backend | MySQL + Redis | MySQL + XML | MySQL/PG/MongoDB/Redis/Memory |
+| Schema migration | syncToDB (limited) | Manual | Automatic diff + migration plan |

@@ -1,125 +1,127 @@
-# Script Debug — 脚本层调试与执行态诊断
+# Script Debug — Script-Layer Debugging and Execution-State Diagnostics
 
-> 本篇只讨论脚本运行时调试，不讨论平台遥测，也不讨论运维控制命令。
-> 来源判断：BigWorld / KBEngine 的主线更多是 `PyErr_Print`、`traceback`、`watcher`、`reload`。
-> theseed 在此之上单独补脚本执行态调试面。
+> **English** | [中文](03-script-debug.zh.md)
+
+> This document discusses only script runtime debugging; it does not discuss platform telemetry, nor operations control commands.
+> Source assessment: the mainline of BigWorld / KBEngine is more about `PyErr_Print`, `traceback`, `watcher`, `reload`.
+> theseed separately adds a script execution-state debugging surface on top of that.
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld Implements It
 
 ```
-BigWorld 的脚本调试更偏基础能力：
+BigWorld's script debugging leans toward basic capabilities:
   - PyErr_Print
   - traceback
-  - watcher 辅助观察
+  - watcher-assisted observation
   - reload
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine Implements It
 
 ```
-KBEngine 也主要围绕：
+KBEngine likewise mainly revolves around:
   - traceback
   - reload
-  - 简单观察与日志
+  - simple observation and logging
 
-并没有独立、完整的脚本执行态调试面。
+It has no independent, complete script execution-state debugging surface.
 ```
 
-### 优缺点
+### Pros and Cons
 
 ```
-BigWorld / KBEngine 的优点：
-  - 简单
-  - 对运行时侵入较少
+Pros of BigWorld / KBEngine:
+  - simple
+  - less intrusive to the runtime
 
-共同缺点：
-  - 缺少断点、单步、局部变量和协程态调试
-  - 复杂线上脚本问题定位效率低
+Shared cons:
+  - lack of breakpoints, single-stepping, local variables, and coroutine-state debugging
+  - low efficiency in locating complex online script problems
 ```
 
-### theseed 的取舍
+### theseed's Trade-offs
 
 ```
-theseed 把脚本调试独立成篇，
-因为它既不是 Telemetry，
-也不是 Ops Control Plane，
-而是服务器脚本执行态能力。
+theseed makes script debugging a separate document,
+because it is neither Telemetry
+nor the Ops Control Plane,
+but a server script execution-state capability.
 ```
 
 ---
 
-## 0. 设计边界
+## 0. Design Boundary
 
-本篇负责：
+This document is responsible for:
 
 ```
   - breakpoint / step / continue
   - call stack / locals / closure / watch
-  - Entity / Space / Realm 上下文
+  - Entity / Space / Realm context
   - coroutine / yield / resume
-  - hot update 后的版本一致性校验
-  - 调试事件审计与会话管理
+  - version-consistency validation after hot update
+  - debug event auditing and session management
 ```
 
-本篇不负责：
+This document is not responsible for:
 
 ```
   - traces / metrics / logs
-  - watcher 状态树查询与在线命令
-  - 热更 diff 分析与滚动发布编排
-  - 业务安全校验或客户端授权入口
-  - profiler → load feedback 闭环
+  - watcher state-tree queries and online commands
+  - hot-update diff analysis and rolling-release orchestration
+  - business security validation or client authorization entry points
+  - the profiler → load feedback loop
 ```
 
-脚本调试是服务器脚本执行态能力，
-不是 OTel，也不是 Ops Control Plane。
+Script debugging is a server script execution-state capability,
+not OTel, and not the Ops Control Plane.
 
 ---
 
-## 1. 为什么要单独成篇
+## 1. Why It Is a Separate Document
 
-BigWorld / KBEngine 在脚本侧主要提供的是：
+What BigWorld / KBEngine mainly provide on the script side is:
 
 ```
-  - 异常打印
+  - exception printing
   - traceback
-  - watcher 观察
-  - reload / reload-like 机制
+  - watcher observation
+  - reload / reload-like mechanisms
 ```
 
-这些能力足够定位错误，但不等于一套成体系的脚本调试面。
-theseed 需要补的是：
+These capabilities are enough to locate errors, but they do not amount to a systematic script debugging surface.
+What theseed needs to add is:
 
 ```
-  - 断点
-  - 单步
-  - 栈与局部变量
-  - Entity 上下文
+  - breakpoints
+  - single-stepping
+  - stack and local variables
+  - Entity context
   - yield/resume
-  - 热更后版本校验
+  - post-hot-update version validation
 ```
 
-如果把这些继续混进 Telemetry，就会把“看见发生了什么”和“控制脚本怎么跑”混在一起。
+If these are kept mixed into Telemetry, then "seeing what happened" and "controlling how scripts run" get conflated.
 
 ---
 
-## 2. 调试对象
+## 2. Debug Targets
 
-典型调试对象包括：
+Typical debug targets include:
 
 ```
-  - 普通函数调用帧
-  - Entity 绑定方法帧
-  - 协程挂起点
-  - 异步回调封装帧
-  - reload 之后的旧版本帧
+  - ordinary function call frames
+  - Entity-bound method frames
+  - coroutine suspension points
+  - async callback wrapper frames
+  - old-version frames after reload
 ```
 
-每个调试目标都必须携带最少上下文：
+Every debug target must carry a minimal context:
 
 ```
   - processId
@@ -132,7 +134,7 @@ theseed 需要补的是：
 
 ---
 
-## 3. 调试会话模型
+## 3. Debug Session Model
 
 ```cpp
 struct ScriptDebugTarget {
@@ -164,19 +166,19 @@ public:
 };
 ```
 
-协议层可以参考 DAP 风格，
-但语义必须以 Entity / Realm / Version 为中心，
-不能直接假设通用语言调试器语义可以无损套用。
+The protocol layer may follow a DAP style,
+but the semantics must be centered on Entity / Realm / Version,
+and one must not directly assume that general-purpose language debugger semantics can be applied losslessly.
 
 ---
 
-## 4. 与热更和异步的关系
+## 4. Relationship with Hot Update and Async
 
 ```
-热更、迁移、异步回调，都会让旧帧失效。
+Hot update, migration, and async callbacks all invalidate old frames.
 ```
 
-因此脚本调试必须显式绑定：
+Therefore script debugging must explicitly bind:
 
 ```
   - entityEpoch
@@ -184,71 +186,71 @@ public:
   - suspensionId
 ```
 
-规则很简单：
+The rule is simple:
 
 ```
-只要版本不一致，resume 就必须失败或重建上下文，
-不能静默继续跑旧帧。
+As long as the versions are inconsistent, resume must fail or rebuild the context;
+it must not silently keep running old frames.
 ```
 
-异步回调也一样：
+The same applies to async callbacks:
 
 ```
-迟到回调可以重新入栈，
-但不能自动继承旧的暂停状态。
+A late callback may re-enter the stack,
+but it must not automatically inherit the old suspended state.
 ```
 
 ---
 
-## 5. 与生命周期和控制器的关系
+## 5. Relationship with Lifecycle and Controllers
 
-脚本调试必须把这些回调当作一等帧：
+Script debugging must treat these callbacks as first-class frames:
 
 ```
-  - Entity 生命周期钩子
+  - Entity lifecycle hooks
   - Controller onStart / onUpdate / onComplete / onCancel
-  - 定时器回调
-  - 异步回调
+  - timer callbacks
+  - async callbacks
 ```
 
-可暂停点只允许落在这些安全边界上：
+Suspension points are allowed to fall only on these safe boundaries:
 
 ```
-  - 脚本函数入口
-  - hook 回调入口
-  - controller 回调入口
-  - timer / future 回调入口
+  - script function entry
+  - hook callback entry
+  - controller callback entry
+  - timer / future callback entry
 ```
 
-不允许把暂停点插进：
+It is not allowed to insert suspension points into:
 
 ```
-  - C++ 核心同步路径
-  - 属性 flush 中途
-  - 迁移序列化中途
+  - the C++ core synchronous path
+  - the middle of a property flush
+  - the middle of migration serialization
 ```
 
 ---
 
-## 6. 安全与权限
+## 6. Security and Permissions
 
-脚本调试只允许：
-
-```
-  - 开发态
-  - 已认证运维态
-  - 显式授权的本地会话
-```
-
-禁止：
+Script debugging is allowed only for:
 
 ```
-  - 通过客户端 exposed 入口进入调试面
-  - 把 locals / stack 直接暴露给普通玩家请求
-  - 把调试权限和 Telemetry 读取权限混为一谈
+  - development state
+  - authenticated operations state
+  - explicitly authorized local sessions
 ```
 
-调试会话必须审计：
+Forbidden:
+
+```
+  - entering the debugging surface through a client exposed entry point
+  - exposing locals / stack directly to ordinary player requests
+  - conflating debug permissions with Telemetry read permissions
+```
+
+Debug sessions must be audited:
 
 ```
   - attach
@@ -260,35 +262,35 @@ public:
 
 ---
 
-## 7. 分阶段边界
+## 7. Phased Boundaries
 
 ```
-MVP：
+MVP:
   - attach / detach
   - traceback / stack dump
-  - Entity 上下文 inspect
-  - 协程挂起点列表
+  - Entity context inspect
+  - coroutine suspension point list
 
-Phase 2：
+Phase 2:
   - breakpoint / step / continue
   - watch expression
   - conditional breakpoint
   - yield/resume
 
-Phase 3：
-  - 远程调试适配器
-  - 多进程联动调试
-  - 热更感知的会话重绑定
+Phase 3:
+  - remote debug adapter
+  - multi-process coordinated debugging
+  - hot-update-aware session rebinding
 ```
 
 ---
 
-## 8. 与 BigWorld / KBEngine / theseed 的对比
+## 8. Comparison with BigWorld / KBEngine / theseed
 
-| 维度 | BigWorld / KBEngine | theseed |
+| Dimension | BigWorld / KBEngine | theseed |
 |------|---------------------|---------|
-| 脚本异常定位 | traceback / watcher / reload 辅助 | 独立 Script Debug |
-| 断点 / 单步 | 无成体系 | 有 |
-| Entity 上下文 | 分散 | 显式建模 |
-| yield / resume | 基本无 | 显式建模 |
-| 热更版本一致性 | 无 | 强制校验 |
+| Script exception location | traceback / watcher / reload assistance | independent Script Debug |
+| Breakpoints / single-stepping | no systematic support | yes |
+| Entity context | scattered | explicitly modeled |
+| yield / resume | basically none | explicitly modeled |
+| Hot-update version consistency | none | mandatory validation |

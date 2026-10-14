@@ -1,108 +1,110 @@
-# theseed 架构谱系：从 BigWorld 与 KBEngine 到现代实现
+# theseed Architecture Lineage: From BigWorld and KBEngine to a Modern Implementation
 
-> 本文回答三个问题：theseed 从 BigWorld 与 KBEngine 分别借鉴了什么、改了什么、为什么改。
-> 逐系统面的详细论证见 `docs/design/` 八层设计文档（0-foundation ~ 8-reference），
-> 来源逐项追溯见 `docs/design/8-reference/source-attribution.md`。
+> **English** | [中文](architecture.zh.md)
 
-## 1. 定位
+> This document answers three questions: what theseed borrowed from BigWorld and KBEngine respectively, what it changed, and why.
+> Detailed arguments per system area are in the eight-layer design documents under `docs/design/` (0-foundation through 8-reference),
+> and item-by-item source tracing is in `docs/design/8-reference/source-attribution.md`.
 
-theseed 是面向现代 MMO 的分布式游戏服务器引擎：
+## 1. Positioning
 
-- **BigWorld（14.4.1）决定系统边界的上限**——服务端系统面（Space/AOI/Witness/Ghost/
-  HA/数据运维/登录/控制面）以它为源头边界审计；
-- **KBEngine 帮助验证最小运行时闭环**——tick/Entity/AOI/EntityCall 的轻量落地方式
-  是重要参考，但不把它的简化能力当成上限；
-- **theseed 负责现代化与工程化落地**——C++23、monorepo + vcpkg、三平面分离、
-  测试与覆盖率红线（见 `docs/design/0-foundation/04-modern-mmo-engine-positioning.md`）。
+theseed is a distributed game server engine for modern MMOs:
 
-theseed 不是 KBEngine 的重写版，也不是 BigWorld 的逐项搬运：旧引擎"能力正确但混层"，
-theseed 显式拆开实体主路径与运维命令、metrics 展示与控制命令、profiler 采样与调度决策、
-存储主路径与离线数据运维，各归各层。
+- **BigWorld (14.4.1) sets the upper bound of system boundaries** — the server-side system areas (Space/AOI/Witness/Ghost/
+  HA/data ops/login/control plane) are audited against it as the origin boundary;
+- **KBEngine helps validate the minimal runtime loop** — its lightweight implementation of tick/Entity/AOI/EntityCall
+  is an important reference, but its simplified capabilities are not treated as an upper bound;
+- **theseed is responsible for modernization and engineering implementation** — C++23, monorepo + vcpkg, separation of the three planes,
+  and test and coverage red lines (see `docs/design/0-foundation/04-modern-mmo-engine-positioning.md`).
 
-## 2. 谱系总表
+theseed is neither a rewrite of KBEngine nor an item-by-item port of BigWorld: the old engines were "correct in capability but mixed across layers",
+whereas theseed explicitly separates the entity main path from ops commands, metrics display from control commands, profiler sampling from scheduling decisions,
+and the storage main path from offline data ops, each assigned to its own layer.
 
-| 层 | 继承自 BigWorld | 参考自 KBEngine | theseed 的改动 |
+## 2. Lineage Overview Table
+
+| Layer | Inherited from BigWorld | Referenced from KBEngine | theseed's changes |
 | --- | --- | --- | --- |
-| 运行时模型（tick/Entity） | Base/Cell 双体、单线程 tick 主循环 | `EventDispatcher::processUntilBreak` 式分段 tick、轻量实体落地 | PropertyBlock 连续内存替代 Python dict 属性；TimerWheel 选型；C++23 全量 |
-| 复制与空间 | AOI 十字链表/RangeTrigger、Witness/RealEntity/EntityCache/Ghost/Haunt、Mailbox(EntityCall)、BSP 负载均衡 | EntityCall 单向化简、迁移路由窗口（GhostManager） | Runtime Data Plane 不走消息总线（自有判断）；迁移路由窗口语义收紧 |
-| 集群与可用性 | BackupHash/BackupHashChain/BackupSender 热备责任链 | （相对弱，仅参考） | BackupTopologyCoordinator 原型 + LoadProfiler 负载反馈 |
-| 数据与运维 | 属性级存储映射（15+ 种 PropertyMapping）、Archiver/SecondaryDB/consolidate_dbs 工具链、Server Merge | MySQL 主路径、5 种 TABLE_ITEM 简化映射 | file/MySQL/PostgreSQL 三后端同接口（`IEntityStore`/`IAccountStore`）；BigWorld 只支持 MySQL+XML |
-| 接入与控制面 | LoginApp 登录面（Challenge/statusCheck/ban 清理）、bwmachined、Watcher/message_logger/profiler | 轻量接入路径、machine 进程管理 | Redis 会话/限流栈、只读 Ops HTTP（/metrics /health /inspect）、OTel 式 Tracing——均属新增 |
-| 世界与游戏框架 | Physics2、Recast/Detour 导航、30+ 种 Controller、Compiled Space/世界流送 | 4 种 Controller 的简洁接口 | 取 BigWorld 能力边界 + KBEngine 落地方式；当前实现 MoveToPoint/MoveToEntity |
-| 脚本与客户端 | L1-L4 热更分级思想、SDK digest 校验 | 混合式客户端 SDK 生成链（参考但解耦生成链与运行时绑定） | 受限 L1/L2 热更原型；现代 codegen（C# Emitter）；Merkle diff 替代单 digest |
+| Runtime model (tick/Entity) | Base/Cell dual bodies, single-threaded tick main loop | `EventDispatcher::processUntilBreak`-style segmented tick, lightweight entity implementation | PropertyBlock contiguous memory replaces Python dict attributes; TimerWheel selection; C++23 throughout |
+| Replication and space | AOI cross-linked list/RangeTrigger, Witness/RealEntity/EntityCache/Ghost/Haunt, Mailbox(EntityCall), BSP load balancing | EntityCall unidirectional simplification, migration routing window (GhostManager) | Runtime Data Plane does not go through the message bus (own judgment); migration routing window semantics tightened |
+| Cluster and availability | BackupHash/BackupHashChain/BackupSender hot-standby chain of responsibility | (relatively weak, reference only) | BackupTopologyCoordinator prototype + LoadProfiler load feedback |
+| Data and ops | Property-level storage mapping (15+ kinds of PropertyMapping), Archiver/SecondaryDB/consolidate_dbs toolchain, Server Merge | MySQL main path, 5 kinds of simplified TABLE_ITEM mapping | file/MySQL/PostgreSQL three backends behind one interface (`IEntityStore`/`IAccountStore`); BigWorld only supports MySQL+XML |
+| Access and control plane | LoginApp login plane (Challenge/statusCheck/ban cleanup), bwmachined, Watcher/message_logger/profiler | Lightweight access path, machine process management | Redis session/rate-limiting stack, read-only Ops HTTP (/metrics /health /inspect), OTel-style Tracing — all newly added |
+| World and game framework | Physics2, Recast/Detour navigation, 30+ kinds of Controller, Compiled Space/world streaming | Concise interface for 4 kinds of Controller | Take BigWorld's capability boundary + KBEngine's implementation approach; currently implements MoveToPoint/MoveToEntity |
+| Scripting and client | L1-L4 tiered hot update concept, SDK digest verification | Hybrid client SDK generation chain (referenced but decoupling the generation chain from runtime binding) | Restricted L1/L2 hot update prototype; modern codegen (C# Emitter); Merkle diff replaces a single digest |
 
-## 3. 关键改动与理由
+## 3. Key Changes and Rationale
 
-### 3.1 属性布局：PropertyBlock 连续内存（替代 KBEngine 的 Python dict）
+### 3.1 Attribute layout: PropertyBlock contiguous memory (replacing KBEngine's Python dict)
 
-KBEngine 属性存 Python dict，每次读写都经过 Python API，性能与缓存局部性差
-（`docs/design/1-runtime-model/02-entity-system.md`）。theseed 按实体定义把属性
-排进连续 `PropertyBlock`，配合 DirtyMask 做脏标记、按 tick 批量复制。
-这是"KBEngine 验证了闭环、theseed 换掉落地形态"的典型改动。
+KBEngine stores attributes in a Python dict, so every read and write goes through the Python API, resulting in poor performance and cache locality
+(`docs/design/1-runtime-model/02-entity-system.md`). theseed arranges attributes into a contiguous `PropertyBlock` according to the entity definition,
+using a DirtyMask for dirty marking and batch replication per tick.
+This is a typical change where "KBEngine validated the loop, and theseed replaced the implementation form".
 
-### 3.2 可靠性语义显式化
+### 3.2 Making reliability semantics explicit
 
-BigWorld 的 Channel/Bundle 有 Ordered Reliable 与 Unordered Lossy 两类语义但与
-传输实现耦合。theseed 在 `IRuntimeTransport`/`NetworkTransport` 上显式建模：
-EntityCall/控制消息走 Ordered Reliable，volatile/AOI 广播走 Unordered Lossy，
-并有 `TransportStatsCollector` 统计 Channel/Bundle 状态。
+BigWorld's Channel/Bundle has two kinds of semantics, Ordered Reliable and Unordered Lossy, but they are coupled to the transport implementation.
+theseed models them explicitly on `IRuntimeTransport`/`NetworkTransport`:
+EntityCall/control messages use Ordered Reliable, while volatile/AOI broadcasts use Unordered Lossy,
+with a `TransportStatsCollector` collecting Channel/Bundle state.
 
-### 3.3 三平面分离（theseed 自有判断）
+### 3.3 Separation of the three planes (theseed's own judgment)
 
-- **Runtime Data Plane**：实体 tick、EntityCall、属性复制——单线程 tick，不走消息总线；
-- **Control Plane**：进程编排（MachineAgent/ProcessSupervisor）、Ops 只读面——HTTP/TCP 独立端口；
-- **Cross-Realm Async Plane**：跨服异步（消息总线、Redis）——与运行时数据面隔离。
+- **Runtime Data Plane**: entity tick, EntityCall, property replication — single-threaded tick, does not go through the message bus;
+- **Control Plane**: process orchestration (MachineAgent/ProcessSupervisor), Ops read-only plane — separate HTTP/TCP ports;
+- **Cross-Realm Async Plane**: cross-server async (message bus, Redis) — isolated from the runtime data plane.
 
-KBEngine 把这些混在一个进程模型里；BigWorld 能力齐全但观测/控制/调度相互渗透。
-分层的动机是故障域隔离与可测试性。
+KBEngine mixes these into a single process model; BigWorld is complete in capability but its observation/control/scheduling permeate each other.
+The motivation for layering is fault-domain isolation and testability.
 
-### 3.4 存储抽象与多后端
+### 3.4 Storage abstraction and multiple backends
 
-`IEntityStore`/`IAccountStore` 接口 + FileEntityStore/MySQLEntityStore/
-PostgreSQLEntityStore 三实现，构建期缺客户端库自动回退 file 后端
-（`THESEED_HAS_MYSQL`/`THESEED_HAS_POSTGRESQL` 条件编译）。
-BigWorld 只支持 MySQL(+XML)；KBEngine 以 MySQL 为主路径。存储模型统一为
-"每类型一张 `tbl_<Type>` 表 + 标量原生列 + VECTOR3 展开 + 变长 JSON/BYTEA"。
+The `IEntityStore`/`IAccountStore` interfaces plus three implementations — FileEntityStore/MySQLEntityStore/
+PostgreSQLEntityStore — with automatic fallback to the file backend when the client library is missing at build time
+(`THESEED_HAS_MYSQL`/`THESEED_HAS_POSTGRESQL` conditional compilation).
+BigWorld only supports MySQL (+XML); KBEngine takes MySQL as its main path. The storage model is unified as
+"one `tbl_<Type>` table per type + native scalar columns + VECTOR3 expansion + variable-length JSON/BYTEA".
 
-### 3.5 工程基线
+### 3.5 Engineering baseline
 
-monorepo + vcpkg manifest + CMake presets（gcc/clang/msvc/coverage/sanitize 五树）；
-C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默认开）；
-每个模块配单元/集成测试，行/分支/函数三口径覆盖率 100%（豁免需实验论证，见
-`docs/design/8-reference/coverage-report.md`）。
+monorepo + vcpkg manifest + CMake presets (five trees: gcc/clang/msvc/coverage/sanitize);
+C++23; `-Wall -Wextra -Wpedantic -Werror` (`THESEED_WARNINGS_AS_ERRORS=ON` enabled by default);
+each module has unit/integration tests, with 100% coverage across the three metrics of line/branch/function (exemptions require experimental justification, see
+`docs/design/8-reference/coverage-report.md`).
 
-## 4. 对照 BigWorld 历史遗留问题的规避
+## 4. Avoiding BigWorld's Legacy Issues
 
-| BigWorld 的坑 | theseed 的对策 | 落点 |
+| BigWorld's pitfall | theseed's countermeasure | Landing point |
 | --- | --- | --- |
-| 核心与脚本/平台耦合重 | 纯 C++23 核心库分层（foundation→runtime→core/db/login/...），脚本层只经受限接口 | `src/` 分层与依赖方向 |
-| 平台绑定（Windows 服务器工具链、专用构建） | CMake ≥3.28 + vcpkg manifest，gcc/clang/msvc 三编译器矩阵 + coverage/sanitize 树 | `CMakePresets.json` |
-| 测试缺失、回归靠人工 | 115 个测试全绿为提交门槛；覆盖率三口径 100% 红线；写而未注册的测试会被 `-Wunused-function` 拦下 | `tests/`、CI、`-Werror` |
-| 观测/控制/数据面互相渗透 | 三平面分离；Ops 只读面独立 HTTP 端口；控制命令与 metrics 展示分开 | `src/ops/`、架构基线文档 |
-| 数据库层只支持 MySQL | `IEntityStore` 抽象 + 三后端，SQL 集成段环境变量门控可重复验证 | `src/db/` |
+| Heavy coupling between the core and scripting/platform | Pure C++23 core library layering (foundation→runtime→core/db/login/...), with the scripting layer going only through restricted interfaces | `src/` layering and dependency direction |
+| Platform lock-in (Windows server toolchain, custom builds) | CMake ≥3.28 + vcpkg manifest, a three-compiler matrix of gcc/clang/msvc + coverage/sanitize trees | `CMakePresets.json` |
+| Missing tests, regression done manually | 115 tests passing green as the commit gate; a 100% red line across the three coverage metrics; a test written but not registered is caught by `-Wunused-function` | `tests/`, CI, `-Werror` |
+| Observation/control/data planes permeating each other | Separation of the three planes; the Ops read-only plane on a separate HTTP port; control commands separated from metrics display | `src/ops/`, architecture baseline documents |
+| The database layer only supports MySQL | The `IEntityStore` abstraction + three backends, with the SQL integration section gated by environment variables for reproducible verification | `src/db/` |
 
-## 5. 当前实现状态（截至 2026-09）
+## 5. Current Implementation Status (as of 2026-09)
 
-- **Phase A（完成）**：TickScheduler、Entity/Base-Cell 双体、PropertyBlock、
-  Base↔Cell EntityCall、SingleCell Space、Witness 同步、FileEntityStore、极简登录。
-- **Phase B（进行中）**：十字链表 AOI ✅、Controller（MoveToPoint/MoveToEntity）✅、
-  MySQL/PostgreSQL 持久化后端 ✅（真实实例验证）、Redis 会话/限流 ✅、
-  C# 代码生成 ✅、Metrics/Logger/Tracing ✅、只读 Ops inspect ✅、
-  Channel/Bundle 状态统计 ✅。
-- **Phase C（已启动，待端到端集成）**：受限热更（L1/L2）、迁移路由窗口、
-  BackupTopologyCoordinator、LoadProfiler。
-- 进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine（`apps/`）。
-- 代码地图：`src/foundation`（基础设施）/ `src/runtime`（运行时核心）/
-  `src/core`（应用骨架与 EntityDef）/ `src/db` / `src/login` / `src/realm` /
-  `src/ops` / `src/control` / `src/scripting`。
+- **Phase A (complete)**: TickScheduler, Entity/Base-Cell dual bodies, PropertyBlock,
+  Base↔Cell EntityCall, SingleCell Space, Witness synchronization, FileEntityStore, minimal login.
+- **Phase B (in progress)**: cross-linked list AOI ✅, Controller (MoveToPoint/MoveToEntity) ✅,
+  MySQL/PostgreSQL persistence backends ✅ (verified against real instances), Redis session/rate limiting ✅,
+  C# code generation ✅, Metrics/Logger/Tracing ✅, read-only Ops inspect ✅,
+  Channel/Bundle state statistics ✅.
+- **Phase C (started, pending end-to-end integration)**: restricted hot update (L1/L2), migration routing window,
+  BackupTopologyCoordinator, LoadProfiler.
+- Process targets: loginapp / realmapp / baseapp / cellapp / dbapp / machine (`apps/`).
+- Code map: `src/foundation` (infrastructure) / `src/runtime` (runtime core) /
+  `src/core` (application skeleton and EntityDef) / `src/db` / `src/login` / `src/realm` /
+  `src/ops` / `src/control` / `src/scripting`.
 
-## 6. 质量红线（本仓执行标准）
+## 6. Quality Red Lines (standards enforced in this repo)
 
-1. 现代 C++：RAII、智能指针，禁裸 `new`/`delete`，const 正确；
-2. 统一错误处理与日志（边界内返回 bool/optional，日志走 `foundation/Logger`）；
-3. 接口有注释与清晰边界（纯接口类接受 trivial 虚析构的覆盖率豁免）；
-4. 无魔数与重复代码；
-5. 编译零警告：`-Wall -Wextra -Wpedantic` + `-Werror`（可经
-   `THESEED_WARNINGS_AS_ERRORS=OFF` 临时关闭，默认开）；
-6. 每个模块有单元测试且持续跑通；提交前全量 ctest 全绿是硬门槛；
-   覆盖率 miss 要么补测试、要么带实验论证的豁免标记。
+1. Modern C++: RAII, smart pointers, no bare `new`/`delete`, const correctness;
+2. Unified error handling and logging (return bool/optional within boundaries, logging goes through `foundation/Logger`);
+3. Interfaces have comments and clear boundaries (pure interface classes accept a coverage exemption for a trivial virtual destructor);
+4. No magic numbers and no duplicated code;
+5. Zero compile warnings: `-Wall -Wextra -Wpedantic` + `-Werror` (can be
+   temporarily disabled via `THESEED_WARNINGS_AS_ERRORS=OFF`, enabled by default);
+6. Each module has unit tests that keep passing; a full green ctest before commit is a hard gate;
+   a coverage miss must either be covered by adding tests or carry an exemption marker with experimental justification.

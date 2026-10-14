@@ -1,34 +1,36 @@
-# Modern MMO Engine Positioning — 现代 MMO 引擎定位
+# Modern MMO Engine Positioning — Positioning a Modern MMO Engine
 
-> 本篇用于统一 theseed 的顶层取舍：BigWorld 是源头设计，KBEngine 是参考实现之一，theseed 的目标是整合两者优点并现代化落地。
+> **English** | [中文](04-modern-mmo-engine-positioning.zh.md)
 
----
-
-## 1. 总判断
-
-theseed 应被定位为：
-
-```
-以 BigWorld 的系统级 MMO 服务端架构为源头，
-以 KBEngine 的轻量运行时落地为参考，
-用现代 C++、现代运维、现代数据与工具链重新组织的分布式游戏服务器引擎。
-```
-
-这意味着：
-
-```
-BigWorld 决定系统边界的上限。
-KBEngine 帮助验证最小运行时闭环。
-theseed 负责现代化、工程化和阶段化落地。
-```
+> This document is used to unify theseed's top-level trade-offs: BigWorld is the origin design, KBEngine is one of the reference implementations, and theseed's goal is to integrate the strengths of both and deliver it in a modernized way.
 
 ---
 
-## 2. 三个参考层次
+## 1. Overall Judgment
 
-### 2.1 BigWorld：源头设计
+theseed should be positioned as:
 
-BigWorld 的价值不只是 Base / Cell / AOI 这些名词，而是完整系统面：
+```
+A distributed game server engine that takes BigWorld's system-level MMO server architecture as its origin,
+takes KBEngine's lightweight runtime implementation as a reference,
+and is reorganized with modern C++, modern ops, and modern data and toolchain.
+```
+
+This means:
+
+```
+BigWorld sets the upper bound of system boundaries.
+KBEngine helps validate the minimal runtime loop.
+theseed is responsible for modernization, engineering, and staged implementation.
+```
+
+---
+
+## 2. Three Reference Levels
+
+### 2.1 BigWorld: origin design
+
+BigWorld's value is not just the terms Base / Cell / AOI, but the complete system areas:
 
 ```
   - Runtime Data Plane: Mailbox / Mercury / Channel / Bundle
@@ -39,93 +41,93 @@ BigWorld 的价值不只是 Base / Cell / AOI 这些名词，而是完整系统�
   - World Framework: chunk / geometry mapping / compiled space
 ```
 
-这些能力共同构成“大型 MMO 服务端引擎”的系统骨架。
+Together these capabilities form the system skeleton of a "large-scale MMO server engine".
 
-### 2.2 KBEngine：参考实现之一
+### 2.2 KBEngine: one of the reference implementations
 
-KBEngine 的价值在于：
-
-```
-  - 更容易阅读的运行时主干
-  - 更轻的 Base / Cell / EntityCall / Witness / Ghost 路径
-  - 可作为 MVP 运行链路的现实参照
-```
-
-但 KBEngine 不应成为 theseed 的能力上限：
+KBEngine's value lies in:
 
 ```
-  - 系统级 HA 较弱
-  - 数据运维工具链较薄
-  - load feedback 与调度闭环不足
-  - 运维控制面不如 BigWorld 成体系
+  - A more readable runtime backbone
+  - Lighter Base / Cell / EntityCall / Witness / Ghost paths
+  - Usable as a realistic reference for the MVP runtime chain
 ```
 
-### 2.3 theseed：现代化整合
-
-theseed 需要把旧引擎中正确的系统语义重新组织为现代工程结构：
+But KBEngine should not become theseed's capability upper bound:
 
 ```
-  - C++23 / CMake / vcpkg 的现代构建基线
-  - Runtime Data Plane / Control Plane / Cross-Realm Async Plane 的明确分离
-  - 结构化日志、metrics、trace 与 Ops Control Plane 分层
-  - 属性级存储映射 + JSON / 多后端 / schema diff 的现代数据能力
-  - 代码生成优先的客户端 SDK 与协议约束
-  - 受限热更、滚动发布、审计、回滚的工程化发布边界
+  - System-level HA is weaker
+  - The data ops toolchain is thinner
+  - load feedback and the scheduling loop are insufficient
+  - The ops control plane is less systematic than BigWorld's
+```
+
+### 2.3 theseed: modernization integration
+
+theseed needs to reorganize the correct system semantics of the old engines into a modern engineering structure:
+
+```
+  - A modern build baseline of C++23 / CMake / vcpkg
+  - Explicit separation of the Runtime Data Plane / Control Plane / Cross-Realm Async Plane
+  - Layering of structured logging, metrics, trace, and the Ops Control Plane
+  - Modern data capabilities of property-level storage mapping + JSON / multiple backends / schema diff
+  - Code-generation-first client SDK and protocol constraints
+  - Engineering release boundaries of restricted hot update, rolling release, audit, and rollback
 ```
 
 ---
 
-## 3. 取舍原则
+## 3. Trade-off Principles
 
-### 3.1 保留 BigWorld 的系统状态对象
+### 3.1 Keep BigWorld's system state objects
 
-现代化不等于抹掉 BigWorld 的核心状态对象。theseed 应优先保留这些语义：
+Modernization does not mean erasing BigWorld's core state objects. theseed should preserve these semantics first:
 
-| BigWorld 概念 | theseed 需要保留的语义 |
+| BigWorld concept | Semantics theseed needs to preserve |
 |------|------|
-| Channel | 连接状态、背压、inactivity、可靠性上下文 |
-| Bundle | tick 内消息聚合、可靠性标记、flush 边界 |
-| RealEntity / Haunt | real 权威、ghost 目标、控制权、迁移/offload 状态 |
-| Witness / EntityCache | 每个观察关系的可见性、detail level、priority、bandwidth budget |
-| EntityGhostMaintainer | ghost 集合维护与跨 Cell 边界一致性 |
-| BackupHash / BackupHashChain | 备份责任路由、priming、ack、promote、恢复权威 |
-| EntityProfiler / EntityTypeProfiler | 负载信号进入调度闭环，而不是只做展示指标 |
+| Channel | Connection state, backpressure, inactivity, reliability context |
+| Bundle | In-tick message aggregation, reliability markers, flush boundary |
+| RealEntity / Haunt | real authority, ghost target, control ownership, migration/offload state |
+| Witness / EntityCache | Per-observation-relationship visibility, detail level, priority, bandwidth budget |
+| EntityGhostMaintainer | ghost set maintenance and cross-Cell boundary consistency |
+| BackupHash / BackupHashChain | Backup responsibility routing, priming, ack, promote, recovery authority |
+| EntityProfiler / EntityTypeProfiler | Load signals entering the scheduling loop, rather than being display metrics only |
 
-这些对象不必按旧代码形态复制，但它们承载的运行时语义不能丢。
+These objects need not be copied in their old code form, but the runtime semantics they carry must not be lost.
 
-### 3.2 采用 KBEngine 的最小闭环路径
+### 3.2 Adopt KBEngine's minimal loop path
 
-MVP 应继续保持轻量：
+The MVP should remain lightweight:
 
 ```
-  - 单 Realm
-  - 单线程 tick
+  - Single Realm
+  - Single-threaded tick
   - SingleCell Space
-  - Base / Cell 双体
-  - EntityCall 主路径
-  - Witness 同步
-  - Ghost / migration 的最小路由窗口
+  - Base / Cell dual bodies
+  - EntityCall main path
+  - Witness synchronization
+  - A minimal routing window for Ghost / migration
 ```
 
-但这个轻量路径只是起点，不是最终边界。
+But this lightweight path is only a starting point, not the final boundary.
 
-### 3.3 用现代化拆分旧引擎的混层
+### 3.3 Use modernization to split the old engines' mixed layers
 
-旧引擎里很多能力是正确的，但实现上常混在一起。theseed 应显式拆开：
+Many capabilities in the old engines are correct, but they are often mixed together in implementation. theseed should explicitly split them apart:
 
-| 不应混合的内容 | theseed 分层 |
+| Content that should not be mixed | theseed layering |
 |------|------|
-| 实体主路径消息与运维命令 | Runtime Data Plane / Ops Control Plane |
-| metrics 展示与控制命令 | Telemetry / Ops Control Plane |
-| profiler 采样与调度决策 | Diagnostics / Load Feedback |
-| 可见性、更新优先级、payload 编码 | AOI / Priority / Property Replication |
-| 存储主路径与离线数据运维 | Persistence / Data Ops Toolchain |
+| Entity main-path messages and ops commands | Runtime Data Plane / Ops Control Plane |
+| metrics display and control commands | Telemetry / Ops Control Plane |
+| profiler sampling and scheduling decisions | Diagnostics / Load Feedback |
+| visibility, update priority, payload encoding | AOI / Priority / Property Replication |
+| storage main path and offline data ops | Persistence / Data Ops Toolchain |
 
 ---
 
-## 4. 现代 MMO 引擎的核心链路
+## 4. Core Chains of a Modern MMO Engine
 
-theseed 的长期架构应围绕以下链路组织：
+theseed's long-term architecture should be organized around the following chains:
 
 ```
 Login / Gateway
@@ -137,7 +139,7 @@ Login / Gateway
   → Client SDK
 ```
 
-并且同步建设系统链路：
+And build the system chain in parallel:
 
 ```
 Runtime Profiler
@@ -146,7 +148,7 @@ Runtime Profiler
   → Ops Control Plane
 ```
 
-以及可用性链路：
+As well as the availability chain:
 
 ```
 Primary Entity
@@ -156,21 +158,21 @@ Primary Entity
   → Restore / Promote
 ```
 
-这三条链路分别对应：
+These three chains correspond respectively to:
 
 ```
-玩家在线主路径
-系统调度反馈路径
-高可用恢复路径
+The player online main path
+The system scheduling feedback path
+The high-availability recovery path
 ```
 
-任何文档或实现如果只覆盖第一条链，都还不能称为完整 MMO 引擎。
+Any document or implementation that covers only the first chain cannot yet be called a complete MMO engine.
 
 ---
 
-## 5. 分阶段目标
+## 5. Staged Goals
 
-### Phase 1：现代化运行时内核
+### Phase 1: Modernized runtime kernel
 
 ```
   - Base / Cell / Tick / EntityDef
@@ -183,43 +185,43 @@ Primary Entity
   - Unity SDK MVP
 ```
 
-目标是得到一个能稳定运行的单 Realm 分布式游戏服务器内核。
+The goal is to obtain a single-Realm distributed game server kernel that runs stably.
 
-### Phase 2：系统面补齐
+### Phase 2: Completing the system areas
 
 ```
   - Static Partition
-  - 更完整的 Channel / Bundle 状态机
+  - A more complete Channel / Bundle state machine
   - EntityCache / witness priority
   - Entity / EntityType load profiler
   - Ops Control Plane
-  - BackupTopologyCoordinator 原型
-  - Data Ops Toolchain 原型
+  - BackupTopologyCoordinator prototype
+  - Data Ops Toolchain prototype
 ```
 
-目标是从“能跑”进入“可运维、可扩展、可调度”。
+The goal is to move from "it runs" to "operable, scalable, schedulable".
 
-### Phase 3：BigWorld 级系统能力现代化
+### Phase 3: Modernizing BigWorld-level system capabilities
 
 ```
   - BSP grow / shrink
   - Offload / retire / controlled shutdown
-  - BackupHash / restore authority 闭环
+  - BackupHash / restore authority loop
   - load bounds / chunk-aware balance
   - SecondaryDB / local archive / consolidate
-  - 多 Realm / Cross-Realm Async Plane
+  - Multi-Realm / Cross-Realm Async Plane
 ```
 
-目标是形成真正面向大型 MMO 的系统级引擎能力。
+The goal is to form system-level engine capabilities truly oriented toward large-scale MMOs.
 
 ---
 
-## 6. 一句话判断
+## 6. In One Sentence
 
 ```
-theseed 不是 KBEngine 的重写版，
-也不是 BigWorld 的逐项搬运。
+theseed is not a rewrite of KBEngine,
+nor an item-by-item port of BigWorld.
 
-theseed 应是以 BigWorld 为源头、以 KBEngine 为参考之一、
-用现代工程方式重新设计和落地的 MMO 服务端引擎。
+theseed should be an MMO server engine that takes BigWorld as its origin, takes KBEngine as one of its references,
+and is redesigned and implemented in a modern engineering way.
 ```

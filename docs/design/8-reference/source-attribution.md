@@ -1,320 +1,322 @@
-# Source Attribution — 来源追溯与覆盖判断
+# Source Attribution — Origin Traceability and Coverage Judgment
 
-> 这份文档回答三件事：
+> **English** | [中文](source-attribution.zh.md)
+
+> This document answers three things:
 >
-> 1. 新分层下每一层主要来自 BigWorld 源头、KBEngine 参考实现，还是 theseed 自己扩展  
-> 2. 当前文档覆盖的是“BigWorld 源头系统面”还是“KBEngine 轻量运行时参考”  
-> 3. 哪些能力现在只是边界，不是 MVP 承诺
+> 1. Under the new layering, for each layer, whether it comes mainly from the BigWorld origin, the KBEngine reference implementation, or theseed's own extension  
+> 2. Whether the current documentation covers the "BigWorld origin system plane" or the "KBEngine lightweight runtime reference"  
+> 3. Which capabilities are currently only boundaries, not MVP commitments
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld Is Implemented
 
 ```
-BigWorld 是 theseed 的源头设计参考，
-价值不只在 runtime，更在系统层和工具链：
+BigWorld is theseed's origin design reference,
+its value lies not only in the runtime, but even more in the system layer and toolchain:
   - Space / AOI / Witness / Ghost
   - HA
-  - 数据运维
-  - 登录运维
+  - data ops
+  - login ops
   - Watcher / profiler / controlled shutdown
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine Is Implemented
 
 ```
-KBEngine 是重要参考实现之一，
-参考价值主要在轻量运行时落地方式：
+KBEngine is one of the important reference implementations,
+its reference value lies mainly in how a lightweight runtime is put into practice:
   - tick
   - entity
   - AOI / ghost / witness
   - migration
 ```
 
-### 优缺点
+### Strengths and Weaknesses
 
 ```
-BigWorld 的优点：
-  - 系统面厚
-  - 能作为 theseed 的长期系统边界源头
+BigWorld's strengths:
+  - a substantial system area
+  - can serve as the origin of theseed's long-term system boundary
 
-KBEngine 的优点：
-  - runtime 落地更直接
-  - 更适合作为 MVP 运行链路参照
+KBEngine's strengths:
+  - the runtime can be implemented more directly
+  - better suited as the reference for the MVP runtime chain
 
-共同缺点：
-  - 如果不做来源追溯，文档容易误判“已经覆盖了什么”
+Shared weaknesses:
+  - without origin traceability, it is easy for the documentation to misjudge “what is already covered”
 ```
 
-### theseed 的取舍
+### theseed's Trade-offs
 
 ```
-theseed 这份来源追溯文档的任务，
-就是持续提醒读者：
-  - 哪些来自 BigWorld 源头设计
-  - 哪些来自 KBEngine 参考实现
-  - 哪些是 theseed 新增
-  - 哪些只是边界，不是当前承诺
-```
-
----
-
-## 1. 总判断
-
-一句话总结：
-
-```
-theseed 不是 KBEngine 的重写版，
-也不是 BigWorld 的逐项搬运。
-
-theseed 的文档结构应以 BigWorld 的 MMO 服务端系统面为源头，
-以 KBEngine 的轻量运行时落地为参考，
-再明确 theseed 自己的现代化工程取舍。
-```
-
-但要区分两层：
-
-```
-MVP 可落地起点
-  - 借鉴 KBEngine 的轻量运行时参考实现
-
-长期系统边界
-  - 明确继承 BigWorld 的 HA、数据运维、登录运维、控制面、load feedback、world system
+The task of this origin-traceability document for theseed
+is to keep reminding the reader:
+  - which parts come from the BigWorld origin design
+  - which parts come from the KBEngine reference implementation
+  - which parts are new in theseed
+  - which parts are only boundaries, not current commitments
 ```
 
 ---
 
-## 2. 新增基础设施边界
+## 1. Overall Judgment
 
-### 仓库布局与构建
+In one sentence:
 
 ```
-monorepo / vcpkg / C++23 这组约束主要是 theseed 自己的设计选择，
-BigWorld 和 KBEngine 只提供组织形态上的参考，不提供现成的现代仓库模型。
+theseed is not a rewrite of KBEngine,
+nor an item-by-item port of BigWorld.
+
+theseed's documentation structure should take BigWorld's MMO server system area as its origin,
+take the KBEngine lightweight runtime as its reference,
+and then make theseed's own modern engineering trade-offs explicit.
+```
+
+But two layers must be distinguished:
+
+```
+MVP-implementable starting point
+  - draw on the KBEngine lightweight runtime reference implementation
+
+Long-term system boundary
+  - explicitly inherit BigWorld's HA, data ops, login ops, control plane, load feedback, and world system
+```
+
+---
+
+## 2. Newly Added Infrastructure Boundaries
+
+### Repository Layout and Build
+
+```
+The monorepo / vcpkg / C++23 constraint set is mainly theseed's own design choice;
+BigWorld and KBEngine only provide a reference for organizational form, not a ready-made modern repository model.
 ```
 
 ### MachineAgent / Host Ops
 
 ```
-这部分的参考来源是 BigWorld bwmachined + KBEngine machine。
-theseed 的收敛方式是：
-  - 保留节点代理
-  - 保留本机进程编排
-  - 保留节点摘要上报
-  - 但把全局控制面和诊断面分离出去
+The reference origin for this part is BigWorld bwmachined + KBEngine machine.
+theseed's convergence is:
+  - keep the node agent
+  - keep local process orchestration
+  - keep node summary reporting
+  - but split out the global control plane and the diagnosis plane
 ```
 
 ---
 
-## 3. 分层来源
+## 3. Layer-by-Layer Origins
 
 ### 3.1 0-foundation
 
-主要来源：
+Main origin:
 
 ```
-theseed 自己定义
+Defined by theseed itself
 ```
 
-说明：
+Note:
 
 ```
-审计口径、分层原则、MVP 基线
-都不是 BigWorld / KBEngine 直接提供的现成文档结构，
-而是这轮重组为避免边界混乱而补出的治理层。
+The audit scope, layering principles, and MVP baseline
+are not ready-made documentation structures provided directly by BigWorld / KBEngine,
+but a governance layer added in this round of reorganization to prevent boundary confusion.
 ```
 
 ### 3.2 1-runtime-model
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| Tick 5 阶段分段 | KBEngine | `EventDispatcher::processUntilBreak` 风格最清晰 |
-| Base / Cell 双体 | BigWorld | KBEngine 提供更轻量的继承实现 |
-| IORuntime / Reactor-Completion 分层 | theseed | 老引擎只有事件循环/ poller 语义，没有这层总抽象 |
-| Merkle diff / semantic compatibility | theseed | 老引擎多为单 digest 对比，缺少分层差异定位 |
-| PropertyBlock 连续内存 | theseed | 用于替代 Python dict 属性布局 |
-| DirtyMask 位图 | KBEngine 思想 + theseed 实现 | 脏标记概念来自现有引擎，位图化是 theseed 收敛 |
-| TimerWheel | 通用算法 + theseed 选型 | 非 BigWorld / KBEngine 原生 |
-| 对象池模式 | KBEngine | `OBJECTPOOL_POINT` 一类模式延续 |
+| Tick 5-phase segmentation | KBEngine | The `EventDispatcher::processUntilBreak` style is the clearest |
+| Base / Cell dual body | BigWorld | KBEngine provides a lighter inheritance implementation |
+| IORuntime / Reactor-Completion layering | theseed | The old engines only have event-loop / poller semantics, without this overall abstraction |
+| Merkle diff / semantic compatibility | theseed | The old engines mostly do single-digest comparison, lacking layered difference localization |
+| PropertyBlock contiguous memory | theseed | Used to replace the Python dict property layout |
+| DirtyMask bitmap | KBEngine idea + theseed implementation | The dirty-flag concept comes from existing engines; the bitmap form is theseed's convergence |
+| TimerWheel | General algorithm + theseed selection | Not native to BigWorld / KBEngine |
+| Object pool pattern | KBEngine | Continuation of patterns like `OBJECTPOOL_POINT` |
 
-判断：
+Judgment:
 
 ```
-这一层是“BigWorld 实体模型 + KBEngine 主循环拆解 + theseed 内存改造”。
+This layer is “BigWorld entity model + KBEngine main-loop decomposition + theseed memory redesign”.
 ```
 
 ### 3.3 2-replication-and-space
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| AOI 十字链表 / RangeTrigger | BigWorld | KBEngine 提供轻量继承实现 |
-| Witness / Ghost / real-ghost 权威 | BigWorld | KBEngine 继承但简化 |
-| EntityCall / Mailbox 思想 | BigWorld | KBEngine 做了单向化简 |
-| 迁移窗口与路由期 | KBEngine | GhostManager 路由窗口表达更直接 |
-| Runtime Data Plane 不走 MQ | theseed | 基于两套引擎直连模式作出的明确判断 |
-| AoI update scheme / load bounds | BigWorld | KBEngine 基本没有等价系统面 |
-| BSP rebalance / offload | BigWorld | 是和 KBEngine 拉开差距的关键层 |
+| AOI cross-linked list / RangeTrigger | BigWorld | KBEngine provides a lightweight inheritance implementation |
+| Witness / Ghost / real-ghost authority | BigWorld | KBEngine inherits but simplifies |
+| EntityCall / Mailbox idea | BigWorld | KBEngine made a one-way simplification |
+| Migration window and routing period | KBEngine | The GhostManager routing window is expressed more directly |
+| Runtime Data Plane does not go through MQ | theseed | An explicit judgment based on the direct-connection mode of both engines |
+| AoI update scheme / load bounds | BigWorld | KBEngine basically has no equivalent system plane |
+| BSP rebalance / offload | BigWorld | The key layer that sets theseed apart from KBEngine |
 
-判断：
+Judgment:
 
 ```
-这一层是当前最“BigWorld 对齐”的核心层。
+This layer is currently the most “BigWorld-aligned” core layer.
 ```
 
 ### 3.4 3-cluster-and-availability
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| Reviver / supervisor 思想 | BigWorld | KBEngine 较弱 |
-| BackupHash / BackupHashChain | BigWorld | KBEngine 基本缺失 |
-| Service Fragment / Retire / Controlled Shutdown | BigWorld | KBEngine 没有成体系实现 |
-| EntityProfiler → load feedback | BigWorld | 是 BigWorld 的系统级差异点 |
-| 当前 MVP 只保留边界 | theseed | 不把远期 HA 伪装成当前能力 |
+| Reviver / supervisor idea | BigWorld | KBEngine is weaker |
+| BackupHash / BackupHashChain | BigWorld | KBEngine is basically missing it |
+| Service Fragment / Retire / Controlled Shutdown | BigWorld | KBEngine has no systematic implementation |
+| EntityProfiler → load feedback | BigWorld | A system-level differentiator of BigWorld |
+| The current MVP keeps only the boundary | theseed | Does not disguise long-term HA as a current capability |
 
-判断：
+Judgment:
 
 ```
-这一层几乎完全是按 BigWorld 服务端系统层来立边界。
+This layer draws its boundary almost entirely from the BigWorld server system layer.
 ```
 
 ### 3.5 4-data-and-ops
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| 属性级存储映射思想 | BigWorld | 比 KBEngine 的 BLOB 化更完整 |
-| MySQL 主路径的现实起点 | KBEngine | 更适合 MVP 可落地 |
-| LocalArchiveStore / SecondaryDB 语义 | BigWorld | 重点是职责，不是具体后端 |
-| snapshot / transfer / consolidate / sync / repair | BigWorld 工具链 | `transfer_db / consolidate_dbs / sync_db` |
-| JSON、多后端、Schema 自动迁移 | theseed | 现代化扩展，不是照抄旧引擎 |
+| Property-level storage mapping idea | BigWorld | More complete than KBEngine's BLOB-ification |
+| The realistic starting point of the MySQL main path | KBEngine | More suitable for an implementable MVP |
+| LocalArchiveStore / SecondaryDB semantics | BigWorld | The focus is responsibility, not a specific backend |
+| snapshot / transfer / consolidate / sync / repair | BigWorld toolchain | `transfer_db / consolidate_dbs / sync_db` |
+| JSON, multi-backend, Schema auto-migration | theseed | A modern extension, not a copy of the old engines |
 
-判断：
+Judgment:
 
 ```
-这一层是“BigWorld 工具链边界 + theseed 现代存储增强”。
+This layer is “BigWorld toolchain boundary + theseed modern storage enhancements”.
 ```
 
 ### 3.6 5-access-and-control-plane
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| Login Challenge / statusCheck / ban 清理 | BigWorld | 登录面最重要的系统参考 |
-| LoginApp / Gateway 接入基线 | BigWorld + KBEngine | 旧引擎都只给了较薄的接入面 |
-| MessageBus / Cross-Realm | theseed | 两套引擎都没有真正的现代 MQ 控制面 |
-| Redis / Async / Config | KBEngine 基础 + theseed 扩展 | KBEngine 只提供基础支撑 |
-| Watcher 式控制面抽象 | BigWorld | 但实现栈改为这些ed 自己设计 |
-| OTel / Telemetry / Diagnostics | theseed | 现代化观测面扩展，脚本执行态调试单独拆出 |
+| Login Challenge / statusCheck / ban cleanup | BigWorld | The most important system reference for the login plane |
+| LoginApp / Gateway access baseline | BigWorld + KBEngine | The old engines both only provide a thin access plane |
+| MessageBus / Cross-Realm | theseed | Neither engine has a true modern MQ control plane |
+| Redis / Async / Config | KBEngine basics + theseed extension | KBEngine only provides basic support |
+| Watcher-style control plane abstraction | BigWorld | But the implementation stack is redesigned by theseed itself |
+| OTel / Telemetry / Diagnostics | theseed | A modern observability extension; script runtime debugging is split out separately |
 
-判断：
+Judgment:
 
 ```
-这一层不是单纯“云原生外挂”，
-而是把 BigWorld 登录运维面与 Watcher 控制面重新放回系统边界。
+This layer is not simply a “cloud-native add-on”,
+but puts the BigWorld login ops plane and the Watcher control plane back into the system boundary.
 ```
 
 ### 3.7 6-world-and-game-framework
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| Physics / Navigation / Controllers | 通用设计 + theseed | 两套引擎可参考但并非同一抽象 |
-| World Streaming / Compiled Space | BigWorld | 这是 BigWorld 世界系统的重要补齐 |
-| Built-in Entities | theseed | 更偏游戏框架层 |
-| Lifecycle / Script Binding | BigWorld / KBEngine 思想 + theseed 收敛 | 钩子表与自动绑定是整理结果 |
+| Physics / Navigation / Controllers | General design + theseed | Both engines are referenceable but are not the same abstraction |
+| World Streaming / Compiled Space | BigWorld | An important completion of the BigWorld world system |
+| Built-in Entities | theseed | More on the game-framework side |
+| Lifecycle / Script Binding | BigWorld / KBEngine ideas + theseed convergence | The hook table and auto-binding are the result of tidying up |
 
-判断：
+Judgment:
 
 ```
-这一层主要是“世界系统边界归位”，
-不再把它们笼统叫做 gameplay。
+This layer is mainly “world system boundary re-homing”,
+so these systems are no longer lumped together generically as gameplay.
 ```
 
 ### 3.8 7-scripting-and-client
 
-| 主题 | 主要来源 | 说明 |
+| Topic | Main origin | Note |
 |------|------|------|
-| 热更新基础思路 | KBEngine reload + theseed 扩展 | L1-L4 分级是 theseed 自己定义 |
-| Exposed 安全边界 | KBEngine | 客户端调用授权边界延续 |
-| 脚本执行态调试 | theseed | BigWorld / KBEngine 主要是 traceback、watcher、reload，不是成体系断点调试 |
-| 多端代码生成 / Unity 优先 | theseed | 两套老引擎都没有现代 codegen 结构 |
-| 脚本安全层级 | theseed | 几乎完全新增 |
+| Basic hot-update idea | KBEngine reload + theseed extension | The L1-L4 grading is defined by theseed itself |
+| Exposed security boundary | KBEngine | Continuation of the client-call authorization boundary |
+| Script runtime debugging | theseed | BigWorld / KBEngine mainly have traceback, watcher, and reload, not systematic breakpoint debugging |
+| Multi-platform code generation / Unity first | theseed | Neither of the two old engines has a modern codegen structure |
+| Script security tiers | theseed | Almost entirely new |
 
-判断：
+Judgment:
 
 ```
-这一层继承较少，更多是 theseed 自己的产品化层。
+This layer inherits less; it is mostly theseed's own productization layer.
 ```
 
 ---
 
-## 4. 覆盖结论
+## 4. Coverage Conclusion
 
-### 4.1 以 BigWorld 为源头标尺
+### 4.1 With BigWorld as the Origin Yardstick
 
-当前文档已经明确覆盖设计边界：
+The current documentation already explicitly covers the design boundaries:
 
 ```
   - Space / AOI / Witness / Ghost / EntityCache
   - Channel / Bundle / Runtime Data Plane
-  - BackupHash / 热备恢复链
+  - BackupHash / hot-standby recovery chain
   - SecondaryDB / LocalArchiveStore
   - Data Ops Toolchain
-  - Login 运维面
-  - Watcher 式控制面
-  - Runtime profiler → 调度反馈
+  - Login ops plane
+  - Watcher-style control plane
+  - Runtime profiler → scheduling feedback
   - BSP / Load Bounds / Offload
   - World Streaming / Compiled Space
 ```
 
-但要强调：
+But it must be emphasized:
 
 ```
-这些很多仍然是 Phase 2 / Phase 3 边界，
-不是 MVP 实现承诺。
+Many of these are still Phase 2 / Phase 3 boundaries,
+not MVP implementation commitments.
 ```
 
-### 4.2 以 KBEngine 参考实现校验 MVP 运行链路
+### 4.2 Using the KBEngine Reference Implementation to Validate the MVP Runtime Chain
 
-当前文档已经覆盖：
+The current documentation already covers:
 
 ```
-  - 单线程 tick 主循环
+  - Single-threaded tick main loop
   - Base / Cell
   - AOI / Witness / Ghost
   - EntityCall
-  - 属性同步
-  - 单 Realm 持久化主路径
-  - Unity 优先的客户端主链路
+  - Property replication
+  - Single-Realm persistence main path
+  - Unity-first client main chain
 ```
 
-所以如果目标是：
+So if the goal is:
 
 ```
-做出一个比 KBEngine 更清晰、边界更现代的运行时核心
+building a runtime core that is clearer than KBEngine's, with more modern boundaries
 ```
 
-当前文档已经够用了。
+The current documentation is already sufficient.
 
-## 5. 当前能力判断
+## 5. Current Capability Assessment
 
-| 能力域 | 覆盖状态 | 备注 |
+| Capability area | Coverage status | Note |
 |------|------|------|
-| Base / Cell / Tick / AOI / Ghost / Witness | 已覆盖 | 可作为 MVP 运行链路 |
-| EntityCall / Property Replication / Migration | 已覆盖 | 口径已统一到复制与空间层 |
-| SingleCell / Static Partition 边界 | 已覆盖 | Phase 1 / 2 清晰 |
-| BigWorld 级 BSP / grow-shrink / auto rebalance | 已定义边界 | 非 MVP |
-| 主持久化 / 数据定义 / 查询 | 已覆盖 | MVP 可落地 |
-| LocalArchiveStore / SecondaryDB | 已定义边界 | 非 MVP |
-| BackupHash / 热备恢复链 | 已定义边界 | 非 MVP |
-| Login Challenge / 登录运维面 | 已覆盖边界 | BigWorld 对齐点 |
-| Watcher / 控制面 / 在线命令 | 已覆盖边界 | 不再混在 OTel 里 |
-| Runtime profiler → 调度反馈闭环 | 已覆盖边界 | BigWorld 关键差异 |
+| Base / Cell / Tick / AOI / Ghost / Witness | Covered | Can serve as the MVP runtime chain |
+| EntityCall / Property Replication / Migration | Covered | The metric basis has been unified into the replication-and-space layer |
+| SingleCell / Static Partition boundary | Covered | Phase 1 / 2 are clear |
+| BigWorld-level BSP / grow-shrink / auto rebalance | Boundary defined | Not MVP |
+| Main persistence / data definition / query | Covered | Implementable in the MVP |
+| LocalArchiveStore / SecondaryDB | Boundary defined | Not MVP |
+| BackupHash / hot-standby recovery chain | Boundary defined | Not MVP |
+| Login Challenge / login ops plane | Boundary covered | A BigWorld alignment point |
+| Watcher / control plane / online commands | Boundary covered | No longer mixed into OTel |
+| Runtime profiler → scheduling feedback loop | Boundary covered | A key BigWorld differentiator |
 
 ---
 
-## 6. 总结
+## 6. Summary
 
-真正来自 BigWorld 源头设计的最大贡献，主要体现在四层：
+The greatest contributions that truly come from the BigWorld origin design are mainly in four layers:
 
 ```
 2-replication-and-space
@@ -323,23 +325,23 @@ theseed 自己定义
 6-world-and-game-framework
 ```
 
-真正来自 KBEngine 参考实现的现实落地价值，主要体现在两层：
+The realistic implementation value that truly comes from the KBEngine reference implementation is mainly in two layers:
 
 ```
 1-runtime-model
-以及 2-replication-and-space 的 MVP 起步形态
+and the MVP starting form of 2-replication-and-space
 ```
 
-theseed 自己新增最多的层，则是：
+The layers where theseed itself adds the most are:
 
 ```
 5-access-and-control-plane
 7-scripting-and-client
 ```
 
-但这轮重组后的关键变化是：
+But the key change after this round of reorganization is:
 
 ```
-这些新增能力不再漂浮在旧目录里，
-而是被放回了以 BigWorld 为源头、以 KBEngine 为参考后更合理的系统层级。
+These new capabilities no longer float adrift in the old directories,
+but have been put back into more sensible system layers, with BigWorld as the origin and KBEngine as the reference.
 ```

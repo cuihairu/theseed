@@ -1,169 +1,171 @@
-# BSP Rebalance & Offload — grow/shrink、chunk-aware balance 与退役迁出
+# BSP Rebalance & Offload — grow/shrink, chunk-aware balance, and retire-offload
 
-> 来源源头：BigWorld `InternalNode::doBalance / balanceChildren / balanceOnUnloadedChunks / chunkLimitInDirection / CellData::balance / retireCell / shouldOffload`。
-> KBEngine 在动态 BSP、offload 与 chunk-aware balance 上只有较薄参考价值。
-> 这篇补的是 BigWorld 动态多 Cell 真正复杂的那一层，不是再重复“Phase 3 支持 BSP”。
+> **English** | [中文](07-bsp-rebalance-and-offload.zh.md)
+
+> Origin: BigWorld `InternalNode::doBalance / balanceChildren / balanceOnUnloadedChunks / chunkLimitInDirection / CellData::balance / retireCell / shouldOffload`.
+> KBEngine has only thin reference value on dynamic BSP, offload, and chunk-aware balance.
+> What this document adds is the genuinely complex layer of BigWorld's dynamic multi-Cell, not another repetition of "Phase 3 supports BSP".
 
 ---
 
-## 0.5 引擎实现对照与取舍
+## 0.5 Engine Implementation Comparison and Trade-offs
 
-### BigWorld 是怎么实现的
+### How BigWorld Implements It
 
 ```
-BigWorld 的 BSP 不是单点分区，而是完整的动态调度系统：
+BigWorld's BSP is not single-point partitioning, but a complete dynamic scheduling system:
   - grow / shrink
   - chunk-aware balance
   - retire / offload
-  - 与 load bounds 和 profiler feedback 联动
+  - Linked with load bounds and profiler feedback
 ```
 
-### KBEngine 是怎么实现的
+### How KBEngine Implements It
 
 ```
-KBEngine 没有 BigWorld 这么完整的动态 BSP 体系。
-它更偏向：
-  - 固定空间模型
-  - 少量手工调度
-  - 先把迁移和 AOI 跑顺
+KBEngine does not have as complete a dynamic BSP system as BigWorld.
+It leans more toward:
+  - A fixed spatial model
+  - A small amount of manual scheduling
+  - First getting migration and AOI running smoothly
 ```
 
-### 优缺点
+### Pros and Cons
 
 ```
-BigWorld 的优点：
-  - 适合超大世界和复杂负载管理
-  - 可做自动化空间调度
+BigWorld's advantages:
+  - Suitable for very large worlds and complex load management
+  - Can perform automated spatial scheduling
 
-KBEngine 的优点：
-  - 轻
-  - 边界少
-  - 更适合作为轻量运行时参考
+KBEngine's advantages:
+  - Light
+  - Few boundaries
+  - More suitable as a lightweight runtime reference
 
-共同缺点：
-  - 动态 rebalance 的实现和验证成本都很高
+Common disadvantages:
+  - The implementation and verification costs of dynamic rebalance are both high
 ```
 
-### theseed 的取舍
+### theseed's Trade-offs
 
 ```
-theseed 把 BSP 仅保留为 Phase 3 占位，
-当前不承诺自动 rebalance 或 offload，
-避免把远期能力写成已经可交付的实现面。
+theseed keeps BSP only as a Phase 3 placeholder,
+does not currently commit to automatic rebalance or offload,
+avoiding writing long-term capabilities as an already deliverable implementation surface.
 ```
 
 ---
 
-## 0. 设计边界
+## 0. Design Boundary
 
 ```
-本篇负责：
-  - BSP 分区点如何 grow / shrink
-  - rebalance 时如何结合实体负载与 chunk 边界
-  - offload / retireCell 与 rebalance 的关系
-  - updateRanges 和 loadBalance 的区别
+This document is responsible for:
+  - How BSP partition points grow / shrink
+  - How to combine entity load with chunk boundaries during rebalance
+  - The relationship between offload / retireCell and rebalance
+  - The difference between updateRanges and loadBalance
 
-本篇不负责：
-  - 十字链表 AOI
-  - witness 优先级调度
-  - 迁移快照序列化协议
+This document is not responsible for:
+  - The cross-linked list AOI
+  - witness priority scheduling
+  - The migration snapshot serialization protocol
 ```
 
-和其他文档的关系：
+Relationship with other documents:
 
 ```
 03-aoi-and-space
-  - 讲 topology 大框架
+  - Discusses the overall topology framework
 
 05-entity-migration
-  - 讲实体怎么迁
+  - Discusses how entities migrate
 
 11-aoi-update-schemes-and-load-bounds
-  - 讲 load bounds / range update 输入
+  - Discusses the load bounds / range update inputs
 
-本篇
-  - 讲 BSP 怎么据此移动边界、触发 offload
+This document
+  - Discusses how BSP moves boundaries and triggers offload based on these
 ```
 
 ---
 
-## 1. 为什么这篇必须单独立
+## 1. Why This Document Must Stand on Its Own
 
-BigWorld 的 `BSP` 复杂度不在“树形分区”这四个字。
+The complexity of BigWorld's `BSP` is not in the four words "tree partitioning".
 
-真正的复杂度在于它同时处理：
+The real complexity lies in its simultaneously handling:
 
 ```
-1. 实体 CPU / 逻辑负载
-2. chunk 加载边界
-3. ghost distance 邻接成本
-4. 新 Cell 尚未 ready 时的保护
+1. Entity CPU / logic load
+2. chunk load boundaries
+3. ghost distance adjacency cost
+4. Protection when a new Cell is not yet ready
 5. retire / offload / underload shrink
 ```
 
-如果这些都继续只被概括成：
+If all of these continue to be summarized only as:
 
 ```
 Phase 3: BSP / auto rebalance
 ```
 
-文档仍然没有覆盖 BigWorld 最关键的系统面。
+The documentation still does not cover BigWorld's most critical system area.
 
 ---
 
-## 2. BigWorld 到底在平衡什么
+## 2. What BigWorld Is Actually Balancing
 
-从 `InternalNode::doBalance` 可以提炼出它不是单一目标优化，而是同时看四类信号：
-
-```
-1. 左右子树平均负载差
-2. maxLoad 是否触碰 safety bound
-3. 是否还有未加载 chunk
-4. 子 Cell 是否已经创建完成
-```
-
-所以 `rebalance` 不是：
+From `InternalNode::doBalance`, it can be extracted that it is not single-objective optimization, but rather looks at four kinds of signals at the same time:
 
 ```
-哪里实体多就把边界往那边推
+1. The average load difference between the left and right subtrees
+2. Whether maxLoad touches the safety bound
+3. Whether there are still unloaded chunks
+4. Whether the child Cell has finished being created
 ```
 
-而更接近：
+So `rebalance` is not:
 
 ```
-在可移动前提下，
-在实体边界、chunk 边界、ghost 邻接成本和 loadSafetyBound 之间取最近可行点
+Push the boundary toward wherever there are more entities
+```
+
+But is closer to:
+
+```
+Under the premise of movability,
+take the nearest feasible point among the entity boundary, chunk boundary, ghost adjacency cost, and loadSafetyBound
 ```
 
 ---
 
-## 3. grow / shrink 的真实语义
+## 3. The Real Semantics of grow / shrink
 
 ### 3.1 Grow
 
 ```
-某侧边界外扩
-意味着该侧将承接更多空间区域与潜在实体
+One side's boundary expands outward,
+meaning that side will take on more spatial area and potential entities
 ```
 
 ### 3.2 Shrink
 
 ```
-某侧边界内收
-意味着该侧区域被削减，并可能触发实体迁出或 Cell 退役
+One side's boundary contracts inward,
+meaning that side's area is reduced, and it may trigger entity migration out or Cell retirement
 ```
 
-### 3.3 不对称约束
+### 3.3 Asymmetric Constraints
 
-BigWorld 的 `balanceChildren()` 已经体现出一个重要点：
+BigWorld's `balanceChildren()` already reflects an important point:
 
 ```
-一边 grow
-另一边 shrink
-并且 shrink 方会被显式标记
+One side grows
+while the other side shrinks
+and the shrinking side is explicitly marked
 ```
 
-这意味着 theseed 的 BSP rebalance 不应只是“更新一个 split 值”，而必须携带：
+This means theseed's BSP rebalance should not just "update a split value", but must carry:
 
 ```
 which side grows
@@ -173,182 +175,182 @@ whether shrink may force offload
 
 ---
 
-## 4. 先决条件比算法本身更重要
+## 4. Preconditions Matter More Than the Algorithm Itself
 
-BigWorld 在 rebalance 前有几个非常关键的保护条件：
+BigWorld has several very critical protection conditions before rebalance:
 
-### 4.1 新 Cell 必须已创建
+### 4.1 The New Cell Must Already Be Created
 
 ```
 childrenCreated = left.hasBeenCreated && right.hasBeenCreated
 ```
 
-设计含义：
+Design implication:
 
 ```
-不能在目标 Cell 还没 ready 时就把边界推过去，
-否则其他 Cell 可能先开始 offload，导致目标不存在。
+The boundary cannot be pushed over before the target Cell is ready,
+otherwise other Cells may start offloading first, causing the target to not exist.
 ```
 
-### 4.2 retire 状态改变目标函数
+### 4.2 The retire State Changes the Objective Function
 
-如果某侧正在 retire：
-
-```
-不是继续做平滑均衡，
-而是优先把区域往非 retiring 一侧推。
-```
-
-### 4.3 loadSafetyBound 是硬保护
-
-BigWorld 明确阻止：
+If one side is retiring:
 
 ```
-为了平衡 chunk 或 split，
-把已经接近过载的一侧再继续长大。
+Do not continue doing smooth balancing,
+but instead prioritize pushing the area toward the non-retiring side.
 ```
 
-这也是 theseed 以前文档里还没单独写清的边界。
+### 4.3 loadSafetyBound Is a Hard Protection
+
+BigWorld explicitly prevents:
+
+```
+For the sake of balancing chunk or split,
+continuing to grow the side that is already approaching overload.
+```
+
+This is also a boundary that the previous theseed documentation had not yet written out separately.
 
 ---
 
-## 5. 不是只看实体，还要看 chunk
+## 5. Not Only Entities, But Also Chunks
 
-`balanceOnUnloadedChunks()` 和 `chunkLimitInDirection()` 说明 BigWorld 的平衡不是纯逻辑负载。
+`balanceOnUnloadedChunks()` and `chunkLimitInDirection()` show that BigWorld's balancing is not purely logical load.
 
-它还在优化：
+It is also optimizing:
 
 ```
-哪些区域还没把所需 chunk 加载完
+Which regions have not yet finished loading the chunks they need
 ```
 
-这意味着 BSP rebalance 至少有两个目标函数：
+This means BSP rebalance has at least two objective functions:
 
-| 模式 | 主要目标 |
+| Mode | Primary Goal |
 |------|----------|
-| CPU / entity balance | 平衡平均逻辑负载 |
-| unloading / loading aware balance | 减少未加载 chunk 带来的不完整区域 |
+| CPU / entity balance | Balance the average logical load |
+| unloading / loading aware balance | Reduce incomplete regions caused by unloaded chunks |
 
-这也是为什么 `loadBalance` 和 `updateRanges` 要分开。
+This is also why `loadBalance` and `updateRanges` must be kept separate.
 
 ---
 
-## 6. entity limit 与 chunk limit 是两个不同边界
+## 6. entity limit and chunk limit Are Two Different Boundaries
 
-BigWorld 的 `closestLimit(entityLimit, chunkLimit, direction)` 非常关键。
+BigWorld's `closestLimit(entityLimit, chunkLimit, direction)` is very critical.
 
-它说明分区点移动时至少受两个限制：
+It shows that when a partition point moves, it is subject to at least two constraints:
 
 ### 6.1 entityLimit
 
 ```
-基于实体分布和 loadDiff 推导的最远可移动点
+The farthest movable point derived from the entity distribution and loadDiff
 ```
 
 ### 6.2 chunkLimit
 
 ```
-基于 chunkBounds + ghostDistance 推导的最远可移动点
+The farthest movable point derived from chunkBounds + ghostDistance
 ```
 
-设计含义：
+Design implication:
 
 ```
-边界不是想推多远就推多远，
-而是只能推到“负载约束”和“世界资产约束”共同允许的最近点。
+The boundary cannot be pushed as far as one wishes,
+but can only be pushed to the nearest point jointly allowed by the "load constraint" and the "world asset constraint".
 ```
 
-这点是 BigWorld 多 Cell 世界和 KBEngine 单 Cell 世界最本质的差异之一。
+This point is one of the most essential differences between BigWorld's multi-Cell world and KBEngine's single Cell world.
 
 ---
 
-## 7. ghostDistance 不只是 AOI 参数
+## 7. ghostDistance Is Not Just an AOI Parameter
 
-在 `chunkLimitInDirection()` 里，BigWorld 把 `ghostDistance` 直接纳入了分区边界限制。
+In `chunkLimitInDirection()`, BigWorld directly incorporates `ghostDistance` into the partition boundary constraint.
 
-这说明：
+This shows that:
 
 ```
 ghostDistance
-  不只是同步半径参数
-  还是 topology 约束参数
+  is not just a synchronization radius parameter
+  but also a topology constraint parameter
 ```
 
-因为边界变动后，相邻 Cell 仍然需要在 ghost 邻接区内保持正确加载和查询能力。
+Because after the boundary changes, adjacent Cells still need to maintain correct loading and query capability within the ghost adjacency area.
 
-theseed 应把这一点单独写死，避免将来把 `ghostDistance` 只留在同步配置里。
+theseed should write this point out separately, to avoid leaving `ghostDistance` only in the synchronization configuration in the future.
 
 ---
 
-## 8. updateRanges 和 loadBalance 不是一回事
+## 8. updateRanges and loadBalance Are Not the Same Thing
 
-BigWorld 把两者分成两条路径：
+BigWorld splits the two into two paths:
 
 ### 8.1 updateRanges
 
 ```
-重算当前 BSP 节点与叶子的空间范围
-不必做完整负载决策
+Recompute the spatial ranges of the current BSP nodes and leaves
+without needing to make a full load decision
 ```
 
 ### 8.2 loadBalance
 
 ```
-基于当前负载和 chunk 状态决定边界是否移动
-必要时触发 grow / shrink / offload / delete cell
+Decide whether the boundary moves based on the current load and chunk state
+triggering grow / shrink / offload / delete cell when necessary
 ```
 
-theseed 之前已经把 `load bounds / range update` 提出来了，现在要再补一句：
+theseed has already brought up `load bounds / range update` before; now one more thing must be added:
 
 ```
-range update 是几何传播
-rebalance 是调度决策
+range update is geometric propagation
+rebalance is a scheduling decision
 ```
 
 ---
 
-## 9. offload 与 retireCell 的关系
+## 9. The Relationship Between offload and retireCell
 
-BigWorld 这里至少有三种相近但不同的动作：
+BigWorld has at least three similar but different actions here:
 
 ### 9.1 shouldOffload
 
 ```
-允许 / 禁止某个 Cell 继续主动迁出实体
+Allow / forbid a Cell to continue actively migrating entities out
 ```
 
 ### 9.2 offload
 
 ```
-把某些实体或区域工作转移给另一侧
+Transfer some entities or regional work to the other side
 ```
 
 ### 9.3 retireCell
 
 ```
-让一个 Cell 进入退役路径，最终退出分区树
+Put a Cell onto the retirement path, eventually exiting the partition tree
 ```
 
-它们的关系不是：
+Their relationship is not:
 
 ```
 rebalance = retire
 ```
 
-而是：
+But rather:
 
 ```
 rebalance
-  可能只移动边界
-  可能触发 offload
-  在 shrink 到无面积且无实体时，才可能进入 delete / retire
+  may only move the boundary
+  may trigger offload
+  only when shrunk to no area and no entities may it enter delete / retire
 ```
 
 ---
 
-## 10. theseed 的建议建模
+## 10. theseed's Recommended Modeling
 
-### 10.1 BSP rebalance 输入
+### 10.1 BSP rebalance Input
 
 ```cpp
 // topology/BspRebalanceInput.h
@@ -363,7 +365,7 @@ struct BspRebalanceInput {
 };
 ```
 
-### 10.2 节点决策结果
+### 10.2 Node Decision Result
 
 ```cpp
 // topology/BspRebalanceDecision.h
@@ -384,7 +386,7 @@ struct BspRebalanceDecision {
 };
 ```
 
-### 10.3 控制接口
+### 10.3 Control Interface
 
 ```cpp
 // topology/IBspRebalanceController.h
@@ -401,29 +403,29 @@ public:
 };
 ```
 
-设计要求：
+Design requirements:
 
 ```
-1. evaluate 和 apply 分离
-2. 结果必须显式说明受 chunk 约束还是 load 约束
-3. shrink 是否会触发 offload / retire 必须可见
+1. evaluate and apply are separated
+2. The result must explicitly state whether it is constrained by chunk or by load
+3. Whether shrink will trigger offload / retire must be visible
 ```
 
 ---
 
-## 11. 与迁移文档的接口
+## 11. Interface with the Migration Document
 
-本篇只定义：
+This document only defines:
 
 ```
-什么时候需要迁
-哪一侧 grow/shrink
-哪些 Cell 进入 offload / retire
+When migration is needed
+Which side grows/shrinks
+Which Cells enter offload / retire
 ```
 
-真正的迁移执行仍归 [05-entity-migration](05-entity-migration.md)。
+The actual migration execution still belongs to [05-entity-migration](05-entity-migration.md).
 
-因此二者关系应写成：
+Therefore the relationship between the two should be written as:
 
 ```
 BSP rebalance
@@ -435,32 +437,32 @@ Entity migration
 
 ---
 
-## 12. 分阶段边界
+## 12. Phased Boundary
 
 ```
-MVP：
-  - 不承诺 BSP rebalance
-  - 只支持 single_cell
+MVP:
+  - Do not commit to BSP rebalance
+  - Only support single_cell
 
-Phase 2：
+Phase 2:
   - static partition
-  - 不做动态 grow / shrink
-  - 允许人工控制分区与 offload 策略
+  - No dynamic grow / shrink
+  - Allow manual control of partitioning and offload strategies
 
-Phase 3：
-  - 动态 split position 调整
+Phase 3:
+  - Dynamic split position adjustment
   - load-aware + chunk-aware rebalance
-  - grow / shrink / offload / retireCell 联动
+  - grow / shrink / offload / retireCell linkage
 ```
 
 ---
 
-## 13. 与 BigWorld / KBEngine / theseed 的对比
+## 13. Comparison with BigWorld / KBEngine / theseed
 
-| 维度 | BigWorld | KBEngine | theseed |
+| Dimension | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| BSP split move | 有 | 无 | Phase 3 目标 |
-| chunk-aware balance | 有 | 无 | Phase 3 目标 |
-| loadSafetyBound | 有 | 弱 | 明确建模 |
-| shouldOffload / retireCell 联动 | 有 | 弱 | 需联动 lifecycle/migration |
-| updateRanges 与 loadBalance 分离 | 有 | 无 | 现在单列边界 |
+| BSP split move | Yes | No | Phase 3 goal |
+| chunk-aware balance | Yes | No | Phase 3 goal |
+| loadSafetyBound | Yes | Weak | Modeled explicitly |
+| shouldOffload / retireCell linkage | Yes | Weak | Needs lifecycle/migration linkage |
+| updateRanges separated from loadBalance | Yes | No | Now given its own boundary |

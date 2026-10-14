@@ -1,190 +1,192 @@
-# AoI Update Schemes & Load Bounds — 更新优先级曲线与空间负载边界
+# AoI Update Schemes & Load Bounds — Update Priority Curves and Spatial Load Bounds
 
-> 来源源头：BigWorld `cellapp/aoi_update_schemes`、`Witness / EntityCache priority`、`SPACE_DATA_SERVER_LOAD_BOUNDS`、`cellappmgr::Space::updateRanges`。
-> KBEngine 在这层只有较薄的参考价值。
-> 这篇补的是 BigWorld 在 AOI 与空间负载之间的系统化边界，不是再讲一遍十字链表。
+> **English** | [中文](06-aoi-update-and-load-bounds.zh.md)
 
----
-
-## 0.5 引擎实现对照与取舍
-
-### BigWorld 是怎么实现的
-
-```
-BigWorld 把 AOI 更新和空间负载边界联动起来：
-  - 通过 priority / update scheme 调整实体更新频率
-  - 通过 load bounds 反馈给 Cell 分区和范围调度
-  - 不是单纯“查询邻居”，而是“谁先更新、谁后更新”
-```
-
-### KBEngine 是怎么实现的
-
-```
-KBEngine 也有 AOI 和视野更新，但整体链条更短：
-  - 以 Witness / 触发器为主
-  - 没有 BigWorld 那么强的系统级负载反馈层
-```
-
-### 优缺点
-
-```
-BigWorld 的优点：
-  - 调度和空间负载结合得更紧
-  - 适合大世界动态管理
-
-KBEngine 的优点：
-  - 简单
-  - 更容易先把主路径做出来
-
-共同缺点：
-  - 方案复杂，边界要写得很清楚
-```
-
-### theseed 的取舍
-
-```
-theseed 只保留“更新 scheme + load bounds”的接口边界，
-不把它写成当前已完成的动态分区能力，
-避免把 Phase 2 / 3 的内容伪装成 MVP。
-```
+> Origin: BigWorld `cellapp/aoi_update_schemes`, `Witness / EntityCache priority`, `SPACE_DATA_SERVER_LOAD_BOUNDS`, `cellappmgr::Space::updateRanges`.
+> KBEngine has only thin reference value at this layer.
+> What this document adds is BigWorld's systematized boundary between AOI and spatial load, not another explanation of the cross-linked list.
 
 ---
 
-## 0. 设计边界
+## 0.5 Engine Implementation Comparison and Trade-offs
+
+### How BigWorld Implements It
 
 ```
-本篇负责：
-  - AoI update scheme 的真实职责
-  - 每个可见实体的更新优先级曲线
-  - load bounds / range update 与空间负载边界
-  - AoI 更新频率与空间分区负载的接口关系
-
-本篇不负责：
-  - 十字链表索引本身
-  - 属性同步协议编码
-  - 完整 BSP 拓扑实现细节
+BigWorld links AOI updates with spatial load boundaries:
+  - Adjusts entity update frequency through priority / update scheme
+  - Feeds back to Cell partitioning and range scheduling through load bounds
+  - It is not simply "querying neighbors", but "who updates first and who updates later"
 ```
 
-和其他文档的关系：
+### How KBEngine Implements It
+
+```
+KBEngine also has AOI and view updates, but the overall chain is shorter:
+  - Centered on Witness / triggers
+  - Without as strong a system-level load feedback layer as BigWorld
+```
+
+### Pros and Cons
+
+```
+BigWorld's advantages:
+  - Scheduling and spatial load are combined more tightly
+  - Suitable for large-world dynamic management
+
+KBEngine's advantages:
+  - Simple
+  - Easier to first build out the main path
+
+Common disadvantages:
+  - The scheme is complex, and the boundaries must be written very clearly
+```
+
+### theseed's Trade-offs
+
+```
+theseed keeps only the interface boundary of "update scheme + load bounds",
+without writing it as a currently completed dynamic partitioning capability,
+avoiding disguising the content of Phase 2 / 3 as the MVP.
+```
+
+---
+
+## 0. Design Boundary
+
+```
+This document is responsible for:
+  - The real responsibilities of the AoI update scheme
+  - The update priority curve of each visible entity
+  - load bounds / range update and the spatial load boundary
+  - The interface relationship between AoI update frequency and spatial partition load
+
+This document is not responsible for:
+  - The cross-linked list index itself
+  - Property synchronization protocol encoding
+  - Complete BSP topology implementation details
+```
+
+Relationship with other documents:
 
 ```
 01-space-topology-and-aoi
-  - 讲 AOI 索引和 topology 主体
+  - Discusses the AOI index and the main body of topology
 
 04-property-replication
-  - 讲属性怎么发
+  - Discusses how properties are sent
 
-本篇
-  - 讲“什么时候给谁发得更快/更慢”
-  - 讲空间负载边界如何反馈给 Cell 划分
+This document
+  - Discusses "when to send to whom faster/slower"
+  - Discusses how the spatial load boundary feeds back into Cell partitioning
 ```
 
 ---
 
-## 1. 先纠正一个常见误读
+## 1. First Correct a Common Misreading
 
-BigWorld 的 `aoi_update_schemes` 不是“不同游戏类型的整套 AOI 插件框架”。
+BigWorld's `aoi_update_schemes` is not "a complete AOI plugin framework for different game types".
 
-它更精确的职责是：
+Its more precise responsibility is:
 
 ```
-给 Witness 视野中的某个实体，
-定义一条基于距离的更新优先级变化曲线。
+For a given entity in a Witness's view,
+define a distance-based update priority change curve.
 ```
 
-也就是说，它控制的是：
+In other words, what it controls is:
 
 ```
 EntityCache priority delta
 ```
 
-而不是：
+Rather than:
 
 ```
-CoordinateSystem 是否存在
-AOI 是否改成房间广播
-整套可见性模型如何替换
+Whether CoordinateSystem exists
+Whether AOI is changed to room broadcast
+How the entire visibility model is replaced
 ```
 
-这也是 theseed 之前文档里说得过宽的地方。
+This is also where the previous theseed documentation was too broad.
 
 ---
 
-## 2. BigWorld 到底在做什么
+## 2. What BigWorld Is Actually Doing
 
-从 `AoIUpdateScheme::init/apply`、`Witness::update` 可以看出，BigWorld 的思路是：
-
-```
-1. 每个可见实体都有一个 EntityCache
-2. 每个 EntityCache 有一个 updateSchemeID
-3. scheme 根据距离给 priority 施加 delta
-4. Witness 每 tick 只发送优先级窗口内的一部分实体
-```
-
-这意味着 BigWorld 在 AOI 上有两层：
+From `AoIUpdateScheme::init/apply` and `Witness::update`, BigWorld's approach can be seen as:
 
 ```
-层 A：谁在视野里
+1. Every visible entity has an EntityCache
+2. Every EntityCache has an updateSchemeID
+3. The scheme applies a delta to priority based on distance
+4. Witness sends only a subset of entities within the priority window each tick
+```
+
+This means BigWorld has two layers on AOI:
+
+```
+Layer A: who is in the view
   - AOI enter / leave
 
-层 B：视野里的人，谁先发、多久发一次
+Layer B: among those in the view, who is sent first and how often
   - update scheme + priority queue + bandwidth budget
 ```
 
-当前 theseed 已覆盖层 A 主体，但层 B 还没单独立边界。
+The current theseed already covers the main body of Layer A, but Layer B has not yet been given its own boundary.
 
 ---
 
-## 3. AoI Update Scheme 的原义
+## 3. The Original Meaning of AoI Update Scheme
 
-### 3.1 职责
+### 3.1 Responsibilities
 
-AoI Update Scheme 描述的是：
+What AoI Update Scheme describes is:
 
 ```
 distance
   → priority delta
 ```
 
-BigWorld 的配置本质上是两个控制点：
+BigWorld's configuration is essentially two control points:
 
 ```
 minDelta
 maxDelta
 ```
 
-然后结合 `maxAoIRadius` 推导一条线性曲线。
+Then combined with `maxAoIRadius` to derive a linear curve.
 
-### 3.2 特殊语义
+### 3.2 Special Semantics
 
-BigWorld 里还有一个重要特例：
+There is also an important special case in BigWorld:
 
 ```
 minDelta = 0
 maxDelta = 0
 ```
 
-这意味着：
+This means:
 
 ```
-把目标视作 coincident
-即“按最高细节、最高优先级处理”
+Treat the target as coincident
+i.e. "handle it at the highest detail and highest priority"
 ```
 
-这不是 another scheme name，而是一种明确的优先级语义。
+This is not another scheme name, but an explicit priority semantics.
 
 ---
 
-## 4. 它解决的不是“可见性”，而是“预算分配”
+## 4. What It Solves Is Not "Visibility", but "Budget Allocation"
 
-Witness 的关键问题不是只知道谁可见，而是：
+The key problem of Witness is not merely knowing who is visible, but rather:
 
 ```
-在一个 tick / packet budget 内，
-先更新哪些实体。
+Within one tick / packet budget,
+which entities to update first.
 ```
 
-BigWorld 的做法可以抽象成：
+BigWorld's approach can be abstracted as:
 
 ```
 visible entities
@@ -194,7 +196,7 @@ visible entities
   → fit into desired packet size
 ```
 
-所以 theseed 要补的不是“又一个 AOI 策略接口”，而是：
+So what theseed needs to add is not "yet another AOI policy interface", but rather:
 
 ```
 AoI update priority policy
@@ -202,19 +204,19 @@ AoI update priority policy
 
 ---
 
-## 5. theseed 应如何建模
+## 5. How theseed Should Model This
 
-### 5.1 建模目标
+### 5.1 Modeling Goals
 
-theseed 需要同时满足：
+theseed needs to satisfy simultaneously:
 
 ```
-1. 不丢 BigWorld 的 per-entity priority update 语义
-2. 不把整套 AOI 系统误抽象成“任意插件”
-3. 给未来 MMO / 高频战斗场景留下差异化配置入口
+1. Do not lose BigWorld's per-entity priority update semantics
+2. Do not mistakenly abstract the entire AOI system into "an arbitrary plugin"
+3. Leave a differentiated configuration entry point for future MMO / high-frequency combat scenarios
 ```
 
-### 5.2 推荐抽象
+### 5.2 Recommended Abstraction
 
 ```cpp
 // aoi/IAoIUpdatePolicy.h
@@ -238,7 +240,7 @@ public:
 };
 ```
 
-### 5.3 Witness 侧使用点
+### 5.3 Usage Point on the Witness Side
 
 ```cpp
 // aoi/WitnessPriorityScheduler.h
@@ -255,84 +257,84 @@ public:
 };
 ```
 
-设计要求：
+Design requirements:
 
 ```
-1. policy 控制 priority，不直接控制可见性
-2. policy 粒度是“目标实体在某个 witness 里的更新策略”
-3. scheduler 负责预算窗口，不让 policy 直接操作 bundle
+1. policy controls priority, not visibility directly
+2. policy granularity is "the update strategy of a target entity within a given witness"
+3. scheduler is responsible for the budget window, and policy is not allowed to operate the bundle directly
 ```
 
 ---
 
-## 6. 不要再把三件事混在一起
+## 6. Do Not Mix the Three Things Together Again
 
-AOI 设计里必须持续拆开三件事：
+AOI design must continuously keep three things separate:
 
-| 层 | 问题 | BigWorld 代表机制 |
+| Layer | Question | BigWorld Representative Mechanism |
 |------|------|------------------|
-| Visibility | 谁进入/离开视野 | CoordinateSystem / RangeTrigger |
-| Priority | 视野里谁先发 | AoIUpdateScheme / EntityCache priority |
-| Payload | 发哪些字段 | detail level / property sync |
+| Visibility | Who enters/leaves the view | CoordinateSystem / RangeTrigger |
+| Priority | Who is sent first in the view | AoIUpdateScheme / EntityCache priority |
+| Payload | Which fields are sent | detail level / property sync |
 
-如果把三者混成一个 `IAOIScheme`，会导致：
-
-```
-1. 对 BigWorld 原义失真
-2. 同步策略、优先级策略、可见性策略耦死
-3. Runtime Core 很快长出一个“能力桶接口”
-```
-
----
-
-## 7. Load Bounds 是另一条系统线
-
-BigWorld 的 `SPACE_DATA_SERVER_LOAD_BOUNDS` 和 `updateRanges()` 说明：
+If the three are mixed into one `IAOIScheme`, it will lead to:
 
 ```
-Space 不只是有实体负载，
-还存在“服务端应关注的空间负载边界”。
-```
-
-这层解决的问题是：
-
-```
-在多 Cell / BSP 场景里，
-哪些区域的负载、边界、chunk 覆盖应参与分区更新。
-```
-
-因此 load bounds 不应被写成：
-
-```
-一个普通的 SpaceData key
-```
-
-而应被看作：
-
-```
-Topology / balancing 的输入元数据
+1. Distortion of BigWorld's original meaning
+2. Synchronization strategy, priority strategy, and visibility strategy become dead-coupled
+3. The Runtime Core quickly grows a "capability bucket interface"
 ```
 
 ---
 
-## 8. BigWorld 的空间负载边界在做什么
+## 7. Load Bounds Is Another System Line
 
-从 `cellappmgr::Space::loadBalance / updateRanges`、`CellData::balanceChunkBounds` 可以提炼出几点：
+BigWorld's `SPACE_DATA_SERVER_LOAD_BOUNDS` and `updateRanges()` show that:
 
 ```
-1. 空间边界更新不是只看当前 Cell 的实体数
-2. 还要考虑 chunk 覆盖、未加载区域、ghost distance 邻接成本
-3. loadSafetyBound 会限制平衡过程中不要把过载区域进一步放大
-4. range update 和 load balance 虽相关，但不是一回事
+Space does not only have entity load;
+there also exists a "spatial load boundary that the server should pay attention to".
 ```
 
-这部分恰好是当前 theseed 只写 phase 边界、没写系统语义的地方。
+The problem this layer solves is:
+
+```
+In multi-Cell / BSP scenarios,
+which regions' load, boundaries, and chunk coverage should participate in partition updates.
+```
+
+Therefore load bounds should not be written as:
+
+```
+An ordinary SpaceData key
+```
+
+But should be regarded as:
+
+```
+Input metadata for Topology / balancing
+```
 
 ---
 
-## 9. theseed 的建议建模
+## 8. What BigWorld's Spatial Load Boundary Is Doing
 
-### 9.1 负载边界描述
+From `cellappmgr::Space::loadBalance / updateRanges` and `CellData::balanceChunkBounds`, several points can be extracted:
+
+```
+1. Spatial boundary updates do not only look at the current Cell's entity count
+2. They also consider chunk coverage, unloaded regions, and ghost distance adjacency cost
+3. loadSafetyBound restricts further enlarging an already overloaded region during balancing
+4. range update and load balance are related, but they are not the same thing
+```
+
+This part is exactly where the current theseed only writes phase boundaries and does not write system semantics.
+
+---
+
+## 9. theseed's Recommended Modeling
+
+### 9.1 Load Boundary Description
 
 ```cpp
 // topology/SpaceLoadBounds.h
@@ -345,7 +347,7 @@ struct SpaceLoadBounds {
 };
 ```
 
-### 9.2 分区更新接口
+### 9.2 Partition Update Interface
 
 ```cpp
 // topology/ISpaceRangeUpdater.h
@@ -366,59 +368,59 @@ public:
 };
 ```
 
-### 9.3 设计要求
+### 9.3 Design Requirements
 
 ```
-1. load bounds 是 topology 输入，不是 gameplay 配置糖
-2. updateRanges 可以独立于完整 rebalance 执行
-3. chunk / load bounds / ghost margin 必须可观测
+1. load bounds is a topology input, not gameplay configuration sugar
+2. updateRanges can be executed independently of a complete rebalance
+3. chunk / load bounds / ghost margin must be observable
 ```
 
 ---
 
-## 10. 和世界流送的关系
+## 10. Relationship with World Streaming
 
-这篇与 [04-world-streaming-and-compiled-space](../6-world-and-game-framework/04-world-streaming-and-compiled-space.md) 直接相关，但边界不同：
+This document is directly related to [04-world-streaming-and-compiled-space](../6-world-and-game-framework/04-world-streaming-and-compiled-space.md), but the boundaries differ:
 
 ```
 world streaming
-  - 关注静态世界资产如何进入 Space
+  - Focuses on how static world assets enter the Space
 
 load bounds
-  - 关注这些资产/边界如何影响分区与均衡
+  - Focuses on how these assets/boundaries affect partitioning and balancing
 ```
 
-这两篇合起来，才比较接近 BigWorld 的世界侧系统语义。
+Only when these two documents are combined do they come closer to BigWorld's world-side system semantics.
 
 ---
 
-## 11. 分阶段边界
+## 11. Phased Boundary
 
 ```
-MVP：
-  - 只保留默认 AoI update priority policy
-  - 不承诺 per-entity 自定义策略
-  - 不承诺 load bounds 驱动的 range update
+MVP:
+  - Keep only the default AoI update priority policy
+  - Do not commit to per-entity custom strategies
+  - Do not commit to load bounds-driven range update
 
-Phase 2：
-  - 支持按实体或实体类型覆盖 update policy
-  - 引入 SpaceLoadBounds 抽象
-  - 静态分区下支持基础 updateRanges
+Phase 2:
+  - Support overriding the update policy by entity or entity type
+  - Introduce the SpaceLoadBounds abstraction
+  - Support basic updateRanges under static partitioning
 
-Phase 3：
-  - 支持更接近 BigWorld 的 per-entity priority curve
-  - 支持 load bounds / chunk bounds / ghost margin 驱动的动态范围更新
-  - 与 BSP rebalance 联动
+Phase 3:
+  - Support a per-entity priority curve closer to BigWorld's
+  - Support dynamic range updates driven by load bounds / chunk bounds / ghost margin
+  - Link with BSP rebalance
 ```
 
 ---
 
-## 12. 与 BigWorld / KBEngine / theseed 的对比
+## 12. Comparison with BigWorld / KBEngine / theseed
 
-| 维度 | BigWorld | KBEngine | theseed |
+| Dimension | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| visible set | 有 | 有 | 已覆盖 |
-| per-entity update scheme | 有 | 基本无 | Phase 2/3 目标 |
-| coincident 高优先级语义 | 有 | 弱 | 应显式建模 |
-| load bounds / range update | 有 | 弱 | 需单列边界 |
-| AOI / priority / payload 分层 | 明确但分散 | 较混 | 现在开始显式拆分 |
+| visible set | Yes | Yes | Already covered |
+| per-entity update scheme | Yes | Essentially none | Phase 2/3 goal |
+| coincident high-priority semantics | Yes | Weak | Should be modeled explicitly |
+| load bounds / range update | Yes | Weak | Needs a separate boundary |
+| AOI / priority / payload layering | Clear but scattered | Rather mixed | Now beginning to be split explicitly |
