@@ -1763,7 +1763,7 @@ THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test \
 
 ## 规则 c 巡检 2026-09-27：115/115 测试全绿、gcovr 100%（11682/11682 行 100%，1644/1644 函数 100%）；clang 树零警告、双树门禁 Through（gcc14+merge-use-line-min）
 
-- [ ] 文档双语化（来源：用户 2026-10-14，全仓统一要求：**除 hello-* 外所有仓都要双语**）
+- [x] 文档双语化（来源：用户 2026-10-14，全仓统一要求：**除 hello-* 外所有仓都要双语**）
   - 现状：本仓 README 为**单语**，无 `README.zh.md`
   - 按全局规矩：**英文为 README 主文档**（`README.md` 保持英文），中文转 **`README.zh.md`**
   - **两份顶部都要加切换器且必须在首屏**（标题下第一行）：
@@ -1772,4 +1772,6 @@ THESEED_PG_PASSWORD=theseed_test_pw THESEED_PG_DATABASE=theseed_test \
   - 中文版要**完整对应，不是摘要**；技术名词、命令、路径、代码块**原样保留不译**
   - docs 下的文档若有实质内容，同样需要中文版（用户原话"其他都需要双语"）
   - 验收：zh 行数与 en 相当、逐节覆盖、切换器两份都有；只改文档不碰代码
+  - ✅ 已完成 2026-10-14（commit 7849454）：`README.md` 英文化 + `README.zh.md` 中文版；docs 下 47 篇英文化为主文档、各配 `.zh.md` 中文版（链接互指同语言版本），48 对文件均带顶部切换器；逐节覆盖校验通过（标题数/表格行数/围栏块数全对齐，zh 15425 行 vs en 15426 行），仅改文档未碰代码
+
 
