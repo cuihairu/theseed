@@ -8,6 +8,13 @@ name: Build and Test
 on:
   push:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - "*.svg"
+      - ".editorconfig"
     branches: [main]
 
 concurrency:
