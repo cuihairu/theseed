@@ -1,6 +1,7 @@
+import { withMermaid } from "vitepress-plugin-mermaid";
 import { defineConfig } from 'vitepress'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   lang: 'zh-CN',
   title: 'theseed',
   description: '对标 BigWorld / KBEngine 服务端系统面的现代游戏服务器引擎设计文档',
@@ -119,4 +120,4 @@ export default defineConfig({
 
     socialLinks: [{ icon: 'github', link: 'https://github.com/cuihairu/theseed' }],
   },
-})
+}));
