@@ -1,5 +1,7 @@
 # theseed
 
+[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/theseed/releases)
+
 > **English** | [中文](README.zh.md)
 
 A distributed game server engine for modern MMOs, with BigWorld as its origin and KBEngine as one of its reference implementations.

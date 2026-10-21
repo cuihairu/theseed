@@ -1,5 +1,7 @@
 # theseed
 
+[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/theseed/releases)
+
 > [English](README.md) | **中文**
 
 以 BigWorld 为源头、KBEngine 为参考实现之一，面向现代 MMO 的分布式游戏服务器引擎。
