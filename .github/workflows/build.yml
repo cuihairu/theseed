@@ -30,7 +30,7 @@ jobs:
       matrix:
         preset: [gcc-debug, clang-debug, gcc-sanitize]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -49,7 +49,7 @@ jobs:
     # 有，由 gcovr 排除旗标处理（见 Coverage gate 注释）。
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Install gcovr
         run: pipx install gcovr
@@ -103,7 +103,7 @@ jobs:
     name: windows-msvc-debug
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Configure
         run: cmake --preset msvc-debug
@@ -122,7 +122,7 @@ jobs:
     name: macos-clang-debug
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Configure
         run: cmake --preset clang-debug
