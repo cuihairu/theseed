@@ -2,13 +2,11 @@ name: Deploy VitePress site to Pages
 
 on:
   push:
-    paths-ignore:
-      - "**.md"
+    paths:
+      - ".github/workflows/deploy.yml"
       - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
-      - "*.svg"
-      - ".editorconfig"
+      - "package.json"
+      - "pnpm-lock.yaml"
     branches: [main]
   workflow_dispatch:
 

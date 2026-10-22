@@ -1,184 +1,184 @@
-# Cluster Lifecycle — Service Fragment, Retire, Drain, and Controlled Shutdown
+# Cluster Lifecycle — Service Fragment、Retire、Drain 与受控停服
 
-> **English** | [中文](03-cluster-lifecycle.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `ServiceApp / registerServiceFragment / retireApp / controlledShutDown`.
-> KBEngine only provides a more basic component lifecycle reference.
-> This layer describes the "cluster lifecycle surface", not the Runtime main path, nor a pure disaster-recovery document.
+> 来源源头：BigWorld `ServiceApp / registerServiceFragment / retireApp / controlledShutDown`。
+> KBEngine 只提供较基础的组件生命周期参考。
+> 这层描述的是“集群生命周期面”，不是 Runtime 主路径，也不是单纯的容灾文档。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
+### BigWorld 是怎么实现的
 
 ```
-BigWorld has a very complete cluster lifecycle model:
-  - Service Fragment registration
+BigWorld 有很完整的集群生命周期模型：
+  - Service Fragment 注册
   - retire / drain
   - controlled shutdown
-  - Coordinated exit of multiple process roles
+  - 多进程角色协同退出
 ```
 
-### How KBEngine Implements It
+### KBEngine 是怎么实现的
 
 ```
-KBEngine has component lifecycle management,
-but not as complete a retire / fragment system as BigWorld.
+KBEngine 有组件生命周期管理，
+但没有 BigWorld 那么完整的 retire / fragment 体系。
 ```
 
-### Pros and Cons
+### 优缺点
 
 ```
-BigWorld's advantages:
-  - Ops actions are semantic
-  - The shutdown and evacuation chain is more controllable
+BigWorld 的优点：
+  - 运维动作语义化
+  - 停服和迁出链条更可控
 
-KBEngine's advantages:
-  - Simple
-  - Component lifecycle is more direct
+KBEngine 的优点：
+  - 简单
+  - 组件生命周期更直接
 
-Shared disadvantages:
-  - The more complete the lifecycle, the more complex the implementation and validation
+共同缺点：
+  - 生命周期越完整，实现和验证越复杂
 ```
 
-### theseed's Trade-offs
+### theseed 的取舍
 
 ```
-theseed makes Cluster Lifecycle a separate document,
-because it is a BigWorld-level system-layer difference,
-and can no longer be buried in scattered fault-tolerance or ops chapters.
+theseed 把 Cluster Lifecycle 单独成篇，
+因为它属于 BigWorld 级系统层差异，
+不能再埋在容错或运维零散章节里。
 ```
 
-### Why It Cannot Be Merged Back into Disaster Recovery or Ops
+### 为什么不能并回容灾或 Ops
 
 ```
-If Cluster Lifecycle were merged back into Fault Tolerance,
-it would mix "recovery" and "online retirement / shutdown orchestration" into one thing.
+Cluster Lifecycle 如果并回 Fault Tolerance，
+会把“恢复”和“在线退役/停服编排”混成一件事。
 
-If Cluster Lifecycle were merged back into Ops,
-it would mix "the execution entry point" and "system state advancement" into one thing.
+Cluster Lifecycle 如果并回 Ops，
+又会把“执行入口”与“系统状态推进”混成一件事。
 
-So it must be independent:
-  - Fault Tolerance discusses what to do after a crash
-  - Ops discusses who issues the commands
-  - Cluster Lifecycle discusses how the system enters the next state
+所以它必须独立：
+  - Fault Tolerance 讲 crash 后怎么办
+  - Ops 讲谁来发命令
+  - Cluster Lifecycle 讲系统如何进入下一状态
 ```
 
 ---
 
-## 0. Design Boundary
+## 0. 设计边界
 
 ```
-Cluster Lifecycle covers:
-  - Processes joining / leaving the cluster
-  - drain / retire / shutdown coordination
-  - service fragment registration and liveness constraints
-  - Multi-role shutdown stage advancement
+Cluster Lifecycle 负责：
+  - 进程进入 / 退出集群
+  - drain / retire / shutdown 协调
+  - service fragment 注册与存活约束
+  - 多角色停服阶段推进
 
-Cluster Lifecycle does not cover:
-  - The EntityCall main path
-  - AOI / witness / ghost synchronization
-  - The primary persistence interface
-  - metrics / traces storage
+Cluster Lifecycle 不负责：
+  - EntityCall 主路径
+  - AOI / witness / ghost 同步
+  - 主持久化接口
+  - metrics / traces 存储
 ```
 
-Its relationship to other documents:
+它与其他文档的关系：
 
 ```
 01-fault-tolerance
-  - Leans more toward recovery and disaster tolerance
+  - 更偏恢复与容灾
 
-This document
-  - Leans more toward online lifecycle coordination and shutdown orchestration
+本篇
+  - 更偏在线生命周期协调与停服编排
 ```
 
 ---
 
-## 1. Why This Layer Must Be Independent
+## 1. 为什么这层必须独立
 
-BigWorld's system layer has a very obvious capability line:
-
-```
-1. BaseApp / ServiceApp can be retired
-2. Service fragment can be registered / deregistered
-3. Service absence can trigger a shutdown policy
-4. controlled shutdown has stage advancement
-5. LoginApp / DBApp / BaseApp / CellAppMgr all participate
-```
-
-If this layer is not established separately, the document will have two problems:
+BigWorld 的系统层有一条非常明显的能力线：
 
 ```
-1. Treating drain / retire as a deployment script detail
-2. Treating shutdown as a "disaster-recovery supplementary note"
+1. BaseApp / ServiceApp 可退役
+2. Service fragment 可注册 / 注销
+3. 服务缺失可触发停服策略
+4. controlled shutdown 有阶段推进
+5. LoginApp / DBApp / BaseApp / CellAppMgr 都参与
 ```
 
-In reality it is an independent cluster control plane.
+如果不把这层单独立出来，文档会出现两个问题：
 
-More directly:
+```
+1. 把 drain / retire 当成部署脚本细节
+2. 把 shutdown 当成“容灾补充说明”
+```
+
+实际上它是独立的集群控制面。
+
+更直接地说：
 
 ```
 drain / retire / controlled shutdown
-are not deployment script tricks,
-but an engine-level state machine.
+不是部署脚本技巧，
+而是引擎级状态机。
 ```
 
 ---
 
-## 2. Core Concepts
+## 2. 核心概念
 
 ### 2.1 Drain
 
 ```
-Meaning:
-  - The process stops accepting new traffic
-  - Allows in-flight work to complete
-  - Waits for migration, archiving, session transfer
+含义：
+  - 进程停止接收新流量
+  - 允许在途工作完成
+  - 等待迁移、归档、会话转移
 ```
 
 ### 2.2 Retire
 
 ```
-Meaning:
-  - The process is preparing to leave the cluster
-  - Must drain first
-  - Must handle residual entity / session / service fragment
+含义：
+  - 进程准备退出集群
+  - 必须先 drain
+  - 必须处理残留 entity / session / service fragment
 ```
 
 ### 2.3 Controlled Shutdown
 
 ```
-Meaning:
-  - Cluster-coordinated phased shutdown
-  - Each role executes in order
-  - Not a simple kill process
+含义：
+  - 集群协调的阶段化停服
+  - 各角色按顺序执行
+  - 不是简单 kill process
 ```
 
 ### 2.4 Service Fragment
 
 ```
-Meaning:
-  - An instance of some logical service capability
-  - Can be deployed on a dedicated ServiceApp or a special BaseApp
-  - Its lifecycle is independent of ordinary player entities
+含义：
+  - 某个逻辑服务能力实例
+  - 可部署在专用 ServiceApp 或特殊 BaseApp 上
+  - 生命周期独立于普通玩家实体
 ```
 
 ---
 
-## 3. Service Fragment Model
+## 3. Service Fragment 模型
 
-### 3.1 Responsibilities
+### 3.1 职责
 
-Service Fragment is used to carry:
+Service Fragment 用来承载：
 
 ```
-  - Global service logic
-  - Matchmaking / ranking / mail / event scheduling
-  - Long-lived capabilities not suited to being bound to an ordinary player Base
+  - 全局服务逻辑
+  - 匹配 / 排行 / 邮件 / 活动调度
+  - 不适合绑在普通玩家 Base 上的长生命周期能力
 ```
 
-### 3.2 Registration Relationship
+### 3.2 注册关系
 
 ```
 Service Fragment Instance
@@ -187,20 +187,20 @@ Service Fragment Instance
   → registers to Cluster Lifecycle Registry
 ```
 
-### 3.3 Design Requirements
+### 3.3 设计要求
 
 ```
-1. Service registration must be explicit
-2. A service may have multiple fragments
-3. Whether the disappearance of a fragment triggers shutdown must be a policy configuration
-4. Must not mistake "this entity exists" for "the service is available"
+1. 服务注册必须显式
+2. 一个 service 可有多个 fragment
+3. fragment 消失是否触发停服，必须是策略配置
+4. 不能把“有这个实体”误当成“服务可用”
 ```
 
 ---
 
-## 4. Core Interfaces
+## 4. 核心接口
 
-### 4.1 Lifecycle Interface
+### 4.1 生命周期接口
 
 ```cpp
 // cluster/IClusterLifecycleManager.h
@@ -254,7 +254,7 @@ public:
 
 ---
 
-## 5. Process State Machine
+## 5. 进程状态机
 
 ```
 Joining
@@ -263,63 +263,63 @@ Joining
   → Retiring
   → Stopped
 
-Exception branches:
+异常分支：
 Running → ShuttingDown
 Draining → ShuttingDown
 Retiring → ShuttingDown
 ```
 
-Constraints:
+约束：
 
 ```
-1. Only Running is allowed to take on new traffic
-2. After Draining, no new sessions / new entity assignments may be accepted
-3. Before Retiring, critical state must be completed or transferred
-4. Service Fragment deregistration must complete before the process finally exits
+1. Running 才允许承接新流量
+2. Draining 后不能再接新会话 / 新实体分配
+3. Retiring 前必须完成或转移关键状态
+4. Service Fragment 注销必须在进程最终退出前完成
 ```
 
 ---
 
-## 6. Controlled Shutdown Stages
+## 6. Controlled Shutdown 分阶段
 
-theseed is recommended to explicitly adopt phased shutdown, rather than a boolean switch.
+建议 theseed 明确采用阶段化停服，而不是一个布尔开关。
 
 ```
 Stage 1: Request
-  - Broadcast the shutdown intent
-  - Reject new logins
+  - 广播停服意图
+  - 拒绝新登录
 
 Stage 2: Drain
-  - Gateway / Login / Session enter draining
-  - Base / Service begin migration and cleanup
+  - Gateway / Login / Session 进入 draining
+  - Base / Service 开始迁移与清理
 
 Stage 3: Persist
   - Archiver / LocalArchiveStore flush
-  - Critical sessions and entity state are flushed to disk
+  - 关键会话与实体状态落盘
 
 Stage 4: Perform
-  - Stop the process main loop
-  - Deregister fragment / routing / registration info
+  - 停止进程主循环
+  - 注销 fragment / 路由 / 注册信息
 
 Stage 5: Complete
-  - The whole cluster confirms completion
+  - 全集群确认结束
 ```
 
-Requirements:
+要求：
 
 ```
-1. Every stage must be observable
-2. Failure at any stage must give an operator-visible reason
-3. It is not allowed to skip Persist and exit crudely
+1. 每个阶段都必须可观测
+2. 任意阶段失败都要给出 operator 可见原因
+3. 不允许跳过 Persist 直接粗暴退出
 ```
 
 ---
 
-## 7. Relationship with Hot Update / Release
+## 7. 与热更 / 发布的关系
 
-A rolling update is essentially the repeated process of "controlled retirement + new instance joining".
+滚动更新本质上是“受控退役 + 新实例加入”的重复过程。
 
-Therefore:
+因此：
 
 ```
 rolling update
@@ -328,15 +328,15 @@ rolling update
   + retire old
 ```
 
-The `drain → migrate → restart` in the hot update document must not be treated as a local trick; it should reuse the lifecycle model of this document.
+不能把热更文档里的 `drain → migrate → restart` 当成局部技巧，它应该复用本篇生命周期模型。
 
 ---
 
-## 8. Failure Policy
+## 8. 失效策略
 
-### 8.1 Service Absence
+### 8.1 服务缺失
 
-For a Service Fragment, policy-based handling must be supported:
+对于 Service Fragment，必须支持策略化处理：
 
 ```yaml
 cluster_lifecycle:
@@ -346,79 +346,79 @@ cluster_lifecycle:
     payment_callback: shutdown
 ```
 
-Three policy categories:
+三类策略：
 
 ```
 ignore
-  - Alert only, do not shut down
+  - 只告警，不停服
 
 degrade
-  - Mark the service unavailable, degrade the business
+  - 标记服务不可用，业务降级
 
 shutdown
-  - Trigger controlled shutdown
+  - 触发 controlled shutdown
 ```
 
-### 8.2 Retirement Failure
+### 8.2 退役失败
 
 ```
-If drain times out:
-  - Allow the operator to keep waiting
-  - Allow forcing entry into shutdown
-  - Must output a summary of the blocking reason
+如果 drain 超时：
+  - 允许 operator 继续等待
+  - 允许强制进入 shutdown
+  - 必须输出阻塞原因摘要
 ```
 
 ---
 
-## 9. Relationship with Ops Control Plane
+## 9. 和 Ops Control Plane 的关系
 
-This document defines the lifecycle model; the command entry should go through the `Ops Control Plane`.
+本篇定义的是生命周期模型，命令入口应走 `Ops Control Plane`。
 
-Correspondence:
+对应关系：
 
-| Lifecycle action | Command entry |
+| 生命周期动作 | 命令入口 |
 |------|------|
 | set draining | Ops Control Plane |
 | retire process | Ops Control Plane |
 | controlled shutdown | Ops Control Plane |
 | inspect fragment registry | Ops Control Plane |
 
-In other words:
+也就是说：
 
 ```
-Lifecycle defines semantics
-Ops Control Plane provides the entry point and audit
+Lifecycle 定义语义
+Ops Control Plane 提供入口与审计
 ```
 
 ---
 
-## 10. Phased Boundaries
+## 10. 分阶段边界
 
 ```
-MVP:
+MVP：
   - set draining
   - retire process
-  - Basic controlled shutdown
-  - Does not introduce a complete ServiceApp system
+  - 基础 controlled shutdown
+  - 不引入完整 ServiceApp 体系
 
-Phase 2:
+Phase 2：
   - Service Fragment Registry
   - fragment failure policy
-  - Interlock with the release system
+  - 与发布系统联动
 
-Phase 3:
-  - Finer-grained shutdown stage
-  - Cross-realm lifecycle orchestration
+Phase 3：
+  - 更细粒度 shutdown stage
+  - 跨 realm 生命周期编排
 ```
 
 ---
 
-## 11. Comparison with BigWorld / KBEngine
+## 11. 与 BigWorld / KBEngine 的对比
 
-| Dimension | BigWorld | KBEngine | theseed |
+| 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| retireApp | Yes | Weaker | Explicitly modeled |
-| controlled shutdown | Complete stages | Weaker | Explicitly phased |
-| Service Fragment | Yes | Basically none | Phase 2 goal |
-| service death policy | Yes | Weaker | Explicit policy configuration |
-| rolling update semantics | Supported by the system | Weaker | Reuses the lifecycle model |
+| retireApp | 有 | 较弱 | 明确建模 |
+| controlled shutdown | 有完整阶段 | 较弱 | 显式阶段化 |
+| Service Fragment | 有 | 基本无 | Phase 2 目标 |
+| service death policy | 有 | 较弱 | 显式策略配置 |
+| rolling update 语义 | 有系统支撑 | 较弱 | 复用生命周期模型 |

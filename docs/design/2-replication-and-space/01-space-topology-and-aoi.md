@@ -1,80 +1,80 @@
-# Space Topology & AOI — Space Topology, AOI Index, and Space Lifecycle
+# Space Topology & AOI — 空间拓扑、AOI 索引与 Space 生命周期
 
-> **English** | [中文](01-space-topology-and-aoi.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `CoordinateSystem / RangeTrigger / BSP topology / Space`.
-> KBEngine is a lightweight reference implementation that inherits the AOI backbone but contracts Space into a path closer to a single Cell.
-> theseed explicitly separates the runtime space, topology phases, and world asset boundary at the documentation level.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-BigWorld treats Space / Topology / AOI as the same runtime chain:
-  - Space is the runtime container
-  - Topology determines Cell distribution
-  - AOI determines the visibility candidate set
-  - Dynamic multi-Cell further connects to BSP / rebalance / chunk awareness
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine inherits the AOI backbone and Space semantics,
-but overall contracts more toward the single Space / single Cell route,
-without as complete a dynamic multi-Cell system layer as BigWorld.
-```
-
-### Pros and Cons
-
-```
-BigWorld's advantages:
-  - Complete space, AOI, and topology boundaries
-  - Suitable for large-world dynamic scheduling
-
-KBEngine's advantages:
-  - Simple
-  - Easier to first build out the runtime main path
-
-Common disadvantages:
-  - Once these three layers are written separately, the documentation easily becomes self-contradictory
-```
-
-### theseed's Trade-offs
-
-```
-theseed first puts Space / Topology / AOI back into the same layer,
-the MVP selects single Cell + cross-linked list,
-and explicitly places static partition and BSP into Phase 2 / 3.
-```
+> 来源源头：BigWorld `CoordinateSystem / RangeTrigger / BSP topology / Space`。
+> KBEngine 是轻量参考实现，继承 AOI 主干但把 Space 收缩成更接近单 Cell 的路径。
+> theseed 在文档层显式拆开运行时空间、拓扑阶段与世界资产边界。
 
 ---
 
-## 0. Design Boundary
+## 0.5 引擎实现对照与取舍
 
-This document is responsible for:
-
-```
-  - Space's responsibilities as a runtime spatial container
-  - AOI index selection
-  - The phased model of ISpaceTopology
-  - Space lifecycle and configuration boundary
-```
-
-This document is not responsible for:
+### BigWorld 是怎么实现的
 
 ```
-  - Witness payload budget
-  - Property Replication details
+BigWorld 把 Space / Topology / AOI 视为同一条运行时链：
+  - Space 是运行时容器
+  - Topology 决定 Cell 分布
+  - AOI 决定可见性候选集
+  - 动态多 Cell 进一步接到 BSP / rebalance / chunk awareness
+```
+
+### KBEngine 是怎么实现的
+
+```
+KBEngine 继承了 AOI 主干和 Space 语义，
+但整体更收缩到单 Space / 单 Cell 路线，
+没有 BigWorld 那么完整的动态多 Cell 系统层。
+```
+
+### 优缺点
+
+```
+BigWorld 的优点：
+  - 空间、AOI、拓扑边界完整
+  - 适合大世界动态调度
+
+KBEngine 的优点：
+  - 简洁
+  - 更容易先把运行时主路径做出来
+
+共同缺点：
+  - 这三层一旦拆散写，文档就很容易自相矛盾
+```
+
+### theseed 的取舍
+
+```
+theseed 先把 Space / Topology / AOI 放回同一层，
+MVP 选单 Cell + 十字链表，
+把 static partition 和 BSP 明确收进 Phase 2 / 3。
+```
+
+---
+
+## 0. 设计边界
+
+本篇负责：
+
+```
+  - Space 作为运行时空间容器的职责
+  - AOI 索引选择
+  - ISpaceTopology 的阶段模型
+  - Space 生命周期与配置边界
+```
+
+本篇不负责：
+
+```
+  - Witness payload 预算
+  - Property Replication 细节
   - AoI Update priority curve
-  - Load Bounds / BSP rebalance specific strategies
-  - The offline asset boundary of Chunk / Geometry Mapping / Compiled Space
+  - Load Bounds / BSP rebalance 具体策略
+  - Chunk / Geometry Mapping / Compiled Space 的离线资产边界
 ```
 
-Related topics:
+相关主题见：
 
 ```
 02-ghost-and-witness
@@ -87,121 +87,121 @@ Related topics:
 
 ---
 
-## 1. Why AOI and Space Are Placed Together
+## 1. 为什么把 AOI 和 Space 放在一起
 
-In engines like BigWorld / KBEngine, the following three things are actually one chain:
+在 BigWorld / KBEngine 这类引擎里，下面三件事其实是一条链：
 
 ```
 1. Space
-   - Determines which spatial context an entity belongs to
+   - 决定实体属于哪个空间上下文
 
 2. Topology
-   - Determines how this space is distributed across one or more Cells
+   - 决定这个空间如何分布到一个或多个 Cell
 
 3. AOI
-   - Determines which entities within the same space are visible to each other
+   - 决定同一空间内哪些实体彼此可见
 ```
 
-If they are split into unrelated documents, two kinds of errors easily arise:
+如果把它们拆成互不相关的文档，很容易出现两种错误：
 
 ```
-1. Mistaking topology for a current capability
-2. Mistaking AOI for an independent plugin unrelated to Space
+1. 把 topology 误写成当前能力
+2. 把 AOI 误写成和 Space 无关的独立插件
 ```
 
-Therefore, this round of reorganization places them back together in the "Replication and Space" layer.
+因此这轮重组把它们统一放回“复制与空间”层。
 
 ---
 
-## 2. Conceptual Comparison
+## 2. 概念对比
 
-| Dimension | BigWorld | KBEngine | theseed |
+| 维度 | BigWorld | KBEngine | theseed |
 |------|------|------|------|
-| Space nature | Independent management unit | Logically closer to single Cell Space | Independent management unit |
-| Cell topology | BSP dynamic topology | Single Space single Cell | Phase 1 single Cell / Phase 2 static partition / Phase 3 BSP |
-| AOI base structure | Cross-linked list + RangeTrigger | Cross-linked list + RangeTrigger | Cross-linked list + RangeTrigger |
-| Chunk / Compiled Space | Yes | No complete equivalent layer | Placed separately in the world system layer |
+| Space 本质 | 独立管理单元 | 逻辑上更贴近单 Cell Space | 独立管理单元 |
+| Cell 拓扑 | BSP 动态拓扑 | 单 Space 单 Cell | Phase 1 单 Cell / Phase 2 静态分区 / Phase 3 BSP |
+| AOI 基础结构 | 十字链表 + RangeTrigger | 十字链表 + RangeTrigger | 十字链表 + RangeTrigger |
+| Chunk / Compiled Space | 有 | 无完整等价层 | 单独放到世界系统层 |
 
-The conclusion is not "theseed replicates all of BigWorld's world systems", but rather:
+结论不是“theseed 复制 BigWorld 全部世界系统”，而是：
 
 ```
-First get the boundaries of the runtime Space / Topology / AOI straight,
-then decide which BigWorld world asset capabilities enter later phases.
+先把运行时 Space / Topology / AOI 的边界摆正，
+再决定哪些 BigWorld 世界资产能力进入后续阶段。
 ```
 
 ---
 
-## 3. AOI Index Selection
+## 3. AOI 索引选择
 
-theseed continues to use the cross-linked list as the MVP AOI index.
-This is not because it is the "most modern", but because it is stable enough in the target scenarios of BigWorld / KBEngine and can directly carry RangeTrigger semantics.
+theseed 继续采用十字链表作为 MVP AOI 索引。
+这里不是因为它“最现代”，而是因为它在 BigWorld / KBEngine 的目标场景里足够稳，且能直接承接 RangeTrigger 语义。
 
-### 3.1 Candidate Comparison
+### 3.1 候选方案对比
 
-| Scheme | Update Cost | Query Cost | Adapts to Uneven Density | Trigger Semantics | Conclusion |
+| 方案 | 更新成本 | 查询成本 | 适配不均匀密度 | 触发语义 | 结论 |
 |------|------|------|------|------|------|
-| Cross-linked list | Stable | Moderate | Good | Natively supported | Suitable for this phase |
-| Uniform Grid | Simple | Depends on cell size | Average | Requires extra wrapping | Can be a base scheme, but not prioritized |
-| Spatial Hash | Simple to moderate | Depends on hash quality | Average | Requires extra wrapping | More of an engineering trick than a semantic-layer scheme |
-| QuadTree | High | Depends on distribution | Good | Requires extra wrapping | Suitable for static or weakly dynamic scenarios |
-| ECS Chunk + Grid | High | Good | Good | Strongly coupled to ECS | Suitable for ECS worlds, not the current main line |
+| 十字链表 | 稳定 | 中等 | 较好 | 原生支持 | 适合本阶段 |
+| Uniform Grid | 简单 | 依赖格子尺寸 | 一般 | 需额外封装 | 可做基础方案，但不优先 |
+| Spatial Hash | 简单到中等 | 依赖哈希质量 | 一般 | 需额外封装 | 更像工程技巧，不是语义层方案 |
+| QuadTree | 较高 | 视分布而定 | 较好 | 需额外封装 | 适合静态或弱动态场景 |
+| ECS Chunk + Grid | 较高 | 较好 | 较好 | 与 ECS 强耦合 | 适合 ECS 世界，不是当前主线 |
 
-### 3.2 How BigWorld Implements It
-
-```
-BigWorld's AOI is not a "simple radius query".
-At its core it is:
-  - RangeList / RangeTrigger maintains ordered boundaries on the coordinate axes
-  - Witness subscribes to entities entering/leaving the candidate set
-  - AOI radius changes, movement, and cross-Cell triggers all go through the same trigger chain
-
-The value of this design is:
-  - Updates and queries share one semantic chain
-  - Triggers directly serve Witness / Ghost
-  - Efficient enough for medium-radius visibility in MMOs
-```
-
-### 3.3 How KBEngine Implements It
+### 3.2 BigWorld 是怎么实现的
 
 ```
-KBEngine also inherits the cross-linked-list-style AOI backbone.
-Its focus leans more toward:
-  - A simplified single Space / single Cell model
-  - Directly carrying EntityCall and Witness logic
-  - Retaining range-change triggers, but without as complete a system-level periphery as BigWorld
+BigWorld 的 AOI 不是“简单半径查询”。
+它核心上是：
+  - RangeList / RangeTrigger 维护坐标轴上的有序边界
+  - Witness 订阅实体进入/离开候选集
+  - AOI 半径变化、移动、跨 Cell 触发都走同一套触发链
+
+这套设计的价值是：
+  - 更新和查询共用一条语义链
+  - 触发器直接服务于 Witness / Ghost
+  - 对 MMO 的中等半径可见性足够高效
 ```
 
-### 3.4 Pros and Cons
+### 3.3 KBEngine 是怎么实现的
 
 ```
-Advantages of the cross-linked list:
-  1. Stable update cost when entities move
-  2. RangeTrigger can be attached directly to coordinate-axis boundaries
-  3. Suitable for the medium-radius AOI queries common in MMOs
-  4. Naturally matches the trigger semantics of Witness / Ghost
-  5. Lower complexity than the dynamic balancing of tree structures
-
-Disadvantages of the cross-linked list:
-  1. More dependent on implementation details than a pure grid
-  2. Not the optimal solution when density is extremely uneven
-  3. Not the most natural index structure in a modern ECS world
+KBEngine 也继承了十字链表式 AOI 主干。
+它的重点更偏向：
+  - 单 Space / 单 Cell 的简化模型
+  - 直接承接 EntityCall 和 Witness 逻辑
+  - 保留范围变化触发，但没有 BigWorld 那么完整的系统级周边
 ```
 
-### 3.5 theseed's Trade-offs
+### 3.4 优缺点
 
 ```
-theseed still chooses the cross-linked list, not out of conservatism but because the boundary is clear:
-  - The goal of this phase is to preserve BigWorld's Space / AOI semantics while borrowing KBEngine's lightweight main path
-  - AOI must prioritize serving Witness / Ghost / Migration, rather than chasing the "newest" index terminology
-  - Uniform Grid / Spatial Hash / QuadTree / ECS Chunk + Grid can all serve as later candidates, but should not preempt the current main line
+十字链表的优点：
+  1. 实体移动时更新成本稳定
+  2. RangeTrigger 可以直接挂在坐标轴边界上
+  3. 适合 MMO 常见的中等半径 AOI 查询
+  4. 与 Witness / Ghost 的触发语义天然匹配
+  5. 复杂度低于树结构的动态平衡
 
-Therefore the conclusion is:
-  1. The MVP uses the cross-linked list
-  2. In the future, if an ECS world or an extremely large sparse scenario is introduced, alternative indexes will be re-evaluated
-  3. The documentation must be explicit: these alternative schemes are not currently defined as an implementation surface
+十字链表的缺点：
+  1. 比纯网格更依赖实现细节
+  2. 密度极端不均匀时不是最优解
+  3. 不是现代 ECS 世界里最自然的索引结构
 ```
 
-### 3.6 Core Components
+### 3.5 theseed 的取舍
+
+```
+theseed 仍然选择十字链表，原因不是保守，而是边界清楚：
+  - 本阶段目标是保留 BigWorld 的 Space / AOI 语义，并借鉴 KBEngine 的轻量主路径
+  - AOI 要优先服务 Witness / Ghost / Migration，而不是追求最“新”的索引名词
+  - Uniform Grid / Spatial Hash / QuadTree / ECS Chunk + Grid 都可以作为后续候选，但不应抢占当前主线
+
+因此结论是：
+  1. MVP 用十字链表
+  2. 未来如果引入 ECS 世界或超大稀疏场景，再评估替代索引
+  3. 文档上必须明确：当前没有把这些替代方案定义成实现面
+```
+
+### 3.6 核心组件
 
 ```cpp
 class CoordinateSystem {
@@ -230,31 +230,31 @@ public:
 };
 ```
 
-For now, only the "spatial index and triggers" are defined here.
+这里先只定义“空间索引与触发器”。
 
-Witness, detail level, and payload construction are not expanded in this document.
+Witness、detail level、payload 构建不在本篇展开。
 
 ---
 
-## 4. Space as a Runtime Container
+## 4. Space 作为运行时容器
 
-Space in theseed should be defined as:
-
-```
-Runtime spatial context
-  - Carries entity membership
-  - Binds topology
-  - Binds navigation / physics
-  - Holds space-level data
-```
-
-Rather than:
+Space 在 theseed 里应被定义成：
 
 ```
-A pure scene asset object
+运行时空间上下文
+  - 承载 entity membership
+  - 绑定 topology
+  - 绑定 navigation / physics
+  - 持有 space-level data
 ```
 
-### 4.1 Core Interface
+而不是：
+
+```
+一个纯场景资源对象
+```
+
+### 4.1 核心接口
 
 ```cpp
 class Space {
@@ -281,7 +281,7 @@ public:
 };
 ```
 
-### 4.2 Lifecycle
+### 4.2 生命周期
 
 ```
 create
@@ -292,45 +292,45 @@ create
   → shutdown
 ```
 
-Among them:
+其中：
 
 ```
-Runtime topology initialization
-  belongs to the Space lifecycle
+运行时 topology 初始化
+  属于 Space 生命周期
 
-chunk / compiled space offline asset preparation
-  does not belong to this document's main line
+chunk / compiled space 离线资源准备
+  不属于本篇主线
 ```
 
 ---
 
-## 5. The Phased Model of Topology
+## 5. Topology 的阶段模型
 
-### 5.1 Phase 1: SingleCellTopology
-
-```
-  - One Space = one Cell
-  - References KBEngine's lightweight single Cell path
-  - Suitable for room-based, instance-based, and small-to-medium maps
-```
-
-### 5.2 Phase 2: StaticPartitionTopology
+### 5.1 Phase 1：SingleCellTopology
 
 ```
-  - One Space = multiple fixed Cells
-  - Partition boundaries are statically configured
-  - Entities crossing partitions go through Ghost + Migration
+  - 一个 Space = 一个 Cell
+  - 参考 KBEngine 的轻量单 Cell 路径
+  - 适合房间制、副本制、中小地图
 ```
 
-### 5.3 Phase 3: BSPTopology
+### 5.2 Phase 2：StaticPartitionTopology
 
 ```
-  - Benchmarks BigWorld's dynamic grow / shrink
-  - Supports automatic rebalance / offload
-  - Linked with load bounds, profiler feedback, and chunk awareness
+  - 一个 Space = 多个固定 Cell
+  - 分区边界静态配置
+  - 实体跨分区走 Ghost + Migration
 ```
 
-### 5.4 Interface Expression
+### 5.3 Phase 3：BSPTopology
+
+```
+  - 对标 BigWorld 的动态 grow / shrink
+  - 支持自动 rebalance / offload
+  - 与 load bounds、profiler feedback、chunk awareness 联动
+```
+
+### 5.4 接口表达
 
 ```cpp
 class ISpaceTopology {
@@ -350,18 +350,18 @@ class StaticPartitionTopology : public ISpaceTopology {};
 class BSPTopology : public ISpaceTopology {};
 ```
 
-The documentation must be explicit:
+文档上必须明确：
 
 ```
-`topology="bsp"` is not a currently deliverable capability,
-and is only allowed as a Phase 3 placeholder.
+`topology="bsp"` 不是当前可兑现能力，
+只允许作为 Phase 3 占位。
 ```
 
 ---
 
-## 6. Configuration Boundary
+## 6. 配置边界
 
-The current document only treats `single_cell` as the MVP configuration.
+当前文档只把 `single_cell` 作为 MVP 配置。
 
 ```xml
 <spaces>
@@ -373,7 +373,7 @@ The current document only treats `single_cell` as the MVP configuration.
 </spaces>
 ```
 
-Future placeholders may be retained, but the phase must be marked separately:
+未来占位可以保留，但必须单独标注阶段：
 
 ```xml
 <!-- Phase 2 -->
@@ -387,81 +387,81 @@ Future placeholders may be retained, but the phase must be marked separately:
 </space>
 ```
 
-The purpose of writing it this way is:
+这样写的目的是：
 
 ```
-Preserve the design abstraction,
-but do not disguise long-term capabilities as the current implementation surface.
+保留设计抽象，
+但不把远期能力伪装成当前实现面。
 ```
 
 ---
 
-## 7. Interfaces with Other System Areas
+## 7. 与其他系统面的接口
 
-### 7.1 With Ghost / Witness
-
-```
-AOI determines "who enters the view candidate set"
-Witness determines "how these candidate sets become client-visible state"
-```
-
-### 7.2 With Runtime Transport
+### 7.1 与 Ghost / Witness
 
 ```
-Space / Topology determines the entity routing context
-Runtime Transport is responsible for sending cross-Cell runtime messages out
+AOI 决定“谁会进入视野候选集”
+Witness 决定“这些候选集如何变成客户端可见状态”
 ```
 
-### 7.3 With Load Bounds / BSP Rebalance
+### 7.2 与 Runtime Transport
 
 ```
-Space topology is the carrier
-load bounds / rebalance is the scheduling policy
+Space / Topology 决定实体路由上下文
+Runtime Transport 负责把跨 Cell 的运行时消息送出去
 ```
 
-### 7.4 With World Streaming / Compiled Space
+### 7.3 与 Load Bounds / BSP Rebalance
+
+```
+Space topology 是载体
+load bounds / rebalance 是调度策略
+```
+
+### 7.4 与 World Streaming / Compiled Space
 
 ```
 Space runtime
   != chunk asset pipeline
 ```
 
-In BigWorld these two layers are related, but they are not one abstraction.
+BigWorld 这两层是相关的，但不是一个抽象。
 
 ---
 
-## 8. Phased Boundary
+## 8. 分阶段边界
 
 ```
-MVP:
+MVP：
   - single_cell
-  - Cross-linked list AOI
-  - Basic Space lifecycle
+  - 十字链表 AOI
+  - 基础 Space 生命周期
 
-Phase 2:
+Phase 2：
   - static_partition
-  - Fixed-boundary multi-Cell
-  - Linked with the ghost / migration main path
+  - 固定边界多 Cell
+  - 与 ghost / migration 主路径联动
 
-Phase 3:
+Phase 3：
   - BSP topology
   - grow / shrink
-  - Linked with load bounds, rebalance, and chunk awareness
+  - 与 load bounds、rebalance、chunk awareness 联动
 ```
 
 ---
 
-## 9. One-Sentence Judgment
+## 9. 一句话判断
 
-The core message this document intends to express is not:
-
-```
-theseed already has a BigWorld-style dynamic world
-```
-
-But rather:
+这篇文档要表达的核心不是：
 
 ```
-theseed has already put the Space / AOI / Topology abstractions back into the same layer,
-and has clarified the boundary differences between it and BigWorld's world systems and KBEngine's single Cell path.
+theseed 现在已经有 BigWorld 式动态世界
+```
+
+而是：
+
+```
+theseed 已经把 Space / AOI / Topology 的抽象放回同一层，
+并明确了它与 BigWorld 世界系统、KBEngine 单 Cell 路径之间的边界差异。
 ```

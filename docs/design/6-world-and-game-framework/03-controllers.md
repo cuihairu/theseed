@@ -1,62 +1,62 @@
-# Controllers — Entity Behavior Controllers
+# Controllers — 实体行为控制器
 
-> **English** | [中文](03-controllers.zh.md)
+> [English](03-controllers.md) | **中文**
 
-> Controller is the core abstraction for the server to drive entity behavior.
+> Controller 是服务端驱动实体行为的核心抽象。
 >
-> Source of truth: the behavior abstraction of BigWorld's 30+ Controller types.
-> Reference implementation: the concise interfaces of KBEngine's 4 Controller types.
-> theseed takes BigWorld's capability boundary and KBEngine's lightweight implementation approach.
+> 来源源头：BigWorld 30+ 种 Controller 的行为抽象。
+> 参考实现：KBEngine 4 种 Controller 的简洁接口。
+> theseed 取 BigWorld 的能力边界与 KBEngine 的轻量落地方式。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld's Controller system is very complete:
-  - Movement
-  - Facing
-  - Patrol
-  - Chase
-  - Vision / proximity style behavior control
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine only retains a small number of high-value Controllers:
-  - Lighter interfaces
-  - Emphasizes practicality over type completeness
+BigWorld 的 Controller 体系很完整：
+  - 移动
+  - 朝向
+  - 巡逻
+  - 追踪
+  - 视野 / proximity 一类行为控制
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-BigWorld's advantages:
-  - Broad capability coverage
-  - Complete behavior abstraction
-
-KBEngine's advantages:
-  - Simple
-  - Easy to implement first
-
-Common disadvantages:
-  - Once there are too many Controllers, migration and serialization costs rise
+KBEngine 只保留了少量高价值 Controller：
+  - 接口更轻
+  - 更强调实用而不是类型完备
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed does not pursue porting BigWorld's full Controller set from the start,
-but first defines a unified interface and a migratable boundary,
-then adds types gradually by business value.
+BigWorld 的优点：
+  - 能力覆盖面广
+  - 行为抽象完整
+
+KBEngine 的优点：
+  - 简单
+  - 容易先实现
+
+共同缺点：
+  - Controller 一旦过多，迁移和序列化成本会上升
+```
+
+### theseed 的取舍
+
+```
+theseed 不追求一开始搬运 BigWorld 全量 Controller，
+而是先定义统一接口和可迁移边界，
+再按业务价值逐步补类型。
 ```
 
 ---
 
-## 1. IController Base Class
+## 1. IController 基类
 
 ```cpp
 class IController {
@@ -77,7 +77,7 @@ public:
 
 ---
 
-## 2. Built-in Controllers
+## 2. 内建 Controller
 
 ### MoveController
 
@@ -99,8 +99,8 @@ public:
 };
 ```
 
-`pause/resume` only indicates the controller's own running state,
-and does not mean pausing/resuming a script debugging session.
+`pause/resume` 只表示控制器自身运行状态，
+不等于脚本调试会话的暂停/继续。
 
 ### NavigateController
 
@@ -159,7 +159,7 @@ public:
 
 ---
 
-## 4. Script Layer API
+## 4. 脚本层 API
 
 ```python
 class Monster(BaseEntity):
@@ -179,13 +179,13 @@ class Monster(BaseEntity):
 
 ---
 
-## 5. Comparison
+## 5. 对比
 
-| Capability | BigWorld | KBEngine | theseed |
+| 能力 | BigWorld | KBEngine | theseed |
 |------|----------|----------|---------|
-| Move to point | MoveToPointController | None | MoveController::moveToPoint |
-| Move to entity | MoveToEntityController | None | MoveController::moveToEntity |
-| Navigation movement | NavigationController | Entity.navigate() | NavigateController |
-| Proximity trigger | ProximityController | ProximityController | ProximityController |
-| Face entity | FaceEntityController | None | FaceController |
-| Serialization/migration | writeRealToStream | None | serialize/deserialize |
+| 移动到点 | MoveToPointController | 无 | MoveController::moveToPoint |
+| 移动到实体 | MoveToEntityController | 无 | MoveController::moveToEntity |
+| 导航移动 | NavigationController | Entity.navigate() | NavigateController |
+| 范围触发 | ProximityController | ProximityController | ProximityController |
+| 面向实体 | FaceEntityController | 无 | FaceController |
+| 序列化/迁移 | writeRealToStream | 无 | serialize/deserialize |

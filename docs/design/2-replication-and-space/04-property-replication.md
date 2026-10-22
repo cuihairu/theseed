@@ -1,113 +1,113 @@
-# Property Sync — Property Replication and Synchronization
+# Property Sync — 属性复制与同步
 
-> **English** | [中文](04-property-replication.zh.md)
+> **English** | 中文
 
-> Property synchronization is theseed's most core data flow: how entity property changes propagate efficiently to all relevant parties.
+> 属性同步是 theseed 最核心的数据流：实体属性变更如何高效传播到所有相关方。
 >
-> Origin: BigWorld `DataLoDLevels / VolatileInfo / EntityCache / Witness`.
-> Reference implementation: KBEngine `onDefDataChanged + Witness::update`.
-> The current implementation baseline is defined by [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
+> 来源源头：BigWorld `DataLoDLevels / VolatileInfo / EntityCache / Witness`。
+> 参考实现：KBEngine `onDefDataChanged + Witness::update`。
+> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld's property replication is not simple field synchronization:
-  - DataLoDLevels performs leveling
-  - VolatileInfo records transient changes
-  - EntityCache records the detail level, event number, volatile number, and priority of each observation relationship
-  - Witness is responsible for packing and sending dirty data by view within the bandwidth budget
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine leans more toward event-driven:
-  - onDefDataChanged marks changes
-  - Witness::update sends uniformly within the tick
-  - The replication chain is shorter, but there is also less systematic layering
+BigWorld 的属性复制不是简单字段同步：
+  - DataLoDLevels 做分级
+  - VolatileInfo 记录临时变化
+  - EntityCache 记录每个观察关系的 detail level、event number、volatile number 和 priority
+  - Witness 负责在带宽预算内把脏数据按视野打包发送
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-Common advantages:
-  - Can compress high-frequency property changes into batch processing
-  - Has control over view and replication granularity
-
-Common disadvantages:
-  - Design complexity is higher than "change and send"
-  - Must be strongly coupled with AOI / Witness / migration
+KBEngine 更偏向事件驱动：
+  - onDefDataChanged 标记变更
+  - Witness::update 在 tick 内统一发送
+  - 复制链条更短，但系统化分层也更少
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed chooses dirty + tick-batch + detail level as the MVP,
-while taking BigWorld's EntityCache / priority / bandwidth budget as the later upper bound.
-This way it can first land the lightweight main path in the KBEngine reference implementation,
-without losing BigWorld's key design for same-screen synchronization in large MMOs.
+共同优点：
+  - 能把高频属性变更压成批处理
+  - 对视野和复制粒度有控制力
+
+共同缺点：
+  - 设计复杂度高于“改了就发”
+  - 必须和 AOI / Witness / 迁移强耦合
 ```
 
----
-
-## 0. MVP Synchronization General Principles
+### theseed 的取舍
 
 ```
-Unified rules under the MVP:
-
-  Property change
-    → only mark dirty
-    → do not send out immediately during script execution
-    → construct the synchronization Bundle uniformly at the end of the tick
-    → flush uniformly at the end of the tick
-
-The only exceptions are:
-  - Explicit RPC / event messages
-  - Lifecycle control messages (create / destroy / migration control)
+theseed 选择 dirty + tick-batch + detail level 作为 MVP，
+同时把 BigWorld 的 EntityCache / priority / bandwidth budget 作为后续上限。
+这样既能先落地 KBEngine 参考实现中的轻量主路径，
+又不会丢掉 BigWorld 对大型 MMO 同屏同步的关键设计。
 ```
 
 ---
 
-## 1. Synchronization Directions
+## 0. MVP 同步总则
 
 ```
-Property synchronization has four paths:
+MVP 下的统一规则：
 
-Path 1: Real → Ghost (in-CellApp synchronization)
-  Trigger: property change onDefDataChanged
-  Condition: isReal() && hasGhost() && property marked CELL_PUBLIC
-  Method: mark ghost dirty, construct the state-delta Bundle uniformly at the end of the tick
+  属性变更
+    → 只标记 dirty
+    → 不在脚本执行中立即外发
+    → tick 末统一构造同步 Bundle
+    → tick 末统一 flush
 
-Path 2: Real → Witness (server to client)
-  Trigger: property change onDefDataChanged
-  Condition: property marked OTHER_CLIENTS or OWN_CLIENT
-  Method:
-    OWN_CLIENT: mark own-client dirty
-    OTHER_CLIENTS: mark witness dirty
-    Note: under the MVP, do not send client messages directly in the property setter
-
-Path 3: Witness → Client (batch at the end of the tick)
-  Trigger: Witness::tick()
-  Content:
-    - View enter/leave events
-    - Position/orientation volatile updates
-    - detailLevel changes
-    - Dirty properties filtered by detailLevel and then sent
-  Method: one Bundle contains all updates, sent in a single send
-
-Path 4: Entity → Database (persistence)
-  Trigger: setDirty() marking + periodic save
-  Condition: property marked Persistent
-  Method: periodically (e.g. 30s) serialize all dirty properties and write them to the database
+例外只有：
+  - 明确的 RPC / 事件消息
+  - 生命周期控制消息（创建 / 销毁 / 迁移控制）
 ```
 
 ---
 
-## 2. Dirty Marking System
+## 1. 同步方向
+
+```
+属性同步有四条路径：
+
+Path 1: Real → Ghost（CellApp 内部同步）
+  触发：属性变更 onDefDataChanged
+  条件：isReal() && hasGhost() && 属性标记 CELL_PUBLIC
+  方式：标记 ghost dirty，tick 末统一构造 state-delta Bundle
+
+Path 2: Real → Witness（服务端到客户端）
+  触发：属性变更 onDefDataChanged
+  条件：属性标记 OTHER_CLIENTS 或 OWN_CLIENT
+  方式：
+    OWN_CLIENT: 标记 own-client dirty
+    OTHER_CLIENTS: 标记 witness dirty
+    注意：MVP 下不在属性 setter 中直接发客户端消息
+
+Path 3: Witness → Client（tick 末批量）
+  触发：Witness::tick()
+  内容：
+    - 视野进出事件
+    - 位置/朝向 volatile 更新
+    - detailLevel 变更
+    - 脏属性按 detailLevel 过滤后发送
+  方式：一个 Bundle 包含所有更新，一次发送
+
+Path 4: Entity → Database（持久化）
+  触发：setDirty() 标记 + 定时 save
+  条件：属性标记 Persistent
+  方式：定时（如 30s）将所有脏属性序列化写库
+```
+
+---
+
+## 2. 脏标记系统
 
 ```cpp
 // runtime/DirtyMask.h
@@ -146,10 +146,10 @@ private:
 ```
 
 ```
-Notes:
-  - PropertyBlock's dirty only means "changed within this tick"
-  - It is not equivalent to "already sent to all observers"
-  - Different targets (ghost / witness / db) can each have their own send cursor or filtering logic
+说明：
+  - PropertyBlock 的 dirty 只表示“本 tick 内变更过”
+  - 它不等价于“已经发给所有观察者”
+  - 不同目标（ghost / witness / db）可以有各自的发送游标或过滤逻辑
 ```
 
 ---
@@ -157,50 +157,50 @@ Notes:
 ## 3. Sync Build & Flush
 
 ```
-The logic for uniformly constructing the synchronization Bundle at the end of the tick:
+tick 末统一构造同步 Bundle 的逻辑：
 
-1. Collect the lifecycle events of this tick
+1. 收集本 tick 的生命周期事件
    - create / leave / destroy
-   - detailLevel changes
+   - detailLevel 变更
 
-2. Construct the Ghost state-delta Bundle
-   - Only serialize ghost-visible properties
-   - Output by entity and property dirty bitmap
+2. 构造 Ghost state-delta Bundle
+   - 只序列化 ghost 可见属性
+   - 按实体和属性脏位图输出
 
-3. Construct the Witness / Client Bundle
-   - First output view enter/leave
-   - Then output property deltas
-   - Finally attach volatile data
+3. 构造 Witness / Client Bundle
+   - 先输出视野进出
+   - 再输出属性 delta
+   - 最后附加 volatile 数据
 
-4. Unified flush
+4. 统一 flush
    - Runtime Data Plane: real → ghost
    - Client Channel: witness → client
 
-Notes:
-  The responsibility of onDefDataChanged is to "mark dirty", not to "send packets immediately".
+说明：
+  onDefDataChanged 的职责是“标脏”，不是“立即发包”。
 
 Bundle layout:
-┌──────────────────────────────────────────────────────────────────────┐
-│ Header: message ID (aliasID or utype)                                │
-├──────────────────────────────────────────────────────────────────────┤
-│ Entity 1:                                                            │
-│   entityID (aliasID if available)                                    │
-│   detailLevel change flag                                            │
-│   ┌─ dirty property bitmap (only properties of current detailLevel)  │
-│   │  property value serialization...                                  │
-│   └─                                                                 │
-│   volatile data (position/orientation)                               │
-├──────────────────────────────────────────────────────────────────────┤
-│ Entity 2: ...                                                        │
-├──────────────────────────────────────────────────────────────────────┤
-│ Tail: end marker                                                     │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Header: 消息 ID (aliasID 或 utype)                       │
+├─────────────────────────────────────────────────────────┤
+│ Entity 1:                                               │
+│   entityID (aliasID 如果可用)                             │
+│   detailLevel 变更标志                                    │
+│   ┌─ 脏属性 bitmap (只包含当前 detailLevel 的属性)         │
+│   │  属性值序列化...                                       │
+│   └─                                                     │
+│   volatile 数据 (位置/朝向)                                │
+├─────────────────────────────────────────────────────────┤
+│ Entity 2: ...                                           │
+├─────────────────────────────────────────────────────────┤
+│ Tail: 结束标记                                           │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Bandwidth optimization techniques (from KBEngine):
+带宽优化手段（来自 KBEngine）：
 
-1. aliasID: when the property count < 255, use 1 byte instead of the 2-byte utype
-2. detailLevel: distant entities synchronize only part of their properties
-3. Dirty property bitmap: send only the properties that changed
-4. volatile threshold: synchronize position/orientation only when the change exceeds the threshold
-5. entity alias: send the entity type string the first time, then use a 1-byte alias
+1. aliasID: 属性数 < 255 时用 1 字节代替 2 字节 utype
+2. detailLevel: 远处实体只同步部分属性
+3. 脏属性 bitmap: 只发送变化的属性
+4. volatile threshold: 位置/朝向变化超过阈值才同步
+5. entity alias: 首次发送 entity type string，后续用 1 字节 alias

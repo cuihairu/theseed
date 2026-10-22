@@ -1,158 +1,158 @@
-# SecondaryDB & Local Archive Store — Local Archive Staging Layer
+# SecondaryDB & Local Archive Store — 本地归档暂存层
 
-> **English** | [中文](03-local-archive-and-secondary-db.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `Archiver / SecondaryDB / consolidate_dbs / transfer_db / sync_db`.
-> KBEngine has no complete equivalent layer, and can only serve as a simplified reference for writing directly to the primary database.
-> This layer is the one most easily misread as the "primary database" or a "hot backup", but what it actually solves is a different class of problem.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld implements it
-
-```
-BigWorld's SecondaryDB is more like a local archive staging layer:
-  - Receives archive data
-  - Provides an intermediate state for consolidate / transfer / sync
-  - It is neither the primary persistence database, nor the hot-standby body of BaseApp itself
-```
-
-### How KBEngine implements it
-
-```
-KBEngine has no complete counterpart.
-It is closer to writing data directly to the primary database, lacking an independent local archive staging layer.
-```
-
-### Pros and cons
-
-```
-BigWorld's pros:
-  - Data ops actions can be split apart
-  - Convenient for moving, merging and repairing
-
-KBEngine's pros:
-  - Simple
-  - One fewer storage state layer
-
-Shared cons:
-  - The boundary between the staging layer and the primary database must be made explicit, otherwise it very easily becomes confusing
-```
-
-### theseed's trade-off
-
-```
-theseed first abstracts LocalArchiveStore,
-then decides on the concrete backend,
-and does not hard-wire implementation details such as SQLite / RocksDB into the architectural premises ahead of time.
-```
+> 来源源头：BigWorld `Archiver / SecondaryDB / consolidate_dbs / transfer_db / sync_db`。
+> KBEngine 没有完整对等层，只能作为直接写主库的简化参考。
+> 这层最容易被误读成“主数据库”或“热备份”，但它实际解决的是另一类问题。
 
 ---
 
-## 0. Design boundary
+## 0.5 引擎实现对照与取舍
+
+### BigWorld 是怎么实现的
 
 ```
-The MVP does not promise:
-  - A built-in SecondaryDB
-  - A unified implementation of the local archive staging layer
-  - Fast-recovery goals based on the local staging layer
-
-If Phase 2 / 3 needs to fill in a BigWorld-level data ops surface:
-  - First abstract it as LocalArchiveStore
-  - Then decide on the concrete backend
-  - Do not hard-wire SQLite / RocksDB directly as an architectural premise
+BigWorld 的 SecondaryDB 更像本地归档暂存层：
+  - 接收归档数据
+  - 为 consolidate / transfer / sync 提供中间态
+  - 不是主持久化主库，也不是 BaseApp 热备本体
 ```
 
+### KBEngine 是怎么实现的
+
 ```
-Three things must be distinguished first:
-  - Primary Store: the primary persistence database, the final authority
-  - LocalArchiveStore: the local archive staging layer, awaiting consolidation
-  - EntityBackup: cross-process hot standby, used for faster recovery
+KBEngine 没有完整对应物。
+它更接近直接把数据写入主库，缺少一层独立的本地归档暂存层。
+```
+
+### 优缺点
+
+```
+BigWorld 的优点：
+  - 数据运维动作可拆分
+  - 方便搬运、合并、修复
+
+KBEngine 的优点：
+  - 简单
+  - 少一层存储状态
+
+共同缺点：
+  - 需要明确暂存层与主库边界，否则非常容易混乱
+```
+
+### theseed 的取舍
+
+```
+theseed 先抽象 LocalArchiveStore，
+再决定具体后端，
+不把 SQLite / RocksDB 之类的实现细节提前写死到架构前提里。
 ```
 
 ---
 
-## 1. What it actually is
-
-BigWorld's `SecondaryDB` is neither the business primary database, nor an in-memory hot standby between BaseApps.
-
-It is closer to:
+## 0. 设计边界
 
 ```
-BaseApp local archive staging layer
-  - Receives archive snapshots of Base entities
-  - Flushes to disk quickly on the local machine
-  - Periodically committed / generation-switched by the Archiver
-  - Later consolidated back into the primary database uniformly by DBApp
+MVP 不承诺：
+  - 内建 SecondaryDB
+  - 本地归档暂存层的统一实现
+  - 基于本地暂存层的快速恢复目标
+
+Phase 2 / 3 如需补齐 BigWorld 级数据运维面：
+  - 先抽象为 LocalArchiveStore
+  - 再决定具体后端
+  - 不把 SQLite / RocksDB 直接写死为架构前提
 ```
 
-Therefore the problems it solves are:
-
 ```
-1. Archive write amplification
-   - Prevents all periodic archives from being pushed directly onto the remote primary database
-
-2. Shutdown / retirement flush window
-   - First writes entity snapshots safely to the local machine, then enters unified consolidation
-
-3. Data ops movability
-   - Can snapshot / transfer / consolidate / sync
-
-4. Primary database pressure isolation
-   - Splits "online archive writes" and "centralized consolidation" into two stages
+必须先分清三件事：
+  - Primary Store：主持久化库，最终权威
+  - LocalArchiveStore：本地归档暂存层，等待归并
+  - EntityBackup：跨进程热备，用于更快恢复
 ```
 
 ---
 
-## 2. Do not confuse it with the other two layers
+## 1. 它到底是什么
 
-| Layer | Role | Typical medium | Recovery semantics |
+BigWorld 的 `SecondaryDB` 不是业务主库，也不是 BaseApp 之间的内存热备。
+
+它更接近：
+
+```
+BaseApp 本地归档暂存层
+  - 接收 Base 实体的归档快照
+  - 在本机快速落盘
+  - 由 Archiver 周期性提交/切换代际
+  - 后续再由 DBApp 统一归并回主库
+```
+
+因此它解决的问题是：
+
+```
+1. 归档写放大
+   - 不让所有周期归档都直接压到远端主库
+
+2. 停服 / 退役落盘窗口
+   - 先把实体快照安全写到本机，再进入统一归并
+
+3. 数据运维可搬运性
+   - 可以 snapshot / transfer / consolidate / sync
+
+4. 主库压力隔离
+   - 把“在线写归档”和“集中归并”拆成两个阶段
+```
+
+---
+
+## 2. 不要和另外两层混淆
+
+| 层次 | 作用 | 典型介质 | 恢复语义 |
 |------|------|----------|----------|
-| Primary Store | Final authoritative persistence | MySQL / PostgreSQL / MongoDB | Loaded on demand after a process restart |
-| LocalArchiveStore | Local archive staging and snapshots awaiting consolidation | SQLite / other local embedded storage | Flush to disk first, then consolidate, not directly equal to hot recovery |
-| EntityBackup | Cross-process hot standby | Another BaseApp's memory | Reduces RPO / RTO |
+| Primary Store | 最终权威持久化 | MySQL / PostgreSQL / MongoDB | 进程重启后按需加载 |
+| LocalArchiveStore | 本地归档暂存与待归并快照 | SQLite / 其他本地嵌入式存储 | 先落盘，再归并，不直接等于热恢复 |
+| EntityBackup | 跨进程热备 | 另一台 BaseApp 内存 | 减少 RPO / RTO |
 
-Key distinction:
+关键区分：
 
 ```
-LocalArchiveStore is not meant to "replace the primary database".
-LocalArchiveStore is also not meant to "replace hot standby".
-It merely splits the archive path into:
-  runtime snapshot write → local staging → unified consolidation
+LocalArchiveStore 不是为了“替代主库”。
+LocalArchiveStore 也不是为了“替代热备”。
+它只是把归档路径拆成：
+  运行时快照写入 → 本地暂存 → 统一归并
 ```
 
 ---
 
-## 3. BigWorld-style data flow
+## 3. BigWorld 式数据流
 
-If theseed fills in this layer in the future, it is recommended to first understand it in terms of BigWorld's responsibilities, rather than agonizing over the concrete backend first.
+如果 theseed 将来补这层，推荐先按 BigWorld 的职责理解，而不是先纠结具体后端。
 
 ```
 Base.writeToDB / autoArchive
-  → generate entity persistence snapshot
-  → append to LocalArchiveStore
+  → 生成实体持久化快照
+  → append 到 LocalArchiveStore
   → Archiver flush / commit
   → rotate generation
-  → the DB-side Consolidator consolidates uniformly into the Primary Store
-  → clean up old generations
+  → DB 侧 Consolidator 统一归并到 Primary Store
+  → 清理旧 generation
 ```
 
-This chain naturally yields two boundaries:
+这条链路天然带来两个边界：
 
 ```
-Boundary A: the runtime is only responsible for generating snapshots and appending writes
-Boundary B: the data platform is responsible for consolidation, transfer, cleanup and validation
+边界 A：运行时只负责生成快照和追加写入
+边界 B：数据平台负责归并、搬运、清理、校验
 ```
 
 ---
 
-## 4. Abstraction design
+## 4. 抽象设计
 
-If theseed needs this layer in the future, it should first abstract the "local archive staging responsibility", rather than leaking some database API directly into the kernel.
+如果 theseed 未来需要这层，应该先抽象“本地归档暂存职责”，而不是直接把某个数据库 API 泄漏到内核。
 
-### 4.1 Local archive staging interface
+### 4.1 本地归档暂存接口
 
 ```cpp
 // storage/ILocalArchiveStore.h
@@ -185,7 +185,7 @@ public:
 };
 ```
 
-### 4.2 Consolidation interface
+### 4.2 归并接口
 
 ```cpp
 // storage/IArchiveConsolidator.h
@@ -206,21 +206,21 @@ public:
 };
 ```
 
-Design requirements:
+设计要求：
 
 ```
-1. Runtime Core does not depend on consolidate / transfer / sync details
-2. ILocalArchiveStore does not carry the responsibility of a complex query platform
-3. IArchiveConsolidator does not pollute the Entity load/save main path in reverse
+1. Runtime Core 不依赖 consolidate / transfer / sync 细节
+2. ILocalArchiveStore 不承担复杂查询平台职责
+3. IArchiveConsolidator 不反向污染 Entity load/save 主路径
 ```
 
 ---
 
-## 5. Relationship with the primary persistence interface
+## 5. 和主持久化接口的关系
 
-`IEntityStore` handles primary database reads and writes, and `ILocalArchiveStore` handles local archive staging; the two should not be merged into one "big storage interface".
+`IEntityStore` 负责主库读写，`ILocalArchiveStore` 负责本地归档暂存，两者不应混成一个“大存储接口”。
 
-Bad smell:
+坏味道：
 
 ```
 IStorageBackend:
@@ -233,27 +233,27 @@ IStorageBackend:
   - consolidate
 ```
 
-This would lead to:
+这样会导致：
 
 ```
-1. Runtime Core is forced to know data ops details
-2. The data toolchain becomes reversely coupled to the online storage interface
-3. The storage abstraction degenerates into a "capability bucket"
+1. Runtime Core 被迫知道数据运维细节
+2. 数据工具链反向耦合在线存储接口
+3. 存储抽象退化成“能力桶”
 ```
 
-Therefore the recommended responsibility split is:
+因此建议的职责切分是：
 
 ```
-Online main path
+在线主路径
   - IEntityStore
 
-Business query
+业务查询
   - IEntityQueryStore
 
-Local archive staging
+本地归档暂存
   - ILocalArchiveStore
 
-Offline consolidation and ops
+离线归并与运维
   - IArchiveConsolidator
   - IMergeBackend
   - ISchemaMigrator
@@ -261,20 +261,20 @@ Offline consolidation and ops
 
 ---
 
-## 6. Data ops toolchain boundary
+## 6. 数据运维工具链边界
 
-BigWorld's data ops surface is not just "server merge".
+BigWorld 的数据运维面不只有“合服”。
 
-If theseed is to cover this layer, it is recommended to split it into four kinds of tools:
+theseed 如果要覆盖这一层，建议拆成四类工具：
 
-| Tool category | Goal | Belongs to this document |
+| 工具类别 | 目标 | 是否属于本篇 |
 |------|------|------|
-| merge | Merging business data across Realms / servers | No |
-| snapshot / transfer | Local archive file snapshots and cross-machine transfer | Yes |
-| consolidate | Consolidating generations back into the primary database | Yes |
-| sync / repair | Schema or data validation, repair, sync | No |
+| merge | 多 Realm / 多服业务数据合并 | 否 |
+| snapshot / transfer | 本地归档文件快照与跨机搬运 | 是 |
+| consolidate | generation 归并回主库 | 是 |
+| sync / repair | Schema 或数据校验、修复、同步 | 否 |
 
-That is to say:
+也就是说：
 
 ```
 Server Merge
@@ -283,98 +283,98 @@ Server Merge
   ≠ sync / repair
 ```
 
-For the complete toolchain boundary see:
+完整工具链边界见：
 
 `./04-data-ops-toolchain.md`
 
 ---
 
-## 7. Backend selection principles
+## 7. 后端选择原则
 
-The backend selection for this layer must be subordinate to the responsibility, rather than conversely letting some engine define the responsibility.
+这层的后端选择必须服从职责，而不是反过来用某个引擎定义职责。
 
-### 7.1 If the goal is a BigWorld-style local archive staging layer
+### 7.1 如果目标是 BigWorld 式本地归档暂存层
 
-More emphasis on:
-
-```
-  - Single-machine single-writer stability
-  - Simple file-level transfer and cleanup
-  - Easy generation rotation
-  - Crash recovery and ops transparency
-```
-
-In this scenario, `SQLite` is a reasonable candidate.
-
-### 7.2 If the goal has already escalated to a "local latest-state store"
-
-More emphasis on:
+更看重：
 
 ```
-  - High-frequency write throughput
-  - Fast key → latest snapshot reads
-  - Accumulating local state for longer periods
-  - Stronger local recovery capability
+  - 单机单写者稳定性
+  - 文件级搬运与清理简单
+  - generation 轮换容易
+  - 崩溃恢复与运维透明
 ```
 
-This is no longer the `SecondaryDB` in BigWorld's original sense, but closer to:
+这种场景下，`SQLite` 是合理候选。
+
+### 7.2 如果目标已经升级为“本地最新状态库”
+
+更看重：
+
+```
+  - 高频写入吞吐
+  - key → latest snapshot 快速读取
+  - 更长时间积压本地状态
+  - 更强的本机恢复能力
+```
+
+这已经不是 BigWorld 原义上的 `SecondaryDB`，而更接近：
 
 ```
 LocalStateStore
 ```
 
-In this scenario, `RocksDB` is worth evaluating separately, but should not be directly equated with `SecondaryDB`.
+这种场景下，`RocksDB` 值得单独评估，但不应直接和 `SecondaryDB` 画等号。
 
-If we look only at the candidate choices for this layer, the conclusion can be stated more firmly:
+如果只看这层的候选选择，结论可以写得更硬一点：
 
-| Candidate | Fitness | Main reason |
+| 候选 | 适配度 | 主要原因 |
 |------|------|------|
-| SQLite | High | Single-machine single-writer; archive generations, transfer and cleanup are all simpler |
-| RocksDB | Medium | Better suited to high-frequency key-value state, but already more like LocalStateStore |
-| LevelDB | Medium-low | Usable, but its overall ecosystem and long-term maintainability are less clear than either SQLite or RocksDB |
-| Developing a custom file format | Low | Easy to end up writing archiving, transfer, cleanup and validation all as fragile scripts |
+| SQLite | 高 | 单机单写者、归档 generation、搬运和清理都更简单 |
+| RocksDB | 中 | 更适合高频 key-value 状态，但已更像 LocalStateStore |
+| LevelDB | 中低 | 能用，但整体生态和长期维护性不如 SQLite / RocksDB 两侧清晰 |
+| 自行开发文件格式 | 低 | 容易把归档、搬运、清理、校验全写成脆弱脚本 |
 
-So the reason the current stage does not outright kill off concrete backends is:
+所以当前阶段不直接拍死具体后端，是因为：
 
-- The core of SecondaryDB is the responsibility, not some engine name
-- The MVP only needs to keep the abstraction first
-- The actual selection should wait until the goal forks between "archive staging" and "local latest-state store"
+- SecondaryDB 的核心是职责，不是某个引擎名
+- MVP 只需要先保留抽象
+- 真正选型要等目标从“归档暂存”还是“本地最新状态库”分叉后再定
 
-Put more directly:
-
-```
-If the goal is "archive staging + generation consolidation", SQLite is closer to the responsibility.
-If the goal is "local latest state + high-throughput KV", RocksDB is closer to the responsibility.
-LevelDB is usable, but does not constitute a preferred recommendation.
-```
-
----
-
-## 8. theseed's recommended wording
-
-It is recommended to unify the documentation around the following set of boundaries:
+更直接地说：
 
 ```
-MVP:
-  - Primary persistence + the Archiver main path
-  - Does not promise LocalArchiveStore
-
-Phase 2:
-  - Evaluate introducing LocalArchiveStore
-  - Make explicit the snapshot / consolidate / cleanup toolchain
-
-Phase 3:
-  - Interlock with high availability, shutdown, and the data ops platform
-  - Then consider whether LocalStateStore-level enhancement is needed
+如果目标是“归档暂存 + generation 归并”，SQLite 更贴近职责。
+如果目标是“本地最新状态 + 高吞吐 KV”，RocksDB 更贴近职责。
+LevelDB 能用，但不构成优先推荐。
 ```
 
 ---
 
-## 9. Comparison with the two engines
+## 8. theseed 的建议表述
 
-| Dimension | BigWorld | KBEngine | theseed |
+建议把文档统一成下面这组边界：
+
+```
+MVP：
+  - 主持久化 + Archiver 主路径
+  - 不承诺 LocalArchiveStore
+
+Phase 2：
+  - 评估引入 LocalArchiveStore
+  - 明确 snapshot / consolidate / cleanup 工具链
+
+Phase 3：
+  - 与高可用、停服、数据运维平台联动
+  - 再考虑是否需要 LocalStateStore 级增强
+```
+
+---
+
+## 9. 与两套引擎的对比
+
+| 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| Archive main path | Archiver + SecondaryDB + consolidate | writeToDB + Archiver | MVP archives to the primary database first |
-| Local staging layer | Yes | No explicit layer | Evaluated in Phase 2 / 3 |
-| Data ops surface | transfer / consolidate / sync fairly complete | Weaker | Needs independent design |
-| Hot standby | BackupSender | No built-in | Counted separately, not mixed with SecondaryDB |
+| 归档主路径 | Archiver + SecondaryDB + consolidate | writeToDB + Archiver | MVP 先主库归档 |
+| 本地暂存层 | 有 | 无显式层 | Phase 2 / 3 评估 |
+| 数据运维面 | transfer / consolidate / sync 较完整 | 较弱 | 需要独立设计 |
+| 热备 | BackupSender | 无内建 | 另算，不和 SecondaryDB 混用 |

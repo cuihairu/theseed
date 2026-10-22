@@ -1,80 +1,80 @@
-# Redis, Async & Config — Cache, Async, and Configuration
+# Redis, Async & Config — 缓存、异步与配置
 
-> **English** | [中文](03-redis-async-and-config.zh.md)
+> [English](03-redis-async-and-config.md) | **中文**
 
-> theseed's out-of-the-box infrastructure components.
-> Origin judgment: BigWorld has no modern Redis / Async / Config stack, and KBEngine only has basic Redis support.
-> theseed does modern infrastructure extension at this layer.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-The BigWorld era had no complete infrastructure stack of today's "Redis + async framework + unified configuration center".
-
-It was more like:
-  - in-process configuration / watcher parameters
-  - custom async over the database and script callbacks
-  - a small amount of auxiliary storage and tooling
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine has basic Redis support, but with a narrower positioning.
-
-It leans more toward:
-  - session / cache / simple distributed mutex
-  - callback-based async
-  - configuration scattered across scripts and XML
-```
-
-### Pros and Cons
-
-```
-BigWorld / KBEngine's advantages:
-  - few dependencies
-  - simple main path
-  - shallow coupling with the runtime
-
-BigWorld / KBEngine's drawbacks:
-  - cache, lock, leaderboard, rate limiting, and async tasks have no unified governance
-  - configuration and task models are scattered
-  - lack of modern observable infrastructure wrapping
-```
-
-### theseed's Trade-offs
-
-```
-theseed chooses to put Redis, async tasks, and the configuration center into the infrastructure layer,
-because these capabilities are consumed simultaneously by the runtime, ops, and script layers.
-
-The cost is:
-  - introducing additional external components
-  - requiring a clear main-path boundary
-  - requiring unified configuration and permission governance
-```
+> theseed 基础设施的开箱即用组件。
+> 来源判断：BigWorld 没有现代 Redis / Async / Config 组合栈，KBEngine 只有基础 Redis 支持。
+> theseed 在这层做现代基础设施扩展。
 
 ---
 
-## 1. Redis Integration
+## 0.5 引擎实现对照与取舍
 
-### 1.1 Uses
+### BigWorld 是怎么实现的
 
 ```
-Redis's role in theseed
-├── cache layer: entity hot data, online status, configuration cache
-├── distributed lock: cross-process mutex, distributed timers, migration locks
-├── leaderboard: Sorted Set real-time ranking
-├── pub/sub: lightweight inter-process notification
-├── rate limiting: token bucket / sliding window
-└── session storage: login token, reconnection session
+BigWorld 时代没有今天这种“Redis + 异步框架 + 统一配置中心”的完整基础设施栈。
+
+它更多是：
+  - 进程内配置 / watcher 参数
+  - 数据库与脚本回调的自定义异步
+  - 少量辅助存储与工具链
 ```
 
-### 1.2 Core Interfaces
+### KBEngine 是怎么实现的
+
+```
+KBEngine 有基础 Redis 支持，但定位更窄。
+
+它更偏向：
+  - 会话 / 缓存 / 简单分布式互斥
+  - 回调式异步
+  - 配置散落在脚本与 XML 中
+```
+
+### 优缺点
+
+```
+BigWorld / KBEngine 的优点：
+  - 依赖少
+  - 主路径简单
+  - 与运行时耦合浅
+
+BigWorld / KBEngine 的缺点：
+  - 缓存、锁、排行、限流、异步任务没有统一治理
+  - 配置和任务模型分散
+  - 缺少现代可观测的基础设施封装
+```
+
+### theseed 的取舍
+
+```
+theseed 选择把 Redis、异步任务和配置中心放进基础设施层，
+原因是这些能力会被 runtime、ops、script 三层同时消费。
+
+代价是：
+  - 引入额外外部组件
+  - 需要明确主路径边界
+  - 需要统一配置与权限治理
+```
+
+---
+
+## 1. Redis 集成
+
+### 1.1 用途
+
+```
+Redis 在 theseed 中的角色
+├── 缓存层：实体热数据、在线状态、配置缓存
+├── 分布式锁：跨进程互斥、分布式定时器、迁移锁
+├── 排行榜：Sorted Set 实时排行
+├── 发布/订阅：轻量级进程间通知
+├── 限流：令牌桶/滑动窗口
+└── 会话存储：登录 Token、断线重连 session
+```
+
+### 1.2 核心接口
 
 ```cpp
 class IRedisProvider {
@@ -98,7 +98,7 @@ public:
 };
 ```
 
-### 1.3 Script Layer
+### 1.3 脚本层
 
 ```python
 import theseed
@@ -113,9 +113,9 @@ with theseed.redis.lock("guild_war:match", ttl=30) as lock:
 
 ---
 
-## 2. Async Task Framework
+## 2. 异步任务框架
 
-### 2.1 C++ Async Model
+### 2.1 C++ 异步模型
 
 ```cpp
 template<typename T>
@@ -138,14 +138,14 @@ Future<PlayerData> loadPlayer(EntityId id) {
 ```
 
 ```
-Thread constraints:
-  - background threads may perform I/O
-  - completion results must be delivered back to the owning tick thread
-  - background threads must not modify Entities directly
-  - the tick thread must not block waiting on Future.get()
+线程约束：
+  - 后台线程可以执行 I/O
+  - 完成结果必须投递回 owning tick thread
+  - 不允许后台线程直接修改 Entity
+  - 不允许 tick 线程阻塞等待 Future.get()
 ```
 
-### 2.2 Script Layer Async
+### 2.2 脚本层异步
 
 ```python
 import theseed
@@ -162,13 +162,13 @@ class Avatar(theseed.BaseEntity):
 ```
 
 ```
-Script constraints:
-  - yield resumption points must return to the tick thread owning the entity
-  - before async resumption, entity epoch / liveness state must be verified
-  - late callbacks after migration may be dropped or retried, but must not write to the old entity directly
+脚本约束：
+  - yield 恢复点必须回到实体所属 tick 线程
+  - 异步恢复前必须校验 entity epoch / 存活状态
+  - 迁移后迟到回调可以丢弃或重试，但不能直接写旧实体
 ```
 
-### 2.3 Background Task Queues
+### 2.3 后台任务队列
 
 ```cpp
 // 预定义队列
@@ -179,12 +179,12 @@ auto computeQueue = TaskQueue::get("compute");
 
 ---
 
-## 3. Log Collection
+## 3. 日志收集
 
 ```
-Engine process
+引擎进程
   ├─ OTel SDK → OTLP Exporter → OTel Collector
-  └─ file log (fallback) → Fluent Bit Agent
+  └─ 文件日志（fallback）→ Fluent Bit Agent
                                        ↓
                               Loki / Elasticsearch
                                        ↓
@@ -193,7 +193,7 @@ Engine process
 
 ---
 
-## 4. Out-of-the-Box Configuration Overview
+## 4. 开箱即用配置总览
 
 ```yaml
 theseed:
@@ -244,14 +244,14 @@ theseed:
 
 ---
 
-## 5. Comparison with KBEngine
+## 5. 与 KBEngine 的对比
 
-| Infrastructure | KBEngine | theseed |
+| 基础设施 | KBEngine | theseed |
 |---------|---------|---------|
-| Gateway | LoginApp (simple TCP) | built-in Gateway (TLS / rate limiting / routing / WS) |
-| Message queue | none (direct TCP) | Runtime Transport + NATS |
-| Redis | basic support | complete wrapper (cache / lock / leaderboard / rate limiting) |
-| Async | CallbackMgr (callbacks) | Future/Promise + yield |
-| Cross-realm | none | Realm Bridge + unified API |
-| Log collection | file logs + grep | OTel → Loki/Elasticsearch |
-| Configuration | scattered XML | single YAML + environment variables |
+| 网关 | LoginApp（简单 TCP） | 内建 Gateway（TLS/限流/路由/WS） |
+| 消息队列 | 无（直连 TCP） | Runtime Transport + NATS |
+| Redis | 基础支持 | 完整封装（缓存/锁/排行/限流） |
+| 异步 | CallbackMgr（回调） | Future/Promise + yield |
+| 跨服 | 无 | Realm Bridge + 统一 API |
+| 日志收集 | 文件日志 + grep | OTel → Loki/Elasticsearch |
+| 配置 | XML 散落 | 单一 YAML + 环境变量 |

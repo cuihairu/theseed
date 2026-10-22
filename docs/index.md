@@ -37,4 +37,3 @@ features:
     details: Script security, hot update, script debugging, client SDK, code generation
 ---
 
-> **English** | [中文](index.zh.md)

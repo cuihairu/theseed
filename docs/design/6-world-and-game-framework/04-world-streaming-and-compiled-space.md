@@ -1,93 +1,93 @@
-# World Streaming & Compiled Space — Chunk, Geometry Mapping, and World Asset Boundaries
+# World Streaming & Compiled Space — Chunk、Geometry Mapping 与世界资产边界
 
-> **English** | [中文](04-world-streaming-and-compiled-space.zh.md)
+> [English](04-world-streaming-and-compiled-space.md) | **中文**
 
-> Source of truth: BigWorld `SpaceData_MappingData / GeometryMapping / Chunk / CompiledSpace / space_converter`.
-> KBEngine has no fully equivalent compiled space system and can only serve as a lightweight runtime space reference.
-> This document does not bring in client rendering implementations; it only discusses their boundary implications for the server and the toolchain.
+> 来源源头：BigWorld `SpaceData_MappingData / GeometryMapping / Chunk / CompiledSpace / space_converter`。
+> KBEngine 没有完整对等的 compiled space 体系，只能作为轻量运行时空间参考。
+> 本篇不把客户端渲染实现拉进来，只讨论它们对服务端与工具链的边界含义。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
+### BigWorld 是怎么实现的
 
 ```
-BigWorld has a complete world asset chain:
+BigWorld 有完整的世界资产链：
   - Chunk / GeometryMapping
   - CompiledSpace
-  - Conversion and packaging toolchain
+  - 转换与打包工具链
 
-The server does not fully understand rendering assets,
-but it consumes key spatial mapping and boundary information.
+服务端并不是全量理解渲染资产，
+但会消费关键的空间映射和边界信息。
 ```
 
-### How KBEngine Implements It
+### KBEngine 是怎么实现的
 
 ```
-KBEngine does not have as complete a compiled space system as BigWorld.
-It leans more toward:
-  - Runtime space
-  - A thinner world asset layer
+KBEngine 没有 BigWorld 那么完整的 compiled space 体系。
+它更偏向：
+  - 运行时空间
+  - 较薄的世界资产层
 ```
 
-### Pros and Cons
+### 优缺点
 
 ```
-BigWorld's advantages:
-  - Complete linkage between world assets and the server-side space boundary
-  - Suitable for large-world toolchains
+BigWorld 的优点：
+  - 世界资产与服务端空间边界衔接完整
+  - 适合大世界工具链
 
-KBEngine's advantages:
-  - Lighter
-  - Does not over-bind world editing assets into the engine trunk
+KBEngine 的优点：
+  - 更轻
+  - 不把世界编辑资产过度绑进引擎主干
 
-Common disadvantages:
-  - The world asset chain and the runtime boundary are easily written together in a mixed way
+共同缺点：
+  - 世界资产链和运行时边界容易被写混
 ```
 
-### theseed's Trade-offs
+### theseed 的取舍
 
 ```
-theseed explicitly places world streaming / compiled space at the world system layer,
-does not mix it into the runtime Space definition,
-but retains the BigWorld-level toolchain boundary as a long-term direction.
+theseed 明确把 world streaming / compiled space 放到世界系统层，
+不把它混进 runtime Space 定义，
+但保留 BigWorld 级工具链边界作为长期方向。
 ```
 
 ---
 
-## 0. Design Boundary
+## 0. 设计边界
 
 ```
-This document is responsible for:
-  - How world static assets are mapped to Space
-  - The responsibility boundaries of chunk / geometry mapping / compiled space
-  - Which world-side metadata the server needs to be aware of
+本篇负责：
+  - 世界静态资产如何映射到 Space
+  - chunk / geometry mapping / compiled space 的职责边界
+  - 服务端需要感知到哪些世界侧元数据
 
-This document is not responsible for:
-  - WorldEditor UI interaction
-  - Client rendering details
-  - Specific asset formats and material systems
+本篇不负责：
+  - WorldEditor UI 交互
+  - 客户端渲染细节
+  - 具体资源格式和材质系统
 ```
 
-Relationship with existing documents:
+和现有文档的关系：
 
 ```
 01-space-topology-and-aoi
-  - Covers the runtime Space abstraction and topology phases
+  - 讲运行时 Space 抽象和 topology phase
 
 02-navigation / 01-physics
-  - Covers navigation and collision interfaces
+  - 讲导航和碰撞接口
 
-This document
-  - Covers "how world assets enter Space"
+本篇
+  - 讲“世界资产如何进入 Space”
 ```
 
 ---
 
-## 1. Why This Document Needs to Be Added
+## 1. 为什么要补这一篇
 
-theseed's current `Space/Scene` documentation already clarifies:
+当前 theseed 的 `Space/Scene` 文档已经把：
 
 ```
 single_cell
@@ -95,127 +95,127 @@ static_partition
 bsp
 ```
 
-the phase boundaries, but it still lacks the layer that is truly important on BigWorld's world side:
+的阶段边界写清了，但还缺 BigWorld 世界侧真正重要的一层：
 
 ```
-1. Space is not just an entity container
-2. Geometry, collision, navigation, UDO, and static scene data are also mapped into the space
-3. World assets are not scanned directly from directories at runtime; there is a mapping / compile / stream toolchain
+1. Space 不只是个实体容器
+2. 空间里还会映射几何、碰撞、导航、UDO、静态场景数据
+3. 世界资产不是运行时直接扫目录，而是有 mapping / compile / stream 的工具链
 ```
 
-Without adding this layer, the world system is easily miswritten as:
+不补这层，就容易把世界系统误写成：
 
 ```
-"Attach a navmesh file and a collision file to Space and you're done"
+“给 Space 挂一个 navmesh 文件和 collision 文件就结束”
 ```
 
-This is not enough to cover BigWorld's system boundary.
+这不足以覆盖 BigWorld 的系统边界。
 
 ---
 
-## 2. What Problem BigWorld Is Solving
+## 2. BigWorld 在解决什么问题
 
-As can be seen from `SpaceData_MappingData`, `GeometryMapping`, `Chunk`, and `CompiledSpace`, BigWorld actually splits four layers:
+从 `SpaceData_MappingData`、`GeometryMapping`、`Chunk`、`CompiledSpace` 可以看出，BigWorld 实际拆了四层：
 
 ```
 1. Space
-   - World logic container
+   - 世界逻辑容器
 
 2. Geometry Mapping
-   - The declaration that maps a set of geometric world assets into a Space
+   - 把一组几何世界资产映射进 Space 的声明
 
 3. Chunk
-   - The world is cut into addressable, streamable, queryable blocks
+   - 世界被切成可寻址、可流送、可查询的块
 
 4. Compiled Space
-   - Offline tools compile raw space assets into runtime-friendly data packages
+   - 由离线工具把原始空间资产编译成运行时友好的数据包
 ```
 
-The most important boundary here is not rendering, but rather:
+其中最重要的边界不是渲染，而是：
 
 ```
-World assets need to be prepared offline, not assembled temporarily at runtime
-```
-
----
-
-## 3. What theseed Covers Today
-
-### 3.1 Covered
-
-```
-1. Space is independent of Entity
-2. Space binds navigation and collision interfaces
-3. topology has phased boundaries
-```
-
-### 3.2 Not Yet Covered
-
-```
-1. World asset mapping declaration model
-2. Chunk-level streaming and query boundaries
-3. Offline artifact boundaries of compiled world / compiled space
-4. World metadata channels such as SpaceData
+世界资产需要离线准备，而不是运行时临时拼接
 ```
 
 ---
 
-## 4. Core Concepts
+## 3. theseed 现在覆盖到哪里
+
+### 3.1 已覆盖
+
+```
+1. Space 独立于 Entity
+2. Space 绑定导航与碰撞接口
+3. topology 有分阶段边界
+```
+
+### 3.2 还没覆盖
+
+```
+1. 世界资产映射声明模型
+2. chunk 级流送与查询边界
+3. compiled world / compiled space 的离线产物边界
+4. SpaceData 一类世界元数据通道
+```
+
+---
+
+## 4. 核心概念
 
 ### 4.1 Geometry Mapping
 
-The responsibility of Geometry Mapping should be understood as:
+Geometry Mapping 的职责应理解为：
 
 ```
-Take a world geometric dataset
-and, according to some transform,
-mount it onto some Space
+把一份世界几何数据集
+按某个 transform
+挂载到某个 Space
 ```
 
-It is not an alias for "loading a model file".
+它不是“加载一个模型文件”的别名。
 
 ### 4.2 Chunk
 
-The responsibility of Chunk is:
+Chunk 的职责是：
 
 ```
-Divide the large world into addressable, on-demand loadable, locally queryable static blocks
+把大世界分成可寻址、可按需加载、可局部查询的静态块
 ```
 
-For the server, it at least affects:
+对服务端而言，它至少会影响：
 
 ```
-  - Chunking of navigation data
-  - Collision query scope
-  - Loading boundaries of world objects / UDOs
-  - Future multi-Cell topology and space load information
+  - 导航数据的分块
+  - 碰撞查询范围
+  - world object / UDO 的加载边界
+  - 远期多 Cell 拓扑与空间负载信息
 ```
 
 ### 4.3 Compiled Space
 
-The responsibility of Compiled Space is:
+Compiled Space 的职责是：
 
 ```
-Convert editing-state world assets
-into compiled artifacts that are efficient for runtime to read
+把编辑态世界资产
+转成运行时高效读取的编译产物
 ```
 
-The point is not the file format itself, but that it represents a clear boundary:
+重点不是文件格式本身，而是它代表一种明确边界：
 
 ```
-World preparation belongs to the offline toolchain
-and is not the responsibility of Runtime Core
+世界准备属于离线工具链
+不是 Runtime Core 的职责
 ```
 
 ---
 
-## 5. What the Server Actually Needs
+## 5. 服务端真正需要什么
 
-The user's current audit does not count client rendering as a must-have item, so theseed does not need to port BigWorld's client-side CompiledSpace wholesale.
+用户这次审计不把客户端渲染算入必做项，所以 theseed 不需要把 BigWorld 客户端 CompiledSpace 全盘搬进来。
 
-But the server still needs to define at least the following four categories of metadata:
+但服务端仍然需要至少定义下面四类元数据：
 
-### 5.1 Spatial Mapping Metadata
+### 5.1 空间映射元数据
 
 ```
   - spaceId / sceneName
@@ -225,16 +225,16 @@ But the server still needs to define at least the following four categories of m
   - version
 ```
 
-### 5.2 Navigation / Collision Metadata
+### 5.2 导航 / 碰撞元数据
 
 ```
   - navmesh package id
   - collision package id
-  - Chunking boundaries
-  - Version consistency
+  - 分块边界
+  - 版本一致性
 ```
 
-### 5.3 Static Object Metadata
+### 5.3 静态对象元数据
 
 ```
   - static triggers
@@ -242,44 +242,44 @@ But the server still needs to define at least the following four categories of m
   - UDO / POI / region volumes
 ```
 
-### 5.4 Streaming Metadata
+### 5.4 流送元数据
 
 ```
-  - Which chunks / partitions can be loaded on demand
-  - Which must stay resident
-  - Load dependencies and priorities
+  - 哪些 chunk / partition 可以按需加载
+  - 哪些必须常驻
+  - 加载依赖与优先级
 ```
 
 ---
 
-## 6. SpaceData-Type Problems Need a Boundary Set in Advance
+## 6. SpaceData 类问题必须提前立边界
 
-BigWorld's `SPACE_DATA_MAPPING_KEY_*` shows that the world side does not rely only on configuration files.
+BigWorld 的 `SPACE_DATA_MAPPING_KEY_*` 说明世界侧并不只靠配置文件。
 
-A "space metadata channel" is also needed.
+还需要一条“空间元数据通道”。
 
-theseed does not have to copy BigWorld's binary key mechanism, but it needs to make clear:
+theseed 可以不照搬 BigWorld 的二进制 key 机制，但需要立清楚：
 
 ```
 Space Metadata Channel
-  - Injects metadata such as geometry mapping / load bounds / world tags into Space
+  - 向 Space 注入 geometry mapping / load bounds / world tags 等元数据
 ```
 
-Suggested boundary:
+建议边界：
 
 ```
-What Runtime Core sees is:
-  - Typed world metadata
+Runtime Core 看到的是：
+  - typed world metadata
 
-Rather than:
-  - Arbitrary string blobs
+而不是：
+  - 任意字符串 blob
 ```
 
 ---
 
-## 7. Recommended Data Model
+## 7. 推荐的数据模型
 
-### 7.1 World Mapping Description
+### 7.1 世界映射描述
 
 ```cpp
 // world/WorldMappingDescriptor.h
@@ -294,7 +294,7 @@ struct WorldMappingDescriptor {
 };
 ```
 
-### 7.2 Compiled Artifact Description
+### 7.2 编译产物描述
 
 ```cpp
 // world/CompiledWorldDescriptor.h
@@ -308,7 +308,7 @@ struct CompiledWorldDescriptor {
 };
 ```
 
-### 7.3 Space Metadata Interface
+### 7.3 空间元数据接口
 
 ```cpp
 // world/ISpaceMetadataStore.h
@@ -326,110 +326,110 @@ public:
 
 ---
 
-## 8. Relationship with topology
+## 8. 和 topology 的关系
 
-World streaming and topology are related, but they are not the same thing.
+世界流送与 topology 有关联，但不是同一件事。
 
-### 8.1 Do Not Merge Them into One Layer
+### 8.1 不要混成一层
 
 ```
 topology
-  - Cares about which Cell entities run on and how partitioning works
+  - 关心实体运行在哪个 Cell、如何分区
 
 world streaming
-  - Cares about how static world data is loaded into Space
+  - 关心静态世界数据如何装入 Space
 ```
 
-### 8.2 Long-Term Coupling Points
+### 8.2 远期耦合点
 
-By Phase 3, the two will interact:
+到了 Phase 3，二者会发生联动：
 
 ```
-1. chunk / partition boundaries may affect rebalance candidates
-2. load bounds may participate in multi-Cell load decisions
-3. The residency state of static world blocks may affect AOI and physics query cost
+1. chunk / partition 边界可能影响 rebalance 候选
+2. load bounds 可能参与多 Cell 负载决策
+3. 静态世界块的驻留状态可能影响 AOI 与物理查询成本
 ```
 
-But this still does not mean the two should be tightly coupled now.
+但这仍不意味着现在就要把两者耦死。
 
 ---
 
-## 9. Relationship with Navigation / Physics
+## 9. 和导航 / 物理的关系
 
-The server-side design should make clear:
+服务端设计上建议明确：
 
 ```
 CompiledWorld / Mapping
-  ↓ Provides assets and boundaries
+  ↓ 提供资产和边界
 
 Navigation / Physics
-  ↓ Consumes the prepared packages
+  ↓ 消费已准备好的包
 
 Space Runtime
-  ↓ Combines them
+  ↓ 组合它们
 ```
 
-In other words:
+也就是说：
 
 ```
-Space should not be responsible for compiling world assets itself
-```
-
----
-
-## 10. These Capabilities Should Not Enter the MVP
-
-According to theseed's current baseline, none of the following should be written as MVP capabilities:
-
-```
-1. Real chunk streaming
-2. The compiled space asset compilation pipeline
-3. Chunk-based dynamic world culling
-4. Online hot mounting of world metadata
-```
-
-Their more reasonable boundary is:
-
-```
-Phase 1:
-  - Single Space configuration + fixed navigation / collision packages
-
-Phase 2:
-  - Static partition + precompiled world description
-
-Phase 3:
-  - chunk streaming / compiled world pipeline / linkage with topology
+Space 不应自己负责编译世界资产
 ```
 
 ---
 
-## 11. theseed's Recommended Statement
+## 10. 这些能力不该进 MVP
 
-It is recommended to write the world-side boundary uniformly as:
+按当前 theseed 的基线，下面这些都不应写成 MVP 能力：
 
 ```
-MVP:
-  - Space references pre-generated navmesh / collision / static metadata
-  - Does not promise chunk streaming
-  - Does not promise a compiled world pipeline
+1. 真正的 chunk stream
+2. compiled space 资产编译流水线
+3. 基于 chunk 的动态世界裁剪
+4. world metadata 的在线热挂载
+```
 
-Phase 2:
-  - Introduce WorldMappingDescriptor / CompiledWorldDescriptor
-  - Support precompiled world packages under static partitioning
+它们更合理的边界是：
 
-Phase 3:
-  - Support systematic capabilities for chunk / compiled space / geometry mapping
-  - Link with multi-Cell topology, rebalance, and the world operations chain
+```
+Phase 1：
+  - 单一 Space 配置 + 固定导航 / 碰撞包
+
+Phase 2：
+  - 静态 partition + 预编译世界描述
+
+Phase 3：
+  - chunk stream / compiled world pipeline / 与 topology 联动
 ```
 
 ---
 
-## 12. Comparison with BigWorld / KBEngine / theseed
+## 11. theseed 的推荐表述
 
-| Dimension | BigWorld | KBEngine | theseed |
+建议把世界侧边界统一写成：
+
+```
+MVP：
+  - Space 引用预生成的 navmesh / collision / static metadata
+  - 不承诺 chunk stream
+  - 不承诺 compiled world pipeline
+
+Phase 2：
+  - 引入 WorldMappingDescriptor / CompiledWorldDescriptor
+  - 支持静态分区下的预编译世界包
+
+Phase 3：
+  - 支持 chunk / compiled space / geometry mapping 的系统化能力
+  - 与多 Cell topology、rebalance、世界运维链联动
+```
+
+---
+
+## 12. 与 BigWorld / KBEngine / theseed 的对比
+
+| 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| Space independence | Strong | Weak, Space is more like an Entity | Covered |
-| Geometry Mapping | Yes | Essentially none | Requires Phase 2/3 modeling |
-| Chunk world | Yes | None | Phase 3 goal |
-| Compiled Space | Has a complete toolchain | None | Not yet covered, needs a separate boundary |
-| Offline compilation of world assets | Yes | Weak | Should be listed separately as a toolchain capability |
+| Space 独立性 | 强 | 弱，Space 更像 Entity | 已覆盖 |
+| Geometry Mapping | 有 | 基本无 | 需 Phase 2/3 建模 |
+| Chunk world | 有 | 无 | Phase 3 目标 |
+| Compiled Space | 有完整工具链 | 无 | 暂未覆盖，需单列边界 |
+| 世界资产离线编译 | 有 | 弱 | 应单列为工具链能力 |

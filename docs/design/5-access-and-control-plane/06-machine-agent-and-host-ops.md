@@ -1,195 +1,195 @@
-# MachineAgent & Host Ops - Host Reporting, Process Orchestration, and Node Summary
+# MachineAgent & Host Ops - 主机上报、进程编排与节点摘要
 
-> **English** | [中文](06-machine-agent-and-host-ops.zh.md)
+> [English](06-machine-agent-and-host-ops.md) | **中文**
 
-> Origin: BigWorld's `bwmachined`.
-> Reference implementation: the component scheduling and status aggregation path of KBEngine's `machine`.
-> This layer is "host agent + local process orchestration + node summary reporting"; it is not a complete monitoring center.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-BigWorld's bwmachined is more like a node daemon:
-  - maintains the machine and process table
-  - performs platform checks, version checks, core dump checks
-  - responsible for start / stop / notification / discovery
-  - also carries a certain amount of cluster-side machine announcement and state maintenance
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine's machine is more like a component scheduling and state aggregation point:
-  - component registration and query
-  - componentID allocation
-  - process start / stop / kill
-  - CPU / memory sampling and reporting
-```
-
-### Pros and Cons
-
-```
-BigWorld's advantages:
-  - complete node daemon responsibilities
-  - more systematic coverage of machine and process state
-
-BigWorld's drawbacks:
-  - the machine agent can easily be made too heavy
-  - requires stricter separation of the control plane and the observation plane
-
-KBEngine's advantages:
-  - machine semantics are more direct
-  - closer to the component orchestration entry point
-
-KBEngine's drawbacks:
-  - the boundary between monitoring and control is still coarse
-  - resource sampling is more of a point capability
-```
-
-### theseed's Trade-offs
-
-```
-theseed keeps a single MachineAgent,
-but does not make it a full-featured monitoring center.
-
-It is only responsible for:
-  - host resource summary
-  - local process orchestration
-  - health state reporting back
-  - controlled node-level command execution
-```
+> 来源源头：BigWorld `bwmachined`。
+> 参考实现：KBEngine `machine` 的组件调度与状态汇聚路径。
+> 这一层是“主机代理 + 本机进程编排 + 节点摘要上报”，不是完整监控中心。
 
 ---
 
-## 0. Design Boundary
+## 0.5 引擎实现对照与取舍
 
-This document covers:
-
-```
-  - host summary sampling such as CPU / memory / disk / network
-  - local process table, ports, version, binary existence information
-  - local actions such as spawn / stop / restart / drain / retire
-  - reporting the node summary to the Ops Control Plane
-```
-
-This document does not cover:
+### BigWorld 是怎么实现的
 
 ```
-  - long-term metric storage
-  - metric aggregation and alerting rules
-  - trace / flamegraph / profile storage and analysis
-  - a cross-cluster global monitoring center
+BigWorld 的 bwmachined 更像节点守护进程：
+  - 维护机器与进程表
+  - 做平台检查、版本检查、core dump 检查
+  - 负责启动 / 停止 / 通知 / 发现
+  - 还承担一定的集群侧机器公告和状态维护
 ```
 
-Its relationship with the other documents:
+### KBEngine 是怎么实现的
+
+```
+KBEngine 的 machine 更像组件调度与状态汇聚点：
+  - 组件注册与查询
+  - componentID 分配
+  - 进程启动 / 停止 / kill
+  - CPU / memory 采样与上报
+```
+
+### 优缺点
+
+```
+BigWorld 的优点：
+  - 节点守护职责完整
+  - 对机器和进程状态的覆盖更系统
+
+BigWorld 的缺点：
+  - 容易把机器代理做得过重
+  - 需要更严格地区分控制面和观测面
+
+KBEngine 的优点：
+  - machine 语义更直接
+  - 更贴近组件编排入口
+
+KBEngine 的缺点：
+  - 监控和控制边界仍然偏粗
+  - 资源采样更多是点状能力
+```
+
+### theseed 的取舍
+
+```
+theseed 保留一个 MachineAgent，
+但不把它做成全功能监控中心。
+
+它只负责：
+  - 主机资源摘要
+  - 本机进程编排
+  - 健康状态回传
+  - 受控的节点级命令执行
+```
+
+---
+
+## 0. 设计边界
+
+本篇负责：
+
+```
+  - CPU / memory / disk / network 等主机摘要采样
+  - 本机进程表、端口、版本、二进制存在性等信息
+  - spawn / stop / restart / drain / retire 之类的本机动作
+  - 向 Ops Control Plane 上报节点摘要
+```
+
+本篇不负责：
+
+```
+  - 长期指标存储
+  - 指标聚合和告警规则
+  - trace / flamegraph / profile 的存储与分析
+  - 跨集群的全局监控中心
+```
+
+它和其他文档的关系：
 
 ```
 05-telemetry-and-debug
-  - responsible for detailed metrics, logs, traces, flame graphs
+  - 负责详细指标、日志、trace、flamegraph
 
 04-ops-control-plane
-  - responsible for node summary query, controlled commands, audit
+  - 负责节点摘要查询、受控命令、审计
 
 03-cluster-lifecycle
-  - responsible for advancing drain / retire / controlled shutdown state
+  - 负责 drain / retire / controlled shutdown 的状态推进
 ```
 
 ---
 
-## 1. Why machine Cannot Become a Monitoring Center
+## 1. 为什么 machine 不能变成监控中心
 
-If machine were built as a monitoring center, it would simultaneously swallow three categories of responsibility:
-
-```
-1. observation collection
-2. ops control
-3. state aggregation
-```
-
-This would distort the boundaries:
+如果把 machine 做成监控中心，会同时吞掉三类职责：
 
 ```
-  - sampling frequency and control commands pollute each other
-  - historical storage couples with the local agent
-  - machine-level responsibilities start to cover cluster-level responsibilities
+1. 观测采集
+2. 运维控制
+3. 状态汇总
 ```
 
-A more reasonable split is:
+这会导致边界失真：
+
+```
+  - 采样频率和控制命令互相污染
+  - 历史存储和本地代理耦合
+  - 机器级职责开始覆盖集群级职责
+```
+
+更合理的拆法是：
 
 ```
 MachineAgent
-  - samples and reports the current node state
-  - executes local-level actions
+  - 采样和上报当前节点状态
+  - 执行本机级动作
 
 Ops Control Plane
-  - aggregates multiple node summaries
-  - provides ops query and command entry points
+  - 聚合多个节点摘要
+  - 提供运维查询与命令入口
 
 Telemetry
-  - keeps high-frequency, fine-grained, traceable diagnostic data
+  - 保留高频、细粒度、可追踪的诊断数据
 ```
 
-So machine may look like a simple monitoring center,
-but essentially it should only provide:
+所以 machine 可以像一个简易监控中心，
+但本质上只应提供：
 
 ```
 NodeSummary / HostSummary / ProcessSummary
 ```
 
-rather than a real monitoring backend.
+而不是一个真正的监控后端。
 
 ---
 
-## 2. MachineAgent Responsibilities
+## 2. MachineAgent 的职责
 
-### 2.1 Host Summary
+### 2.1 主机摘要
 
-It is recommended to include at minimum:
+建议最少包含：
 
 ```
   - host id / hostname / platform
-  - cpu usage rate
-  - memory total / used / available
-  - disk capacity / remaining / pressure marker
-  - network basic throughput summary
-  - load average or equivalent metric
+  - cpu 使用率
+  - memory 总量 / 已用 / 可用
+  - disk 容量 / 剩余 / 压力标记
+  - network 基础吞吐摘要
+  - load average 或等价指标
 ```
 
-### 2.2 Process Summary
+### 2.2 进程摘要
 
 ```
   - pid / component type / component id
   - binary path / version / start time
-  - port occupancy
-  - running state / health state
-  - core dump / crash markers
+  - 端口占用情况
+  - 运行状态 / 健康状态
+  - core dump / crash 标记
 ```
 
-### 2.3 Local Orchestration
+### 2.3 本机编排
 
 ```
-  - start process
-  - stop process
-  - restart process
-  - trigger drain
-  - assist retire / controlled shutdown
+  - 启动进程
+  - 停止进程
+  - 重启进程
+  - 触发 drain
+  - 协助 retire / controlled shutdown
 ```
 
-### 2.4 Node Summary Reporting
+### 2.4 节点摘要上报
 
 ```
-  - periodically report MachineSnapshot
-  - event-based reporting of process birth / death / crash
-  - leave high-frequency details to Telemetry and low-frequency summary to Ops
+  - 周期性上报 MachineSnapshot
+  - 事件型上报 process birth / death / crash
+  - 把高频细节留给 Telemetry，把低频摘要留给 Ops
 ```
 
 ---
 
-## 3. Recommended Data Model
+## 3. 推荐的数据模型
 
 ```cpp
 struct HostSummary {
@@ -218,19 +218,19 @@ struct NodeSummary {
 };
 ```
 
-The principles for these structs are:
+这些结构体的原则是：
 
 ```
-  - summary-oriented, not complete-diagnosis-oriented
-  - current-state-oriented, not historical-time-series-oriented
-  - control-plane-consumption-oriented, not direct-persistence-oriented
+  - 面向摘要，不面向完整诊断
+  - 面向当前状态，不面向历史时序
+  - 面向控制面消费，不面向直接持久化
 ```
 
 ---
 
-## 4. Interface Boundary
+## 4. 接口边界
 
-### 4.1 Sampling Interface
+### 4.1 采样接口
 
 ```cpp
 class IHostProbe {
@@ -240,7 +240,7 @@ public:
 };
 ```
 
-### 4.2 Process Management Interface
+### 4.2 进程管理接口
 
 ```cpp
 class IProcessSupervisor {
@@ -252,7 +252,7 @@ public:
 };
 ```
 
-### 4.3 Node Agent Interface
+### 4.3 节点代理接口
 
 ```cpp
 class IMachineAgent {
@@ -266,101 +266,101 @@ public:
 
 ---
 
-## 5. Comparison with BigWorld / KBEngine
+## 5. 与 BigWorld / KBEngine 的对照
 
 ### BigWorld
 
 ```
-bwmachined's characteristics:
-  - more like a machine-level daemon and cluster entry point
-  - responsible for discovery as well as start and notification
-  - also handles some platform checks and state maintenance
+bwmachined 的特点：
+  - 更像机器级守护和集群入口
+  - 既负责发现，也负责启动和通知
+  - 还会处理一些平台检查和状态维护
 ```
 
 ### KBEngine
 
 ```
-machine's characteristics:
-  - more like a component scheduling and state aggregation entry point
-  - CPU / memory sampling is already within its responsibilities
-  - directly bound to component registration and query
+machine 的特点：
+  - 更像组件调度和状态汇聚入口
+  - CPU / memory 采样已经进入职责范围
+  - 与 component 注册和查询直接绑定
 ```
 
 ### theseed
 
 ```
-theseed converges into a single MachineAgent:
-  - only host-level summary and local orchestration
-  - the global ops view goes to the Ops Control Plane
-  - detailed diagnosis goes to Telemetry
+theseed 收敛成单一 MachineAgent：
+  - 只做主机级摘要和本机编排
+  - 全局运维视图放到 Ops Control Plane
+  - 详细诊断放到 Telemetry
 ```
 
 ---
 
-## 6. The Correct Way to Build a Simple Monitoring Center
+## 6. 简易监控中心的正确打开方式
 
-If a role like a simple monitoring center is truly needed,
-it is recommended to build the following chain:
+如果确实需要像一个简易监控中心的角色，
+建议做成下面这条链路：
 
 ```
 MachineAgent
-  -> reports NodeSummary
-  -> Ops Control Plane aggregates
-  -> /status/summary presents externally
+  -> 上报 NodeSummary
+  -> Ops Control Plane 聚合
+  -> /status/summary 对外展示
 ```
 
-This yields:
+这样可以得到：
 
 ```
-  - node health overview
-  - resource pressure summary
-  - process online state
-  - drain / retire / overload markers
+  - 节点健康总览
+  - 资源压力摘要
+  - 进程在线状态
+  - drain / retire / overload 标记
 ```
 
-but machine will not become:
+但不会把 machine 变成：
 
 ```
-  - a Grafana replacement
-  - a Metrics storage backend
-  - a Trace storage backend
-  - an alerting orchestration center
+  - Grafana 替代品
+  - Metrics 存储后端
+  - Trace 存储后端
+  - 告警编排中心
 ```
 
 ---
 
-## 7. Phased Boundaries
+## 7. 分阶段边界
 
 ### MVP
 
 ```
-  - host cpu / memory / disk summary
+  - host cpu / memory / disk 摘要
   - process list / state / pid
-  - local start / stop / restart
-  - node-level health summary
+  - 本机 start / stop / restart
+  - 节点级 health summary
 ```
 
 ### Phase 2
 
 ```
-  - core dump / crash markers
-  - port conflict / binary version / platform probe
-  - more complete drain / retire coordination
+  - core dump / crash 标记
+  - 端口冲突 / binary version / platform probe
+  - 更完整的 drain / retire 协调
 ```
 
 ### Phase 3
 
 ```
-  - richer cross-node discovery
-  - finer-grained machine labels and policies
-  - tighter integration with automated ops policies
+  - 更丰富的跨节点发现
+  - 更细粒度的机器标签和策略
+  - 与自动化运维策略更紧密的联动
 ```
 
 ---
 
-## 8. One-Sentence Judgment
+## 8. 一句话判断
 
 ```
-machine should be the node agent and the local orchestration entry point,
-not a full-featured monitoring center.
+machine 应该是节点代理和本机编排入口，
+不是全功能监控中心。
 ```

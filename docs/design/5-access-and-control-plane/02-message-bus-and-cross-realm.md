@@ -1,160 +1,160 @@
-# MessageBus — Message Bus and Cross-Realm
+# MessageBus — 消息总线与跨服
 
-> **English** | [中文](02-message-bus-and-cross-realm.zh.md)
+> **English** | 中文
 
-> theseed's MessageBus is responsible for the Control Plane and the Cross-Realm Async Plane.
-> The Runtime Data Plane is handled by the separate Runtime Transport and does not go through MessageBus.
+> theseed 的 MessageBus 负责 Control Plane 和 Cross-Realm Async Plane。
+> Runtime Data Plane 由独立的 Runtime Transport 负责，不走 MessageBus。
 >
-> Origin judgment: neither BigWorld nor KBEngine has a modern general-purpose MessageBus.
-> theseed adds message bus capabilities for the Control Plane and the Cross-Realm Async Plane.
-> The current implementation baseline follows [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
+> 来源判断：BigWorld 与 KBEngine 都没有现代通用 MessageBus。
+> theseed 新增 Control Plane 与 Cross-Realm Async Plane 的消息总线能力。
+> 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld has no independent general-purpose MessageBus layer.
-
-Its approach is:
-  - runtime main path: Mercury / Mailbox / Channel
-  - ops control plane: Watcher / ForwardingWatcher
-  - cross-process management: Manager process + built-in message protocol
-  - cross-realm async: no modern MQ-style abstraction
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine also has no independent message bus.
+BigWorld 没有独立的通用 MessageBus 层。
 
-Its approach is:
-  - runtime main path: direct TCP + EntityCall
-  - control and management: custom messages between components
-  - ops observation: Watcher / WebConsole
-  - cross-realm async: essentially no systematic MessageBus
+它的做法是：
+  - runtime 主路径：Mercury / Mailbox / Channel
+  - 运维控制面：Watcher / ForwardingWatcher
+  - 跨进程管理：Manager 进程 + 内建消息协议
+  - 跨服异步：没有现代 MQ 式抽象
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-BigWorld / KBEngine's advantages:
-  - the main path and control-plane boundaries are naturally clear
-  - few components, low deployment burden
-  - will not mistakenly put MQ on the EntityCall main path
+KBEngine 也没有独立消息总线。
 
-BigWorld / KBEngine's drawbacks:
-  - control-plane broadcast, cross-realm bridging, and background tasks all have to be assembled by hand
-  - lack of a unified request-reply / pub-sub / worker group abstraction
-  - weak cross-datacenter and async orchestration capability
+它的做法是：
+  - runtime 主路径：直连 TCP + EntityCall
+  - 控制与管理：组件间自定义消息
+  - 运维观察：Watcher / WebConsole
+  - 跨服异步：基本没有成体系 MessageBus
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed does not follow the old engines' approach of "everything goes through custom point-to-point".
+BigWorld / KBEngine 的优点：
+  - 主路径和控制面边界天然清楚
+  - 组件少，部署负担低
+  - 不会误把 MQ 放进 EntityCall 主路径
 
-The trade-off is:
-  - Runtime Data Plane stays independent and does not go through MessageBus
-  - Control Plane / Cross-Realm Async Plane introduce MessageBus separately
-  - use external components in exchange for broadcast, bridging, async orchestration, and ops manageability
+BigWorld / KBEngine 的缺点：
+  - 控制面广播、跨服桥接、后台任务都要自己拼
+  - 缺少统一 request-reply / pub-sub / worker group 抽象
+  - 跨机房与异步编排能力弱
 ```
 
-### Why Not Aeron
+### theseed 的取舍
 
 ```
-Aeron is stronger at low-latency transport and streaming data planes,
-but it is not an out-of-the-box distributed message bus:
-  - requires more self-built protocol and control plane
-  - better suited to the Data Plane
-  - not suited to directly carrying control-plane semantics
+theseed 不沿用旧引擎“所有事情都走自定义点对点”的做法。
+
+取舍是：
+  - Runtime Data Plane 继续独立，不走 MessageBus
+  - Control Plane / Cross-Realm Async Plane 单独引入 MessageBus
+  - 用外部组件换取广播、桥接、异步编排和运维可管理性
 ```
 
-### Why Not NNG
+### 为什么不是 Aeron
 
 ```
-NNG is more like a messaging/transport toolbox
-than a ready-made distributed message bus:
-  - suited to point-to-point communication
-  - not good at replacing a complete bus / pub-sub / request-reply hub
+Aeron 更强在低延迟传输和流式数据面，
+但它不是开箱即用的分布式消息总线：
+  - 需要更多自建协议和控制面
+  - 更适合 Data Plane
+  - 不适合直接承担控制面语义
 ```
 
-### Why Not Develop It In-House Directly
+### 为什么不是 NNG
 
 ```
-Developing the bus in-house would swallow ops, discovery, reconnection, routing, and permissions all at once,
-and the cost is usually higher than using a mature component first.
+NNG 更像消息/传输工具箱，
+而不是现成的分布式消息总线：
+  - 适合点对点通信
+  - 不擅长替代完整的 bus / pub-sub / request-reply 中枢
 ```
 
----
-
-## 1. Why a Message Bus Is Needed
+### 为什么不是直接自行开发
 
 ```
-A world without a message bus:
-  control-plane and cross-realm capabilities both rely on point-to-point connections
-  discovery, broadcast, and bridging quickly get out of control
-
-A world with a message bus:
-  Control Plane / Cross-Realm Async Plane have a unified entry point
-
-Extra benefits:
-  - process discovery and broadcast are simple
-  - cross-realm messages are naturally supported
-  - the request/response pattern is unified
-  - async task distribution is clearer
-
-Note:
-  MessageBus does not replace Runtime Transport.
-  The entity main path is still handled by the Runtime Data Plane.
+自行开发总线会把运维、发现、重连、路由、权限都吞进去，
+成本通常高于先用成熟组件。
 ```
 
 ---
 
-## 2. Backend Selection
+## 1. 为什么需要消息总线
 
-**Under MVP theseed chooses NATS as the default MessageBus backend**:
+```
+没有消息总线的世界：
+  控制面和跨服能力都依赖点对点连接
+  发现、广播、桥接很快失控
 
-| Candidate | Fit | Main Reason |
+有消息总线的世界：
+  Control Plane / Cross-Realm Async Plane 拥有统一入口
+
+额外好处：
+  - 进程发现和广播简单
+  - 跨服消息天然支持
+  - 请求/响应模式统一
+  - 异步任务分发更清晰
+
+注意：
+  MessageBus 不替代 Runtime Transport。
+  实体主路径仍然由 Runtime Data Plane 负责。
+```
+
+---
+
+## 2. 后端选择
+
+**MVP 下 theseed 选择 NATS 作为 MessageBus 默认后端**：
+
+| 候选 | 适配度 | 主要原因 |
 |------|------|------|
-| NATS | High | official native support for pub/sub, request-reply, and queue groups; suited to the control plane and cross-realm async |
-| Aeron | Medium | official positioning is low-latency transport, Archive, and Cluster; more like a data plane / transport layer |
-| NNG | Medium-low | official positioning is a protocols + transports toolbox, not a ready-made distributed bus |
-| In-house development | Low | discovery, routing, reconnection, permissions, and the ops plane all have to be built in-house |
+| NATS | 高 | 官方原生支持 pub/sub、request-reply、queue group，适合控制面和跨服异步 |
+| Aeron | 中 | 官方定位是低延迟传输、Archive、Cluster，更像 data plane / transport 层 |
+| NNG | 中低 | 官方定位是 protocols + transports 工具箱，不是现成分布式 bus |
+| 自行开发 | 低 | 要自己补发现、路由、重连、权限和运维面 |
 
-The reason for ultimately choosing NATS is not "lowest-level and fastest", but rather:
+最终选 NATS 的原因不是“最底层最快”，而是：
 
-- The runtime main path is already solved by Runtime Transport
-- MessageBus cares more about subject, request-reply, queue group, and cross-datacenter bridging
-- NATS fits the needs better on the control plane and cross-realm async
-- Its ops and deployment model is also more mature
-- NATS's official documentation explicitly lists request-reply and queue groups as core capabilities
+- 运行时主路径已由 Runtime Transport 解决
+- MessageBus 更看重 subject、request-reply、queue group、跨机房桥接
+- NATS 在控制面和跨服异步上更贴合需求
+- 运维和部署模型也更成熟
+- NATS 官方文档明确把 request-reply 和 queue groups 作为核心能力
 
-The boundaries are as follows:
+边界如下：
 
 1. Runtime Transport
    - EntityCall
-   - Ghost / Witness synchronization
-   - Migration data
+   - Ghost / Witness 同步
+   - 迁移数据
 
 2. MessageBus
-   - Control plane messages
-   - Cross-Realm async calls
-   - Background task distribution
-   - Broadcast / notification / offline queue
+   - 控制面消息
+   - 跨 Realm 异步调用
+   - 后台任务分发
+   - 广播 / 通知 / 离线队列
 
-Supplementary judgment:
+补充判断：
 
 ```
-Aeron is better suited to low-latency transport or as the lower layer of a bus, and is not suited to directly carrying control-plane semantics.
-NNG is better suited as a protocol and transport toolbox, and is not suited to directly replacing a distributed messaging hub.
+Aeron 更适合做低延迟传输或总线下层，不适合直接承担控制面语义。
+NNG 更适合做协议与传输工具箱，不适合直接替代一个分布式消息中枢。
 ```
 
 ---
 
-## 3. Core Interfaces
+## 3. 核心接口
 
 ```cpp
 class IMessageBus {
@@ -187,37 +187,37 @@ public:
 
 ---
 
-## 4. Message Uses
+## 4. 消息用途
 
 ```
-MessageBus uses
-├── control-plane messages
-│   ├── process online/offline notification
-│   ├── routing table update
-│   ├── configuration change broadcast
-│   └── hot update command dispatch
-├── async tasks
-│   ├── background task distribution
-│   ├── offline notification
-│   └── audit log
-└── cross-realm messages
-    ├── matchmaking
-    ├── query
-    ├── mail / notification
-    └── Bridge forwarding
+MessageBus 用途
+├── 控制面消息
+│   ├── 进程上下线通知
+│   ├── 路由表更新
+│   ├── 配置变更广播
+│   └── 热更命令下发
+├── 异步任务
+│   ├── 后台任务分发
+│   ├── 离线通知
+│   └── 审计日志
+└── 跨服消息
+    ├── 匹配
+    ├── 查询
+    ├── 邮件 / 通知
+    └── Bridge 转发
 ```
 
 ```
-MessageBus must not carry:
-  - EntityCall main path
-  - real → ghost state synchronization
-  - migration snapshot data
-  - in-tick real-time AOI / property replication
+MessageBus 禁止承载：
+  - EntityCall 主路径
+  - real → ghost 状态同步
+  - 迁移快照数据
+  - tick 内实时 AOI / 属性复制
 ```
 
 ---
 
-## 5. Cross-Realm Bridging
+## 5. 跨服桥接
 
 ```
 Realm A                           Realm B
@@ -227,14 +227,14 @@ Realm A                           Realm B
 │ CellApp_1       │              │ CellApp_1       │
 └─────────────────┘              └─────────────────┘
 
-Bridge configuration:
-  - only forward messages with the cross-realm prefix
-  - OTLP compatible (trace context propagation)
-  - supports request/response
-  - does not carry the entity's local authority path
+Bridge 配置：
+  - 只转发 cross-realm 前缀的消息
+  - OTLP 兼容（trace context 传播）
+  - 支持请求/响应
+  - 不承载实体本地权威路径
 ```
 
-### Cross-Realm Script API
+### 跨服脚本 API
 
 ```python
 import theseed
@@ -279,14 +279,14 @@ public:
 ### Realm Bridge
 
 ```
-Responsibilities:
-  1. message format conversion
-  2. Trace Context propagation
-  3. message persistence
-  4. authentication
-  5. flow control
+职责：
+  1. 消息格式转换
+  2. Trace Context 传播
+  3. 消息持久化
+  4. 认证
+  5. 流控
 
-Implementation:
-  same datacenter: NATS Leafnode
-  cross datacenter: NATS Gateway or a custom TCP bridge
+实现：
+  同机房：NATS Leafnode
+  跨机房：NATS Gateway 或自定义 TCP bridge
 ```

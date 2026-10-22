@@ -1,84 +1,84 @@
-# Entity System
+# Entity System — 实体系统
 
-> **English** | [中文](02-entity-system.zh.md)
+> **English** | 中文
 
-> The core design of theseed entities: the Base/Cell dual-body model, structured memory layout, and lifecycle management.
+> theseed 实体的核心设计：Base/Cell 双身体模型、结构化内存布局、生命周期管理。
 >
-> Origin: the BigWorld Base/Cell separation model.
-> Reference implementation: KBEngine's lightweight BaseEntity / CellEntity approach.
-> theseed adds the PropertyBlock structured memory layout.
+> 来源源头：BigWorld Base/Cell 分离模型。
+> 参考实现：KBEngine 的轻量 BaseEntity / CellEntity 落地方式。
+> theseed 新增 PropertyBlock 结构化内存布局。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld's entities use the Base / Cell dual-body model:
-  - Base owns long-term state and non-realtime logic
-  - Cell owns realtime position, AOI, combat, and view
-  - The two collaborate through EntityCall and the replication protocol
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine provides a lighter-weight Base / Cell approach:
-  - BaseEntity / CellEntity have clearly separated responsibilities
-  - Python scripts carry the business logic
-  - Structurally closer to a directly implementable runtime core
+BigWorld 的实体是 Base / Cell 双身体模型：
+  - Base 负责长期状态与非实时逻辑
+  - Cell 负责实时位置、AOI、战斗与视野
+  - 两者通过 EntityCall 和复制协议协作
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-Shared pros:
-  - Clear responsibility boundaries
-  - Realtime and non-realtime logic split naturally
-  - Suited to distributed deployment
-
-Shared cons:
-  - Cross-body calls are inherently network boundaries
-  - State synchronization and migration are more complex than with a monolithic entity
+KBEngine 提供了更轻量的 Base / Cell 落地方式：
+  - BaseEntity / CellEntity 分工明确
+  - Python 脚本承接业务逻辑
+  - 结构上更贴近可直接落地的 runtime core
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed continues to use the Base / Cell dual-body model,
-but writes the property layout, lifecycle, and replication boundaries more explicitly,
-avoiding mixing script objects and runtime objects into a single layer.
+共同优点：
+  - 职责边界清楚
+  - 实时和非实时逻辑自然拆分
+  - 适合分布式部署
+
+共同缺点：
+  - 跨身体调用天然是网络边界
+  - 状态同步和迁移复杂度高于单体实体
+```
+
+### theseed 的取舍
+
+```
+theseed 继续采用 Base / Cell 双身体模型，
+但把属性布局、生命周期和复制边界写得更明确，
+避免把脚本对象和运行时对象混成一层。
 ```
 
 ---
 
-## 1. Entity's Two Bodies: Base and Cell
+## 1. Entity 的两副身体：Base 和 Cell
 
 ```
-A logical entity (such as a "player") has two bodies in the cluster:
+一个逻辑实体（如"玩家"）在集群中有两副身体：
 
 Base Entity                          Cell Entity
-┌───────────────────────┐              ┌───────────────────────┐
-│ Lives in BaseApp      │              │ Lives in CellApp      │
-│ Long lifecycle        │              │ Short lifecycle       │
-│ Persisted to database │              │ Created on space entry│
-│ Non-realtime logic    │              │ Realtime logic        │
-│  - Mail system        │              │  - Position/movement  │
-│  - Friends system     │              │  - Combat/damage      │
-│  - Inventory/equipment│              │  - AOI/view           │
-│  - Guild              │              │  - Ghost              │
-│ No position           │              │ Has position          │
-└────────┬──────────────┘              └──────────┬────────────┘
+┌─────────────────────┐              ┌─────────────────────┐
+│ 存在于 BaseApp       │              │ 存在于 CellApp       │
+│ 生命周期长           │              │ 生命周期短            │
+│ 持久化到数据库        │              │ 进入空间才创建        │
+│ 处理非实时逻辑        │              │ 处理实时逻辑          │
+│  - 邮件系统           │              │  - 位置/移动          │
+│  - 好友系统           │              │  - 战斗/伤害          │
+│  - 背包/装备          │              │  - AOI/视野           │
+│  - 公会              │              │  - Ghost              │
+│ 无空间位置            │              │ 有空间位置            │
+└────────┬──────────────┘              └──────────┬──────────┘
          │                                        │
-         └── EntityCall two-way communication ──┘
+         └──── EntityCall 双向通信 ────────────────┘
 ```
 
 ---
 
-## 2. Entity Memory Layout
+## 2. Entity 内存布局
 
-KBEngine's Entity is a Python object, with properties stored in a Python dict. theseed switches to a structured memory layout:
+KBEngine 的 Entity 是 Python 对象，属性存储在 Python dict 中。theseed 改成结构化内存布局：
 
 ```cpp
 // runtime/Entity.h
@@ -163,11 +163,11 @@ private:
 
 ---
 
-## 3. PropertyBlock: Contiguous Memory Property Storage
+## 3. PropertyBlock：连续内存属性存储
 
-KBEngine stores all properties in a Python dict, so every read and write goes through the Python API, resulting in poor performance.
+KBEngine 把所有属性存在 Python dict 中，每次读写都要经过 Python API，性能差。
 
-theseed's improvement: **properties are stored in a compact memory block, and scripts access them directly by offset**.
+theseed 的改进：**属性用紧凑的内存块存储，脚本通过偏移量直接访问**。
 
 ```cpp
 // runtime/PropertyBlock.h
@@ -215,35 +215,35 @@ private:
 };
 ```
 
-**Comparison with KBEngine**:
+**与 KBEngine 的对比**：
 
 ```
 KBEngine:
   entity.health = 75
     → Python _tp_setattro
     → Entity::onScriptSetAttribute
-    → PropertyDescription::isSameType (type check)
-    → PyDict_SetItem (store into the Python dict)
-    → onDefDataChanged (notify of the change)
+    → PropertyDescription::isSameType (类型检查)
+    → PyDict_SetItem (存入 Python dict)
+    → onDefDataChanged (通知变更)
 
 theseed:
   entity.health = 75
     → ScriptPropertyBridge::set("health", 75)
     → PropertyBlock::set<INT32>(health_id, 75)
-    → write directly to the memory offset + set the dirty flag bit
-    → no Python dict overhead
+    → 直接写入内存偏移 + 设置脏标记位
+    → 无 Python dict 开销
 ```
 
 ---
 
-## 4. Entity Lifecycle State Machine
+## 4. Entity 生命周期状态机
 
 ```
                     createEntity()
                          │
                          ▼
                    ┌───────────┐
-                   │ Creating  │ def loading + property initialization + script object creation
+                   │ Creating  │ def 加载 + 属性初始化 + 脚本对象创建
                    └─────┬─────┘
                          │ onInitialize()
                          ▼
@@ -259,77 +259,77 @@ theseed:
        └─────┬──────┘ └─────┬──────┘         └─────┬──────┘
              │              │                       │
              ▼              ▼                       ▼
-       Active (in new    ┌───────────┐         Active (in new
+       Active(in new    ┌───────────┐         Active(in new
        Space/Cell)      │ Destroyed │         Process)
                        └───────────┘
 ```
 
 ---
 
-## 5. Entity Creation Flow
+## 5. Entity 创建流程
 
-Reference: KBEngine `Cellapp::onCreateCellEntityInNewSpaceFromBaseapp`:
+参考 KBEngine `Cellapp::onCreateCellEntityInNewSpaceFromBaseapp`：
 
 ```
-1. Parse the message stream: entityType / entityID / spaceID / hasClient
-2. Look up or create SpaceMemory
-3. Allocate Entity memory
-4. Call PropertyBlock::init(entityDef)
-5. Call PropertyBlock::deserialize(stream)  // initial data passed in from Base
-6. Establish baseEntityCall_
-7. If there is a client:
-   a. Establish clientEntityCall_
-   b. Create the Witness
-   c. Call onGetWitness()
+1. 解析消息流：entityType / entityID / spaceID / hasClient
+2. 查找或创建 SpaceMemory
+3. 分配 Entity 内存
+4. 调用 PropertyBlock::init(entityDef)
+5. 调用 PropertyBlock::deserialize(stream)  // 从 Base 传来的初始数据
+6. 建立 baseEntityCall_
+7. 如果有客户端：
+   a. 建立 clientEntityCall_
+   b. 创建 Witness
+   c. 调用 onGetWitness()
 8. space->addEntity(entity)
-9. entity->initializeEntity()  // script-layer onInitialize
-10. space->addEntityToNode(entity)  // add to the AOI coordinate system
+9. entity->initializeEntity()  // 脚本层 onInitialize
+10. space->addEntityToNode(entity)  // 加入 AOI 坐标系统
 ```
 
 ---
 
 ## 6. Runtime Memory
 
-### 6.1 Object Pool
+### 6.1 对象池
 
 ```
-Objects allocated at high frequency on a game server:
-  - MemoryStream (serialization buffer)
-  - Bundle (network message packet)
-  - Entity (entity)
-  - CoordinateNode (AOI node)
+游戏服务器高频分配的对象：
+  - MemoryStream（序列化缓冲区）
+  - Bundle（网络消息包）
+  - Entity（实体）
+  - CoordinateNode（AOI 节点）
 
-KBEngine uses an object pool (OBJECTPOOL_POINT):
+KBEngine 使用对象池（OBJECTPOOL_POINT）：
   MemoryStream::createPoolObject() / reclaimPoolObject()
   Witness::createPoolObject() / reclaimPoolObject()
 
-theseed continues to use object pools, but with improvements:
-  - Arena allocator (contiguous allocation of entity-related memory)
-  - Watermark monitoring (object pool watermarks reported to Metrics)
-  - Auto scaling (adjust pool size according to usage patterns)
+theseed 继续使用对象池，但改进：
+  - Arena 分配器（实体相关内存连续分配）
+  - 水位监控（对象池水位上报到 Metrics）
+  - 自动扩缩（根据使用模式调整池大小）
 ```
 
-### 6.2 Bundle Lifecycle
+### 6.2 Bundle 生命周期
 
 ```
-A Bundle is the carrier of network messages, and its lifecycle is critical:
+Bundle 是网络消息的载体，生命周期关键：
 
-1. Acquire a Bundle
+1. 获取 Bundle
    auto bundle = BundlePool::acquire();
 
-2. Write messages
+2. 写入消息
    bundle->newMessage(msgId);
    (*bundle) << entityId;
    (*bundle) << propertyId;
    (*bundle) << value;
 
-3. Send
+3. 发送
    channel->send(bundle);
-   // Note: after sending, ownership of the bundle transfers to the Channel
-   // The Channel returns it to the pool automatically once sending completes
+   // 注意：发送后 bundle 的所有权转移给 Channel
+   // Channel 发送完毕后自动归还到池
 
-4. Receive
+4. 接收
    auto bundle = channel->receive();
-   // After handling is complete
+   // 处理完毕后
    BundlePool::release(bundle);
 ```

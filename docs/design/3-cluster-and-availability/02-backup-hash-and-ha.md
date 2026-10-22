@@ -1,215 +1,215 @@
-# Backup Hash & HA Recovery Chain — Hot-Standby Chain, Recovery Authority, and Switch Boundary
+# Backup Hash & HA Recovery Chain — 热备链、恢复权威与切换边界
 
-> **English** | [中文](02-backup-hash-and-ha.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `BackupHash / BackupHashChain / BackupSender / BaseAppMgr::useNewBackupHash / requestBackupHashChain`.
-> KBEngine has no complete equivalent hot-standby responsibility chain and can only serve as a basic recovery reference.
-> This document is not repeating `EntityBackup`; it establishes BigWorld's genuinely systematized hot-standby chain as its own topic.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-The core HA difference of BigWorld lies in BackupHash / BackupHashChain:
-  - Clear primary / backup ownership
-  - The backup chain can be switched
-  - On crash / retire there is recovery authority and chain adjustment logic
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine has no complete equivalent BackupHash system.
-It leans more toward basic recovery and persistence, and does not have a BigWorld-level hot-standby chain.
-```
-
-### Pros and Cons
-
-```
-BigWorld's advantages:
-  - Clear hot-standby relationship
-  - Systematized recovery chain
-
-KBEngine's advantages:
-  - Simple
-  - No need to bear complex HA state synchronization
-
-Shared disadvantages:
-  - Once hot standby is implemented, recovery authority, switch ordering, and consistency all become high-risk points
-```
-
-### theseed's Trade-offs
-
-```
-theseed does not write BackupHash into the MVP,
-but it must establish this BigWorld-level HA boundary on its own,
-to avoid continuing to mistakenly write "high availability" as "process startup + database read recovery" in the future.
-```
-
-### Why It Cannot Be Merged Back into Fault Tolerance
-
-```
-Fault Tolerance discusses "whether the system can come back after a crash".
-BackupHash / HA Chain discusses:
-  - Where backup responsibility falls
-  - How switching does priming / ack / promote
-  - Who arbitrates recovery authority
-
-The two are related, but they are not the same layer of problem.
-```
+> 来源源头：BigWorld `BackupHash / BackupHashChain / BackupSender / BaseAppMgr::useNewBackupHash / requestBackupHashChain`。
+> KBEngine 没有完整对等的热备责任链，只能作为基础恢复参考。
+> 这篇不是在重复 `EntityBackup`，而是把 BigWorld 真正成体系的热备链路单独立住。
 
 ---
 
-## 0. Design Boundary
+## 0.5 引擎实现对照与取舍
+
+### BigWorld 是怎么实现的
 
 ```
-This document covers:
-  - The responsibility boundary of BackupHash / BackupHashChain
+BigWorld 的 HA 核心差异在 BackupHash / BackupHashChain：
+  - primary / backup ownership 清晰
+  - 备份链可切换
+  - crash / retire 时有恢复权威和链路调整逻辑
+```
+
+### KBEngine 是怎么实现的
+
+```
+KBEngine 没有完整对等的 BackupHash 体系。
+它更偏向基础恢复和持久化，不具备 BigWorld 级热备链。
+```
+
+### 优缺点
+
+```
+BigWorld 的优点：
+  - 热备关系明确
+  - 恢复链条系统化
+
+KBEngine 的优点：
+  - 简单
+  - 不需要承担复杂 HA 状态同步
+
+共同缺点：
+  - 一旦做热备，恢复权威、切换顺序和一致性都会变成高风险点
+```
+
+### theseed 的取舍
+
+```
+theseed 不把 BackupHash 写进 MVP，
+但必须把这条 BigWorld 级 HA 边界单独立住，
+避免未来把“高可用”继续误写成“进程拉起 + 读库恢复”。
+```
+
+### 为什么不能并回 Fault Tolerance
+
+```
+Fault Tolerance 讲的是“宕机后能不能回来”。
+BackupHash / HA Chain 讲的是：
+  - 备份责任落在哪里
+  - 切换如何 priming / ack / promote
+  - 恢复权威由谁裁定
+
+两者相关，但不是同一层问题。
+```
+
+---
+
+## 0. 设计边界
+
+```
+本篇负责：
+  - BackupHash / BackupHashChain 的职责边界
   - primary / backup ownership
-  - The newBackupHash switch flow
-  - Recovery authority and chain adjustment on retire / crash
+  - newBackupHash 切换流程
+  - retire / crash 时的恢复权威与链路调整
 
-This document does not cover:
-  - The primary database archive interface
-  - The file organization of LocalArchiveStore
-  - Concrete serialization formats and compression algorithms
+本篇不负责：
+  - 主数据库归档接口
+  - LocalArchiveStore 的文件组织
+  - 具体序列化格式与压缩算法
 ```
 
-Its relationship to other documents:
+它和其他文档的关系：
 
 ```
 01-fault-tolerance
-  - Explains why multi-level fault tolerance is needed
+  - 说明 why 需要多级容错
 
 03-local-archive-and-secondary-db
-  - Explains what the local archive staging layer is
+  - 说明本地归档暂存层是什么
 
-This document
-  - Explains how a BigWorld-level hot-standby chain actually holds together
+本篇
+  - 说明 BigWorld 级热备链到底怎么成立
 ```
 
 ---
 
-## 1. Why It Must Be a Separate Document
+## 1. 为什么必须单独成篇
 
-BigWorld's high-availability difference is not about "one more backup replica".
+BigWorld 的高可用差异，不在于“多一个备份副本”。
 
-The real difference is that it turns the following into one system:
-
-```
-1. Every Base entity can be mapped to a backup destination
-2. A backup destination change is not an instantaneous replacement, but has a switch period
-3. During retire, the backup hash must be frozen
-4. After a BaseApp dies, who recovers and to where are both derivable within the chain
-5. BaseAppMgr can distribute the backup hash chain as a cluster-level authority
-```
-
-If this layer is not written out, `EntityBackup` will be misunderstood as:
+真正的差异在于它把下面几件事做成了一个系统：
 
 ```
-"Just throw the entity snapshot to another BaseApp"
+1. 每个 Base 实体都能映射到备份落点
+2. 备份落点变更不是瞬时替换，而是有切换期
+3. retire 期间 backup hash 必须冻结
+4. BaseApp 死亡后，谁负责恢复、恢复到哪，都是链路内可推导的
+5. BaseAppMgr 能把 backup hash chain 作为集群级权威分发
 ```
 
-This is not on the same level as BigWorld's implementation.
-
-More directly:
+如果不把这层写出来，`EntityBackup` 会被误解成：
 
 ```
-"Having a backup replica"
-  is not equal to
-"Having a switchable, arbitrable, rebuildable hot-standby chain"
+“把实体快照丢给另一台 BaseApp 就行”
+```
+
+这和 BigWorld 的实现不是一个层级。
+
+更直接地说：
+
+```
+“有备份副本”
+  不等于
+“有可切换、可裁定、可重建的热备链”
 ```
 
 ---
 
-## 2. What It Actually Is
+## 2. 它到底是什么
 
 ### 2.1 BackupHash
 
-What `BackupHash` solves:
+`BackupHash` 解决的是：
 
 ```
 EntityId
   → backup BaseApp location
 ```
 
-In other words, it describes "where the hot-standby replica of a given Base entity should land".
+也就是说，它描述的是“某个 Base 实体的热备副本应该落到哪里”。
 
 ### 2.2 BackupHashChain
 
-What `BackupHashChain` solves:
+`BackupHashChain` 解决的是：
 
 ```
-When a BaseApp dies:
-  - How the affected backup responsibilities are re-arranged
-  - Which BaseApps are holding backups for which BaseApps
-  - Which chain the recovered new instance should rejoin
+当某个 BaseApp 死亡时：
+  - 受影响的备份责任如何重排
+  - 哪些 BaseApp 正在为哪些 BaseApp 持有备份
+  - 恢复后的新实例应接回哪条链
 ```
 
-So it is not a simple hash table, but:
+所以它不是简单的哈希表，而是：
 
 ```
-Cluster-level backup responsibility chain
+集群级备份责任链
 ```
 
 ### 2.3 newBackupHash
 
-In BigWorld, the existence of `newBackupHash` shows one key fact:
+BigWorld 里 `newBackupHash` 的存在说明了一件关键事实：
 
 ```
-A backup destination change is not an atomic replacement.
-The new chain must first be primed, then acked for the switch.
+备份落点变更不是原子替换。
+必须先 priming 新链，再 ack 切换。
 ```
 
-This is also a point that theseed documents had not yet explained separately.
+这也是 theseed 文档此前还没单独讲清的点。
 
 ---
 
-## 3. Core Concepts
+## 3. 核心概念
 
 ### 3.1 Primary Ownership
 
 ```
 Primary
-  - The current runtime authority of the entity
-  - Responsible for serving the outside
-  - Responsible for generating backup snapshots
+  - 实体当前运行时权威
+  - 负责对外服务
+  - 负责生成备份快照
 ```
 
 ### 3.2 Backup Ownership
 
 ```
 Backup
-  - Holds the hot-standby replica
-  - Does not become the primary authority of the entity externally
-  - Participates in recovery only after the primary instance fails
+  - 持有热备副本
+  - 不对外成为实体主权威
+  - 仅在主实例失效后参与恢复
 ```
 
 ### 3.3 Restore Authority
 
 ```
 Restore Authority
-  - Who has the right to initiate recovery after a crash
-  - Which new primary the entity should bind to after recovery
-  - Who arbitrates whether the backup snapshot is usable
+  - 宕机后谁有权发起恢复
+  - 恢复后实体应绑定到哪个新 primary
+  - 谁来裁定 backup snapshot 是否可用
 ```
 
-In theseed, this authority should not be scattered across local judgments of each BaseApp, but should be uniformly provided by:
+在 theseed 里，这个权威不应散落在各个 BaseApp 本地判断里，而应由：
 
 ```
 Cluster Control Plane / HA Coordinator
 ```
 
-and issued uniformly.
+统一给出。
 
 ---
 
-## 4. BigWorld-Style Chain Model
+## 4. BigWorld 式链路模型
 
-theseed is recommended to state the following model explicitly at the document level:
+推荐 theseed 在文档层明确下面这条模型：
 
 ```
 Entity
@@ -218,20 +218,20 @@ Entity
   → cluster-level adjustment (via BackupHashChain)
 ```
 
-At runtime there are three hash views:
+在运行中会出现三种 hash 视图：
 
 ```
 1. active hash
-   - The backup destination currently in effect
+   - 当前已生效的备份落点
 
 2. staging hash
-   - The new backup destination being primed
+   - 正在 priming 的新备份落点
 
 3. chain authority
-   - The cluster-level backup responsibility chain authority
+   - 集群级的备份责任链权威
 ```
 
-The corresponding BigWorld semantics can be abstracted as:
+对应 BigWorld 的语义可以抽象成：
 
 ```
 backupHash
@@ -241,39 +241,39 @@ BackupHashChain
 
 ---
 
-## 5. Switching Is Not an Instantaneous Operation
+## 5. 切换不是瞬时操作
 
-BigWorld's `useNewBackupHash` / `ackNewBackupHash` show that switching contains at least two stages:
+BigWorld 的 `useNewBackupHash` / `ackNewBackupHash` 说明切换至少包含两个阶段：
 
 ### 5.1 Priming
 
 ```
-The old chain is still in effect
-The new chain begins receiving initialization backups
+旧链仍然有效
+新链开始接收初始化备份
 ```
 
-Purpose:
+目的：
 
 ```
-To avoid the new backup side not yet having a complete entity snapshot right after a direct switch
+避免直接切换后新备份侧还没有完整实体快照
 ```
 
 ### 5.2 Ack & Promote
 
 ```
-When the new chain completes priming:
-  - BaseApp acks the new hash
-  - BaseAppMgr / HA Coordinator promotes the new hash to active
-  - The old hash is retired
+当新链完成 priming：
+  - BaseApp ack 新 hash
+  - BaseAppMgr / HA Coordinator 提升新 hash 为 active
+  - 旧 hash 退役
 ```
 
-This means theseed should not write switching as:
+这意味着 theseed 不应把切换写成：
 
 ```
-replacing the backup target directly after rebalance
+rebalance 之后直接替换 backup target
 ```
 
-The correct phrasing should be:
+正确表述应是：
 
 ```
 prepare
@@ -284,92 +284,92 @@ prepare
 
 ---
 
-## 6. Key Constraints During retire
+## 6. retire 时的关键约束
 
-BigWorld has a very strong constraint during retire:
-
-```
-A BaseApp in retire must keep its backup hash stable
-```
-
-The reason is not an implementation detail, but system correctness:
+BigWorld 在 retire 期间有一个很强的约束：
 
 ```
-If the backup hash keeps changing during offloading,
-then once some entity crashes within the migration window,
-the system may be unable to determine where it should recover from, and where it should migrate to after recovery.
+retire 中的 BaseApp 必须保持 backup hash 稳定
 ```
 
-Therefore theseed should make clear:
+原因不是实现细节，而是系统正确性：
 
 ```
-In the Draining / Retiring state:
-  - The primary route may migrate
-  - The backup hash should not be rewritten arbitrarily
-  - If a switch is needed, it must wait for the current round of offload to complete or for the chain to be rebuilt
+如果 offloading 途中 backup hash 继续变化，
+那么某个实体一旦在迁移窗口宕机，
+系统可能无法判定它应从哪里恢复、恢复后又该迁到哪里。
+```
+
+因此 theseed 应明确：
+
+```
+Draining / Retiring 状态下：
+  - primary route 可以迁移
+  - backup hash 不应随意改写
+  - 如需切换，必须等本轮 offload 完成或重新建链
 ```
 
 ---
 
-## 7. Recovery Authority on crash
+## 7. crash 时的恢复权威
 
-### 7.1 Recovery Flow
+### 7.1 恢复流程
 
-theseed is recommended to write the main hot-standby recovery path as:
+推荐 theseed 将热备恢复主路径写成：
 
 ```
 BaseApp_A crash
-  → Supervisor / Control Plane detects the failure
-  → HA Coordinator queries the chain authority
-  → Confirms the backup owners corresponding to the entities on A
-  → Starts BaseApp_A' or selects a new primary
-  → Restores entity snapshots from the backup owners
-  → Repairs routing / session / epoch
-  → Publishes the new backup chain
+  → Supervisor / Control Plane 发现失效
+  → HA Coordinator 查询 chain authority
+  → 确认 A 上实体对应的 backup owners
+  → 拉起 BaseApp_A' 或选定新 primary
+  → 从 backup owners 恢复实体快照
+  → 修复路由 / 会话 / epoch
+  → 发布新的 backup chain
 ```
 
-### 7.2 Authority Requirements
+### 7.2 权威要求
 
-Three points must be emphasized here:
+这里必须强调三点：
 
 ```
-1. The recovery entry point must be arbitrated at a single point
-   - To prevent multiple backups from spontaneously "taking over" at the same time
+1. 恢复入口必须单点裁定
+   - 防止多个 backup 同时自发“接管”
 
-2. The recovery target must be explicit
-   - Whether to recover to a new instance in place, or to another capable instance
+2. 恢复目标必须明确
+   - 恢复到原位新实例，还是恢复到其他可承载实例
 
-3. The backup relationship after recovery must be rebuilt
-   - Successful recovery does not mean the HA feedback loop is complete
+3. 恢复后的 backup 关系必须重建
+   - 恢复成功不等于 HA 闭环完成
 ```
 
 ---
 
-## 8. Relationship with EntityBackup / LocalArchiveStore
+## 8. 和 EntityBackup / LocalArchiveStore 的关系
 
-The three must be strictly distinguished:
+三者必须严格区分：
 
-| Layer | Role | Typical Medium | Semantics |
+| 层次 | 作用 | 典型介质 | 语义 |
 |------|------|----------|------|
-| EntityBackup | Hot-standby snapshot of a single entity | Memory of another BaseApp | Lower RPO / faster recovery |
-| BackupHash / Chain | Backup responsibility routing and recovery authority | Cluster control plane state | Decides who the backup should be sent to and from whom to recover after death |
-| LocalArchiveStore | Local archive staging | SQLite / other embedded storage | Shutdown flushing, consolidation, transport |
+| EntityBackup | 单个实体热备快照 | 另一台 BaseApp 内存 | 更低 RPO / 更快恢复 |
+| BackupHash / Chain | 备份责任路由与恢复权威 | 集群控制面状态 | 决定备份该发给谁、死后从谁恢复 |
+| LocalArchiveStore | 本地归档暂存 | SQLite / 其他嵌入式存储 | 停服落盘、归并、搬运 |
 
-So the relationship is:
+所以关系是：
 
 ```
 EntityBackup
-  depends on BackupHash / Chain to form systematized HA
+  依赖 BackupHash / Chain 才能形成系统化 HA
 
 LocalArchiveStore
-  does not provide backup routing authority
+  不提供 backup routing authority
 ```
 
 ---
 
-## 9. theseed's Abstraction Proposal
+## 9. theseed 的抽象建议
 
-### 9.1 HA Coordination Interface
+### 9.1 HA 协调接口
 
 ```cpp
 // ha/IBackupTopologyCoordinator.h
@@ -400,7 +400,7 @@ public:
 };
 ```
 
-### 9.2 Hot-Standby Management Interface
+### 9.2 热备管理接口
 
 ```cpp
 // ha/IEntityBackupReplicator.h
@@ -425,19 +425,19 @@ public:
 };
 ```
 
-Design requirements:
+设计要求：
 
 ```
-1. route authority and snapshot transport are layered
-2. epoch/version must be explicitly visible
-3. restorePrimary is not equal to "just pick a backup and read it out"
+1. route authority 和 snapshot transport 分层
+2. epoch/version 必须显式可见
+3. restorePrimary 不等于“随便找个备份读出来”
 ```
 
 ---
 
-## 10. State Machine Proposal
+## 10. 状态机建议
 
-### 10.1 Topology State
+### 10.1 拓扑状态
 
 ```
 Stable
@@ -447,14 +447,14 @@ Stable
   → Stable
 ```
 
-Exception branches:
+异常分支：
 
 ```
 Priming → Aborted
 Promoting → Aborted
 ```
 
-### 10.2 Process-Side State
+### 10.2 进程侧状态
 
 ```
 Running
@@ -468,43 +468,43 @@ Running
   → Running
 ```
 
-Requirements:
+要求：
 
 ```
-1. While Retiring, an uncontrolled backup topology rebuild must not be accepted
-2. After Recovering completes, it must rejoin the backup chain
-3. The topology version must be recorded together with the recovery event
-```
-
----
-
-## 11. Phased Boundaries
-
-```
-MVP:
-  - Does not commit to BackupHash / BackupHashChain
-  - Only retains abstract terms and responsibility boundaries
-  - Recovery still relies mainly on database archiving
-
-Phase 2:
-  - Introduce BackupTopologyCoordinator
-  - Support single-replica Base hot standby
-  - Support the prepare → prime → ack → promote switch chain
-
-Phase 3:
-  - More stable recovery authority arbitration
-  - Finer-grained topology health / skew checks
-  - Interlock with the rolling update / retire / data ops platform
+1. Retiring 时不能接受不受控的 backup topology rebuild
+2. Recovering 完成后必须重新接入 backup chain
+3. topology version 必须随恢复事件一起记录
 ```
 
 ---
 
-## 12. Comparison with BigWorld / KBEngine / theseed
+## 11. 分阶段边界
 
-| Dimension | BigWorld | KBEngine | theseed |
+```
+MVP：
+  - 不承诺 BackupHash / BackupHashChain
+  - 只保留抽象名词和职责边界
+  - 恢复仍以数据库归档为主
+
+Phase 2：
+  - 引入 BackupTopologyCoordinator
+  - 支持单副本 Base 热备
+  - 支持 prepare → prime → ack → promote 切换链路
+
+Phase 3：
+  - 更稳定的恢复权威裁定
+  - 更细粒度的 topology health / skew 检查
+  - 与 rolling update / retire / data ops 平台联动
+```
+
+---
+
+## 12. 与 BigWorld / KBEngine / theseed 的对比
+
+| 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| BackupHash | Yes | No | Phase 2 goal |
-| BackupHashChain | Yes | No | Phase 2 goal |
-| newBackupHash switch period | Yes | No | Explicitly modeled |
-| Freeze backup chain during retire | Yes | No | Explicitly written into the boundary |
-| Hot-standby recovery authority | Cluster-level coordination | Basically none | Delegated to HA Coordinator |
+| BackupHash | 有 | 无 | Phase 2 目标 |
+| BackupHashChain | 有 | 无 | Phase 2 目标 |
+| newBackupHash 切换期 | 有 | 无 | 显式建模 |
+| retire 时冻结备份链 | 有 | 无 | 明确写入边界 |
+| 热备恢复权威 | 集群级协调 | 基本无 | 交给 HA Coordinator |

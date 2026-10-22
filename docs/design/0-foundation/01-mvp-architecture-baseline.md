@@ -1,259 +1,259 @@
-# MVP Architecture Baseline — An Implementable Architecture Baseline
+# MVP Architecture Baseline — 可落地架构基线
 
-> **English** | [中文](01-mvp-architecture-baseline.zh.md)
+> **English** | 中文
 
-> This document does not replace the existing per-topic designs; it provides unified constraints for the current implementation stage.
-> The goal is to first build a theseed MVP that runs stably, has clear boundaries, and can evolve continuously.
-> See [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md) for the top-level positioning.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld implements it
-
-```
-BigWorld is theseed's origin reference:
-  - Strong Runtime backbone
-  - Complete Space / AOI / Witness / Ghost semantics
-  - HA / data / login / control plane / toolchain form a coherent system
-  - But heavy overall, so the MVP cannot port it item by item
-```
-
-### How KBEngine implements it
-
-```
-KBEngine is one of theseed's important reference implementations:
-  - Concise tick / entity / AOI / EntityCall
-  - Strong runtime implementation
-  - Good for validating how the minimal loop runs end to end
-  - But its system-layer capabilities are thin
-```
-
-### Pros and cons
-
-```
-BigWorld pros:
-  - Complete system boundaries
-  - Runtime and ops chains form a coherent system
-
-BigWorld cons:
-  - Heavy
-  - Complex
-  - High cost to port directly into the MVP
-
-KBEngine pros:
-  - Light
-  - Easy to implement
-  - A realistic reference for the runtime loop
-
-KBEngine cons:
-  - Thin system-level capabilities
-  - Ops, HA, and the toolchain must be built yourself
-```
-
-### theseed's trade-offs
-
-```
-theseed takes BigWorld's MMO server-side system areas as its origin boundary,
-takes KBEngine's lightweight runtime implementation as one of its reference implementations,
-and then re-splits, converges, and implements it in a modern engineering way.
-
-Therefore the MVP targets a runnable loop,
-while not treating KBEngine's simplified capabilities as an upper bound.
-The current stage implements only the minimal runnable loop,
-but the document boundaries must preserve the direction of BigWorld-level system capabilities.
-```
+> 这篇文档不是替代现有分篇设计，而是为现阶段实现提供统一约束。
+> 目标是先做出一个能稳定跑起来、边界清晰、可持续演进的 theseed MVP。
+> 顶层定位见 [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md)。
 
 ---
 
-## 1. Purpose of This Document
+## 0.5 引擎实现对照与取舍
 
-The current design documents cover a very wide range, already including:
+### BigWorld 是怎么实现的
 
-- Base/Cell, Ghost/Witness, AOI, migration, fault tolerance
-- XML/XSD data definition, multi-backend storage, server merge
-- Gateway, message bus, Redis, async tasks
-- Hot update, client SDK, OTel, script debugging, auto-scaling
+```
+BigWorld 是 theseed 的源头参考：
+  - Runtime 主干强
+  - Space / AOI / Witness / Ghost 语义完整
+  - HA / 数据 / 登录 / 控制面 / 工具链成体系
+  - 但整体偏重，MVP 不能逐项搬运
+```
 
-These directions are fine in themselves, but before entering the implementation stage, the following must be clarified first:
+### KBEngine 是怎么实现的
 
-1. Which capabilities belong to the MVP
-2. Which capabilities are only reserved for Phase 2 / Phase 3
-3. What the hard boundaries between modules are
-4. What the runtime consistency rules are
+```
+KBEngine 是 theseed 的重要参考实现之一：
+  - tick / entity / AOI / EntityCall 简洁
+  - 运行时落地强
+  - 适合校验最小闭环如何跑通
+  - 但系统层能力偏薄
+```
 
-This document addresses these 4 questions first.
+### 优缺点
+
+```
+BigWorld 优点：
+  - 系统边界完整
+  - 运行时与运维链条成体系
+
+BigWorld 缺点：
+  - 重
+  - 复杂
+  - MVP 直接搬运成本高
+
+KBEngine 优点：
+  - 轻
+  - 易落地
+  - 适合做运行时闭环的现实参照
+
+KBEngine 缺点：
+  - 系统级能力薄
+  - 运维、HA、工具链要自己补
+```
+
+### theseed 的取舍
+
+```
+theseed 以 BigWorld 的 MMO 服务端系统面为源头边界，
+以 KBEngine 的轻量运行时落地方式作为参考实现之一，
+再用现代工程方式重新拆分、收敛和落地。
+
+因此 MVP 以可运行闭环为目标，
+同时不把 KBEngine 的简化能力当成上限。
+当前阶段只实现最小可运行闭环，
+但文档边界必须保留 BigWorld 级系统能力的方向。
+```
 
 ---
 
-## 2. MVP Goals
+## 1. 文档目的
 
-theseed's MVP does not aim to "fully replace BigWorld", nor does it target "redoing KBEngine".
-The MVP pursues only one thing:
+当前设计文档覆盖范围很大，已经包含：
 
-**Build a distributed game server kernel that runs within a single datacenter, is single-Realm, and can support room-based/instance-based/small-to-medium map gameplay.**
+- Base/Cell、Ghost/Witness、AOI、迁移、容错
+- XML/XSD 数据定义、多后端存储、合服
+- Gateway、消息总线、Redis、异步任务
+- 热更新、客户端 SDK、OTel、脚本调试、自动扩缩
 
-It must have the structural headroom to keep evolving into a large MMO, but must not stuff the system complexity of Phase 2 / Phase 3 into Phase 1 ahead of time.
+这些方向本身没有问题，但在进入实现阶段前，必须先明确：
 
-The MVP explicitly supports:
+1. 哪些能力属于 MVP
+2. 哪些能力只是 Phase 2 / Phase 3 预留
+3. 各模块之间的硬边界是什么
+4. 运行时的一致性规则是什么
 
-- Base/Cell dual-body model
-- Single-threaded tick runtime
+本文档优先解决这 4 个问题。
+
+---
+
+## 2. MVP 目标
+
+theseed 的 MVP 不追求“完整替代 BigWorld”，也不以“重做 KBEngine”为目标。
+MVP 只追求一件事：
+
+**做出一个单机房内可运行的、单 Realm 的、可支撑房间制/副本制/中小地图玩法的分布式游戏服务器内核。**
+
+它必须具备继续演进到大型 MMO 的结构余量，但不能把 Phase 2 / Phase 3 的系统复杂度提前塞进 Phase 1。
+
+MVP 明确支持：
+
+- Base/Cell 双体模型
+- 单线程 tick 运行时
 - SingleCell Space
-- Cross-linked list AOI
-- Witness view synchronization
+- 十字链表 AOI
+- Witness 视野同步
 - Base ↔ Cell EntityCall
-- MySQL persistence
-- XML/XSD data definition
-- Gateway access
+- MySQL 持久化
+- XML/XSD 数据定义
+- Gateway 接入
 - Metrics + Logging
-- Unity client code generation
+- Unity 客户端代码生成
 
-The MVP explicitly does not support:
+MVP 明确不支持：
 
-- Dynamic multi-Cell topology
-- Cross-datacenter cross-Realm migration
-- Script stack migration
-- L3/L4 hot update
-- Multiple database backends being fully available at once
-- Full engineering-grade support for UE5/Cocos
-- Auto-scaling loop
+- 动态多 Cell 拓扑
+- 跨机房跨 Realm 迁移
+- 脚本栈迁移
+- L3/L4 热更新
+- 多数据库后端同时齐备
+- UE5/Cocos 全量工程级支持
+- 自动扩缩容闭环
 
 ---
 
-## 3. First Principles
+## 3. 第一原则
 
 ### 3.1 Runtime First
 
-Prioritize runtime correctness before discussing platform capabilities.
+优先保证运行时正确性，再谈平台能力。
 
-The ordering is as follows:
+排序如下：
 
-1. Tick consistency
-2. Correct Entity lifecycle
-3. Correct message routing
-4. Correct property synchronization
-5. Correct persistence
-6. Usable observability
-7. Enhanced ops capabilities
+1. Tick 一致性
+2. Entity 生命周期正确
+3. 消息路由正确
+4. 属性同步正确
+5. 持久化正确
+6. 可观测性可用
+7. 运维能力增强
 
-### 3.2 Single source of truth
+### 3.2 单一事实来源
 
-A given responsibility may have only one main channel:
+同一种职责只能有一个主通道：
 
-- Entity runtime messages may only go through the Runtime Transport
-- Control plane messages may only go through the Control Plane
-- Cross-Realm async messages may only go through the Cross-Realm Bridge
+- 实体运行时消息，只能走 Runtime Transport
+- 控制面消息，只能走 Control Plane
+- 跨 Realm 异步消息，只能走 Cross-Realm Bridge
 
-It is forbidden for the same kind of message to go through two links at once.
+禁止同一类消息同时走两条链路。
 
-### 3.3 Implementation before vision
+### 3.3 实现优先于愿景
 
-Any capability that would significantly increase the difficulty of state consistency does not enter the MVP by default:
+凡是会显著增加状态一致性难度的能力，默认不进入 MVP：
 
-- Coroutine stack migration
-- Arbitrary script hot replacement
-- Online protocol changes
-- Automatic rebalance of dynamic topology
-- Unified advanced query semantics across backends
+- 协程栈迁移
+- 任意脚本热替换
+- 在线协议变更
+- 动态拓扑自动 rebalance
+- 跨后端统一高级查询语义
 
 ---
 
-## 4. The Three Planes
+## 4. 三个平面
 
-What most needs unifying in the current documents is the communication boundary. The MVP fixes it to three planes.
+当前文档最需要统一的是通信边界。MVP 固定为三个平面。
 
 ### 4.1 Runtime Data Plane
 
-Responsibilities:
+职责：
 
 - EntityCall
-- Base ↔ Cell control messages
-- Entity creation/destruction
-- Real → Ghost synchronization
-- Server-internal forwarding before Witness → Client synchronization
-- Runtime data transfer during migration
+- Base ↔ Cell 控制消息
+- 实体创建/销毁
+- Real → Ghost 同步
+- Witness → Client 同步前的服务端内部转发
+- 迁移过程中的运行时数据传输
 
-Requirements:
+要求：
 
-- Order preservation
-- Low latency
-- Backpressure
-- Entity-routing awareness
+- 保序
+- 低延迟
+- 有背压
+- 可感知实体路由
 
-Conclusion:
+结论：
 
-**The Runtime Data Plane does not go through the MessageBus.**
+**Runtime Data Plane 不走 MessageBus。**
 
 ### 4.2 Control Plane
 
-Responsibilities:
+职责：
 
-- Process bring-up/take-down
-- Routing table publication
-- Configuration change broadcast
-- Deploy, drain, restart commands
-- Monitoring and alerting events
+- 进程上下线
+- 路由表发布
+- 配置变更广播
+- 部署、drain、重启命令
+- 监控与告警事件
 
-Characteristics:
+特点：
 
-- Not on the critical path within a tick
-- Extra hops allowed
-- More focused on observability and management
+- 不是 tick 内关键路径
+- 允许额外跳数
+- 更关注可观测和管理
 
 ### 4.3 Cross-Realm Async Plane
 
-Responsibilities:
+职责：
 
-- Cross-server matchmaking
-- Cross-server queries
-- Cross-server mail/notifications
-- Cross-datacenter bridging
+- 跨服匹配
+- 跨服查询
+- 跨服邮件/通知
+- 跨机房桥接
 
-Characteristics:
+特点：
 
-- Not the entity's local authoritative path
-- Explicit timeouts, retries, and compensation allowed
-- Decoupled from the Runtime lifecycle
-
----
-
-## 5. Concurrency and Threading Model
-
-The MVP adopts strict threading constraints.
-
-### 5.1 Entity ownership
-
-Each Entity belongs to only one tick thread at any moment.
-
-Rules:
-
-- Only the owning tick thread may read/write Entity memory
-- PropertyBlock is not a concurrent container
-- Witness, Ghost, Controller, and Timer all follow the thread the Entity is on
-
-### 5.2 Async callback rules
-
-Async tasks may run on background threads, but their results may only return to the tick thread by "posting an event".
-
-Forbidden:
-
-- Modifying an Entity directly on a background thread
-- Blocking on `Future.get()` on the tick thread
-- Synchronously waiting for external I/O inside a script callback
-
-Allowed:
-
-- Posting `onDbLoaded` after the DB thread completes
-- Posting `onHttpResponse` after the HTTP thread completes
-- Posting `onCrossRealmResult` after a cross-server request completes
+- 不是实体本地权威路径
+- 允许显式超时、重试、补偿
+- 与 Runtime 生命周期解耦
 
 ---
 
-## 6. Tick and Synchronization Baseline
+## 5. 并发与线程模型
 
-The MVP uniformly adopts the following timing model:
+MVP 采用严格的线程约束。
+
+### 5.1 Entity 所有权
+
+每个 Entity 在任意时刻只属于一个 tick 线程。
+
+规则：
+
+- 只有 owning tick 线程可以读写 Entity 内存
+- PropertyBlock 不是并发容器
+- Witness、Ghost、Controller、Timer 都跟随 Entity 所在线程
+
+### 5.2 异步回调规则
+
+异步任务可以在后台线程执行，但结果只能以“投递事件”的方式回到 tick 线程。
+
+禁止：
+
+- 在后台线程直接修改 Entity
+- 在 tick 线程阻塞等待 `Future.get()`
+- 在脚本回调里同步等待外部 I/O
+
+允许：
+
+- DB 线程完成后投递 `onDbLoaded`
+- HTTP 线程完成后投递 `onHttpResponse`
+- 跨服请求完成后投递 `onCrossRealmResult`
+
+---
+
+## 6. Tick 与同步基线
+
+MVP 统一采用下面的时序模型：
 
 1. Network Ingress
 2. Timer
@@ -262,130 +262,130 @@ The MVP uniformly adopts the following timing model:
 5. Sync Build
 6. Flush
 
-Key constraints:
+关键约束：
 
-- Modifying properties within a tick is allowed
-- Within a tick, only dirty marking is done; nothing is sent out immediately
-- The sync packet is constructed uniformly at the end of the tick
-- The flush is done uniformly at the end of the tick
+- tick 内允许改属性
+- tick 内只记脏，不立即外发
+- tick 末统一构造同步包
+- tick 末统一 flush
 
-This rule covers:
+这条规则覆盖：
 
 - Real → Ghost
 - Real → Witness
 - Witness → Client
 
-There are only two kinds of exceptions:
+例外只有两类：
 
-- Explicit RPC/event messages
-- Lifecycle control messages (creation, destruction, migration control)
+- 明确的 RPC/事件消息
+- 生命周期控制消息（创建、销毁、迁移控制）
 
-Property replication is not RPC and should not be sent immediately during script execution.
+属性复制不是 RPC，不应在脚本执行中即时发送。
 
 ---
 
-## 7. Reliability Semantics
+## 7. 可靠性语义
 
-The MVP does not implement the full model of "four logical levels, four underlying levels" described in the documents.
-The MVP commits to only two kinds of semantics:
+MVP 不实现文档里“逻辑四级、底层四级”的完整模型。
+MVP 只承诺两类语义：
 
 ### 7.1 Ordered Reliable
 
-Used for:
+用于：
 
 - EntityCall
-- Entity creation/destruction
-- Base ↔ Cell control messages
-- Migration data
-- Route updates
+- 实体创建/销毁
+- Base ↔ Cell 控制消息
+- 迁移数据
+- 路由更新
 
-Semantics:
+语义：
 
-- Order preservation
-- Reliable delivery
-- Backpressure
+- 保序
+- 可靠送达
+- 有背压
 
 ### 7.2 Unordered Lossy
 
-Used for:
+用于：
 
-- Volatile updates such as position/direction
-- Recomputable AOI auxiliary notifications
+- 位置/朝向等 volatile 更新
+- 可重算的 AOI 辅助通知
 
-Semantics:
+语义：
 
-- Droppable
-- Not retransmitted
-- Overwritten by the next frame
+- 可丢弃
+- 不重传
+- 被下一帧覆盖
 
-If `LOW/HIGH/CRITICAL` is to be extended later, explicit queues, acknowledgement, and replay mechanisms should be implemented in the Runtime first, and only then should the document abstraction be upgraded.
+如果后续要扩展 `LOW/HIGH/CRITICAL`，应在 Runtime 先实现明确队列、确认与重放机制，再升级文档抽象。
 
 ---
 
-## 8. Migration Baseline
+## 8. 迁移基线
 
-The MVP supports only two kinds of migration:
+MVP 只支持两类迁移：
 
-- Cell migration within a single Realm
-- Cross-Space teleport
+- 单 Realm 内 Cell 迁移
+- 跨 Space 传送
 
-The MVP does not support:
+MVP 不支持：
 
-- Cross-datacenter migration
-- Migration of suspended script coroutines
-- Migration of external I/O context
+- 跨机房迁移
+- 挂起脚本协程迁移
+- 外部 I/O 上下文迁移
 
-The state serializable during migration includes only:
+迁移时可序列化状态只包括：
 
 - PropertyBlock
 - Space / Position / Direction
-- Controller state
-- Timer state
-- Witness base state
+- Controller 状态
+- Timer 状态
+- Witness 基础状态
 
-Content that does not enter the migration snapshot:
+不进入迁移快照的内容：
 
-- Python/Lua call stack
-- Future continuations in `yield`
-- The context of in-flight HTTP/DB requests
+- Python/Lua 调用栈
+- `yield` 中的 Future continuation
+- 正在执行的 HTTP/DB 请求上下文
 
-Corresponding strategy:
+对应策略：
 
-- Freeze the entity inbox before migration
-- Mark unfinished async tasks as invalid or wait for the callback and retry
-- On callback arrival, validate by Entity epoch whether it is still valid
-
----
-
-## 9. Hot Update Baseline
-
-The MVP supports only:
-
-- L1 config hot update
-- Restricted L2 script implementation replacement
-
-The MVP does not support:
-
-- L3 def hot update
-- L4 structural hot update
-
-The constraints on L2 must be very strict:
-
-- Only method implementations may be replaced
-- Method signatures are not modified
-- The exposed protocol is not modified
-- The property layout is not changed
-- No reliance on semantic compatibility with old frames on the stack
-
-If a script update affects the entity protocol, property definitions, or serialization layout, it is always escalated to a rolling release rather than a hot update.
+- 迁移前冻结实体收件箱
+- 将未完成异步任务标记为失效或等待回调后重试
+- 回调到达时按 Entity epoch 校验是否仍然有效
 
 ---
 
-## 10. Storage Boundary
+## 9. 热更新基线
 
-The MVP should not first pursue "one interface covering all backend capabilities".
+MVP 只支持：
 
-It is recommended to split it into a minimal set of interfaces:
+- L1 配置热更
+- 受限的 L2 脚本实现替换
+
+MVP 不支持：
+
+- L3 def 热更
+- L4 结构热更
+
+L2 的约束必须非常严格：
+
+- 只能替换方法实现
+- 不修改方法签名
+- 不修改 exposed 协议
+- 不改变属性布局
+- 不依赖栈上旧 frame 的语义兼容
+
+如果脚本更新影响实体协议、属性定义、序列化布局，一律升级为滚动发布，不走热更。
+
+---
+
+## 10. 存储边界
+
+MVP 先不要追求“一个接口覆盖所有后端能力”。
+
+建议拆成最小接口集合：
 
 ```cpp
 class IEntityStore {
@@ -408,58 +408,58 @@ public:
 };
 ```
 
-MVP default backends:
+MVP 默认后端：
 
-- Primary storage: MySQL
-- Cache: Redis
+- 主存储：MySQL
+- 缓存：Redis
 
-MVP default mapping strategy:
+MVP 默认映射策略：
 
-- Scalar types: native columns
-- VECTOR3: expanded columns
-- FIXED_DICT: JSON
-- ARRAY: JSON
+- 标量类型：原生列
+- VECTOR3：展开列
+- FIXED_DICT：JSON
+- ARRAY：JSON
 
-`EXPAND` / `SUBTABLE` are kept as capability designs, but the first version is not required to fully cover all combinations.
-
----
-
-## 11. Client and Toolchain Scope
-
-The MVP client guarantees only that the full chain works on the Unity side:
-
-- Login
-- Reconnection after disconnect
-- Entity creation/destruction
-- Property synchronization
-- Position interpolation
-- exposed method invocation
-
-UE5/Cocos may be kept as targets in the documents, but their implementation priority is later than Unity.
-
-The first version of code generation commits only to:
-
-- Entity definition generation
-- exposed method stub generation
-- Basic serialization code generation
-
-It does not commit to completing in the first version:
-
-- Deep Blueprint integration
-- Equivalent support for editors and script debugging tools across all three platforms
-- A complex prediction/rollback framework
+`EXPAND` / `SUBTABLE` 保留为能力设计，但不要求首版完整覆盖所有组合。
 
 ---
 
-## 12. Observability Baseline
+## 11. 客户端与工具链范围
 
-MVP observability requires only three things:
+MVP 客户端只保证 Unity 端全链路可用：
 
-1. Structured logging
-2. Basic Metrics
-3. Key-path Trace
+- 登录
+- 断线重连
+- 实体创建/销毁
+- 属性同步
+- 位置插值
+- exposed 方法调用
 
-Required metrics:
+UE5/Cocos 在文档中可以保留为目标，但实现优先级晚于 Unity。
+
+代码生成首版只承诺：
+
+- Entity 定义生成
+- exposed 方法桩生成
+- 基础序列化代码生成
+
+不承诺首版就完成：
+
+- Blueprint 深度集成
+- 三端编辑器与脚本调试工具等价支持
+- 复杂预测回滚框架
+
+---
+
+## 12. 可观测性基线
+
+MVP 可观测性只要求三件事：
+
+1. 结构化日志
+2. 基础 Metrics
+3. 关键链路 Trace
+
+必做指标：
 
 - tick duration
 - entity count
@@ -468,68 +468,68 @@ Required metrics:
 - db load/save latency
 - script error count
 
-MVP optional items:
+MVP 可选项：
 
-- Full script breakpoint debugging
-- Auto-scaling
-- Flame graph export
+- 全量脚本断点调试
+- 自动扩缩容
+- 火焰图导出
 
-Observability must serve Runtime debugging, rather than first pursuing platform completeness.
+可观测性必须服务于 Runtime 调试，而不是先追求平台完整度。
 
 ---
 
-## 13. MVP Implementation Order
+## 13. MVP 实施顺序
 
-### Phase A: Minimal modernized runtime loop
+### Phase A：现代化运行时最小闭环
 
 - TickScheduler
-- Entity / BaseCell model
+- Entity / BaseCell 模型
 - PropertyBlock
 - Base ↔ Cell EntityCall
 - SingleCell Space
-- Witness synchronization
-- Persistence (FileEntityStore, with MySQL as the Phase B target)
-- Minimal LoginApp login access (KBEngine-style, see chapter 12 of `5-access-and-control-plane/01-gateway-and-login`)
+- Witness 同步
+- 持久化（FileEntityStore，MySQL 为 Phase B 目标）
+- LoginApp 极简登录接入（KBEngine 式，详见 `5-access-and-control-plane/01-gateway-and-login` 第 12 章）
 
-### Phase B: Complete online gameplay and basic ops
+### Phase B：补齐在线玩法与基础运维
 
-- AOI cross-linked list
+- AOI 十字链表
 - Controller
-- Redis session/rate limiting
+- Redis 会话/限流
 - Unity codegen
-- Basic Metrics / Logs
-- Read-only Ops inspect
-- Channel / Bundle state statistics
+- 基础 Metrics / Logs
+- 只读 Ops inspect
+- Channel / Bundle 状态统计
 
-### Phase C: Bring in BigWorld-level system-area prototypes
+### Phase C：接入 BigWorld 级系统面原型
 
-- Restricted script hot update
-- Migration routing window
-- BackupTopologyCoordinator / backup-recovery prototype
-- Entity / EntityType load profiler prototype
-- Basic Trace
+- 受限脚本热更
+- 迁移路由窗口
+- BackupTopologyCoordinator / 备份恢复原型
+- Entity / EntityType load profiler 原型
+- 基础 Trace
 
-Only after Phase A is stable should the following be advanced:
+只有 Phase A 稳定后，才应该推进：
 
-- Static multi-Cell
-- Cross-server bridging
-- Auto-scaling
-- Multiple storage backends
+- 静态多 Cell
+- 跨服桥接
+- 自动扩缩
+- 多存储后端
 
 ---
 
-## 14. Relationship to Existing Documents
+## 14. 与现有文档的关系
 
-This document constrains the existing designs as follows:
+本文档对现有设计的约束如下：
 
-- In `2-replication-and-space/03-runtime-communication-and-transport`, the boundary of the Runtime Data Plane takes precedence over any MessageBus extension statements
-- `2-replication-and-space/04-property-replication` takes the uniform flush at the end of the tick as authoritative
-- `2-replication-and-space/05-entity-migration` does not commit to script stack migration
-- The multi-capability interfaces of `4-data-and-ops/02-persistence` should be split by implementation stage
-- `5-access-and-control-plane/02-message-bus-and-cross-realm` no longer carries the EntityCall main path
-- The MVP of `7-scripting-and-client/02-hot-update` supports only L1 + restricted L2
-- The MVP of `7-scripting-and-client/03-script-debug` requires only traceback / stack dump / Entity context inspect
-- The MVP of `7-scripting-and-client/04-client-sdk` is Unity-first
-- The MVP of `5-access-and-control-plane/05-telemetry-and-debug` requires only logs + metrics + key traces
+- `2-replication-and-space/03-runtime-communication-and-transport` 中 Runtime Data Plane 的边界优先于 MessageBus 扩展表述
+- `2-replication-and-space/04-property-replication` 以 tick 末统一 flush 为准
+- `2-replication-and-space/05-entity-migration` 不承诺脚本栈迁移
+- `4-data-and-ops/02-persistence` 的多能力接口应按实现阶段拆分
+- `5-access-and-control-plane/02-message-bus-and-cross-realm` 不再承载 EntityCall 主路径
+- `7-scripting-and-client/02-hot-update` 的 MVP 仅支持 L1 + 受限 L2
+- `7-scripting-and-client/03-script-debug` 的 MVP 只要求 traceback / stack dump / Entity 上下文 inspect
+- `7-scripting-and-client/04-client-sdk` 的 MVP 以 Unity 为主
+- `5-access-and-control-plane/05-telemetry-and-debug` 的 MVP 只要求 logs + metrics + key traces
 
-If a subsequent per-topic document conflicts with this page, this page is the current implementation baseline until the corresponding per-topic document is revised.
+如果后续分篇文档与本页冲突，以本页为当前实现基线，直到对应分篇被修订。

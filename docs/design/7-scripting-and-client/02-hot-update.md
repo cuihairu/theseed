@@ -1,144 +1,144 @@
-# Hot Update — Hot-Update System
+# Hot Update — 热更新系统
 
-> **English** | [中文](02-hot-update.zh.md)
+> [English](02-hot-update.md) | **中文**
 
-> Hot update is a core capability of game operations, but it is also the capability most easily over-promised.
-> theseed currently writes only the parts that `MVP` can reliably deliver into the implementation baseline.
+> 热更新是游戏运维的核心能力，但也是最容易被过度承诺的能力。
+> theseed 当前只把 `MVP` 能稳定兑现的部分写成实现基线。
 >
-> Origin: BigWorld's controlled operations and rolling-replacement boundary.
-> Reference implementation: KBEngine's limited script-replacement path via Python reload().
-> theseed adds a tiered hot-update model.
-> The current implementation baseline follows [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
+> 来源源头：BigWorld 的受控运维和滚动替换边界。
+> 参考实现：KBEngine Python reload() 的有限脚本替换路径。
+> theseed 新增分级热更模型。
+> 当前实现基线以 [../0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld has no "arbitrary script hot-replacement platform" in the modern sense.
-
-It relies more on:
-  - operations control
-  - process lifecycle management
-  - data and HA toolchains
-  - cautious rolling replacement
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine provides a limited Python reload() path.
+BigWorld 没有现代意义上的“任意脚本热替换平台”。
 
-Its characteristics are:
-  - can do limited script replacement
-  - not good at structural-level changes
-  - no complete version-consistency governance
+它更依赖：
+  - 运维控制
+  - 进程生命周期管理
+  - 数据与 HA 工具链
+  - 谨慎的滚动替换
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-Pros of BigWorld's origin boundary:
-  - stable
-  - more conservative about consistency boundaries
+KBEngine 提供有限的 Python reload() 路径。
 
-Cons of BigWorld's origin boundary:
-  - small online changes are costly
-
-Pros of KBEngine's reference implementation:
-  - lightweight
-  - fast to change scripts
-
-Cons of KBEngine's reference implementation:
-  - easy to overestimate hot-update capability
-  - version, migration, and async boundaries are not hard enough
+特点是：
+  - 可做有限脚本替换
+  - 不擅长结构级变化
+  - 没有完整版本一致性治理
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed takes the middle ground between the two:
-  - keep the script hot-update convenience of the KBEngine reference implementation
-  - use the BigWorld origin-boundary constraints to limit capability claims
+BigWorld 源头边界的优点：
+  - 稳
+  - 对一致性边界更保守
 
-Therefore:
-  - MVP supports only L1 + restricted L2
-  - structural-level changes always fall back to rolling update
+BigWorld 源头边界的缺点：
+  - 线上小改成本高
+
+KBEngine 参考实现的优点：
+  - 轻量
+  - 改脚本快
+
+KBEngine 参考实现的缺点：
+  - 容易高估热更能力
+  - 版本、迁移、异步边界不够硬
 ```
 
----
-
-## 0. MVP Boundary
+### theseed 的取舍
 
 ```
-MVP supports only:
-  - L1 config hot update
-  - restricted L2 script-implementation replacement
+theseed 取两者中间：
+  - 保留 KBEngine 参考实现里的脚本热更便利性
+  - 用 BigWorld 源头边界约束来限制能力宣称
 
-MVP does not support:
-  - L3 def hot update
-  - L4 structural hot update
-  - online protocol changes
-  - property-layout changes
-  - seamless hot replacement that depends on script-stack compatibility
+所以：
+  - MVP 只支持 L1 + 受限 L2
+  - 结构级变化一律回到 rolling update
 ```
 
 ---
 
-## 1. Hot-Update Tiers
+## 0. MVP 边界
 
 ```
-L1: config hot update (MVP-supported)
-  ├── game numeric tables, matchmaking rules, live-ops activity config
-  └── no code changes required
+MVP 只支持：
+  - L1 配置热更
+  - 受限的 L2 脚本实现替换
 
-L2: script hot update (MVP restricted support)
-  ├── modify existing method implementations
-  ├── modify timer logic
-  └── do not change method signatures / protocols / property layout
-
-L3: definition hot update (considered after Phase 2)
-  ├── add new properties (with default values)
-  ├── add new Entity types
-  └── requires automatic Schema migration and a stronger runtime-compatibility mechanism
-
-L4: structural change (no hot update)
-  ├── remove properties
-  ├── change property types
-  ├── change network protocols
-  └── must go through the rolling-update process
+MVP 不支持：
+  - L3 def 热更
+  - L4 结构热更
+  - 在线协议变更
+  - 属性布局变更
+  - 依赖脚本栈兼容的无感热替换
 ```
 
 ---
 
-## 2. Strict Constraints on L2
+## 1. 热更新分级
 
 ```
-Restricted L2 allows only:
-  - replacing method bodies
-  - adjusting local business flow
-  - adjusting timer registration logic
+L1: 配置热更（MVP 支持）
+  ├── 游戏数值表、匹配规则、运营活动配置
+  └── 无需任何代码变更
 
-Restricted L2 explicitly forbids:
-  - modifying method signatures
-  - modifying the inputs/outputs of exposed methods
-  - modifying Entity property definitions
-  - modifying the serialization layout
-  - assuming that frames on the old call stack can seamlessly interoperate with new code
-```
+L2: 脚本热更（MVP 受限支持）
+  ├── 修改现有方法实现
+  ├── 修改定时器逻辑
+  └── 不改方法签名 / 协议 / 属性布局
 
-```
-Therefore:
-  "not restarting the process" does not equal "being able to replace any script semantics".
-  As long as a change affects the protocol, properties, persistence structure, or migration semantics,
-  it is escalated to a rolling release and does not go through hot update.
+L3: 定义热更（Phase 2 以后考虑）
+  ├── 添加新属性（有默认值）
+  ├── 添加新 Entity 类型
+  └── 需要自动 Schema 迁移和更强运行时兼容机制
+
+L4: 结构变更（不做热更）
+  ├── 删除属性
+  ├── 修改属性类型
+  ├── 修改网络协议
+  └── 必须走滚动更新流程
 ```
 
 ---
 
-## 3. Hot-Update Interface
+## 2. L2 的严格约束
+
+```
+受限 L2 只允许：
+  - 替换方法体
+  - 调整局部业务流程
+  - 调整定时器注册逻辑
+
+受限 L2 明确禁止：
+  - 修改方法签名
+  - 修改 exposed 方法输入输出
+  - 修改 Entity 属性定义
+  - 修改序列化布局
+  - 假设旧调用栈上的 frame 能与新代码无缝兼容
+```
+
+```
+因此：
+  “不重启进程” 不等于 “可以替换任何脚本语义”。
+  只要变更影响协议、属性、持久化结构或迁移语义，
+  一律升级为滚动发布，不走热更。
+```
+
+---
+
+## 3. 热更新接口
 
 ```cpp
 enum class HotUpdateLevel {
@@ -158,37 +158,37 @@ public:
 ```
 
 ```
-MVP actual implementation requirements:
-  - analyze must be able to identify changes beyond the L2 boundary as NeedRestart
-  - apply takes effect only for L1 / restricted L2
-  - rollback must prioritize recoverability over a seamless, traceless result
+MVP 实际实现要求：
+  - analyze 必须能把超出 L2 边界的变更识别为 NeedRestart
+  - apply 只对 L1 / 受限 L2 生效
+  - rollback 必须优先保证可恢复，而不是追求无痕
 ```
 
 ---
 
-## 4. Validation Flow
+## 4. 验证流程
 
 ```python
 class HotUpdateValidator:
     def validate(self, old_defs, new_defs, old_scripts, new_scripts):
-        # 1. Schema compatibility check
-        # 2. exposed / method-signature compatibility check
-        # 3. script static analysis
-        # 4. trial run (execute test cases in an isolated environment)
+        # 1. Schema 兼容性检查
+        # 2. exposed / 方法签名兼容性检查
+        # 3. 脚本静态分析
+        # 4. 试运行（隔离环境执行测试用例）
         return ValidationResult.merge(results)
 ```
 
-### 4.1 Changes MVP Must Block
+### 4.1 MVP 必须阻断的变更
 
 ```
-Automatically blocked:
+自动阻断：
   - change_property_type
   - remove_property
   - change_method_signature
   - change_exposed_protocol
   - change_entity_serialization
 
-Automatic-pass candidates:
+自动放行候选：
   - modify_script_body
   - modify_timer_logic
   - config_value_change
@@ -196,7 +196,7 @@ Automatic-pass candidates:
 
 ---
 
-## 5. Approval Configuration
+## 5. 审核配置
 
 ```xml
 <hotUpdateApproval>
@@ -220,37 +220,37 @@ Automatic-pass candidates:
 
 ---
 
-## 6. Relationship with Migration and Async
+## 6. 与迁移和异步的关系
 
 ```
-Hot update is most prone to coupling risk with migration and async coroutines.
+热更新最容易与迁移、异步协程产生耦合风险。
 
-MVP's handling principles:
-  - do not require suspended coroutines to seamlessly resume across old and new code
-  - do not require entities under migration to simultaneously execute script stacks across versions
-  - late async callbacks must re-validate entity epoch / version
+MVP 的处理原则：
+  - 不要求挂起协程在新旧代码间无缝续跑
+  - 不要求迁移中的实体同时跨版本执行脚本栈
+  - 迟到异步回调必须重新校验 entity epoch / version
 ```
 
 ```
-In other words:
-  the goal of L2 hot update is to "safely replace new entry-point logic",
-  not to "modify the semantics of all old execution stacks online".
+也就是说：
+  L2 热更的目标是“安全替换新入口逻辑”，
+  不是“在线修改所有旧执行栈的语义”。
 ```
 
-Script debugging needs to treat `entityEpoch / scriptVersion / suspensionId` as the session boundary,
-see `03-script-debug`.
+脚本调试需要把 `entityEpoch / scriptVersion / suspensionId` 作为会话边界，
+见 `03-script-debug`。
 
 ---
 
-## 7. Operations Automation
+## 7. 运维自动化
 
-### 7.1 Rolling-Update Process
+### 7.1 滚动更新流程
 
 ```
-Phase 1: Pre-check — check process health and version compatibility
-Phase 2: Drain — mark draining, stop new connections, wait for entity migration
-Phase 3: Update — pull the new binary/scripts, restart the process
-Phase 4: Verify — health check, performance comparison
+Phase 1: Pre-check — 检查进程健康、版本兼容性
+Phase 2: Drain — 标记 draining，停止新连接，等待实体迁移
+Phase 3: Update — 拉取新二进制/脚本，重启进程
+Phase 4: Verify — 健康检查、性能对比
 Phase 5: Complete / Rollback
 ```
 
@@ -267,18 +267,18 @@ public:
 ```
 
 ```
-MVP practical constraints:
-  - hot update is only a supplement to rolling release, not a replacement
-  - as soon as a change crosses the L2 boundary, it must go through rolling update
+MVP 现实约束：
+  - 热更新只是滚动发布的补充，不是替代
+  - 只要变更越过 L2 边界，就必须走 rolling update
 ```
 
 ---
 
-## 8. Comparison with KBEngine
+## 8. 与 KBEngine 的对比
 
-| Capability | KBEngine | theseed |
+| 能力 | KBEngine | theseed |
 |------|---------|---------|
-| Hot update | Python reload() limited | MVP supports L1 + restricted L2 |
-| Deployment | manual copy + restart | rolling update |
-| Entity migration | no automatic migration | drain → migrate → restart |
-| Config management | scattered XML | config center + version control |
+| 热更新 | Python reload() 有限 | MVP 支持 L1 + 受限 L2 |
+| 部署 | 手动拷贝 + 重启 | 滚动更新 |
+| 实体迁移 | 无自动迁移 | drain → migrate → restart |
+| 配置管理 | XML 散落 | 配置中心 + 版本控制 |

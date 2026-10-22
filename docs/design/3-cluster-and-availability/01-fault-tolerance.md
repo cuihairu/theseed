@@ -1,234 +1,234 @@
-# Fault Tolerance — Three-Level Fault Tolerance
+# Fault Tolerance — 三级容错
 
-> **English** | [中文](01-fault-tolerance.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `Reviver / BackupSender / Archiver`.
-> Reference implementation: KBEngine's basic process recovery and persistent recovery paths.
-> This is one of the areas where KBEngine lags furthest behind, but it is also the area where theseed should least over-commit at the `MVP` stage.
-> The current implementation baseline follows [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md).
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-BigWorld's fault tolerance is not a single backup point, but a chain:
-  - Reviver is responsible for process startup
-  - BackupSender is responsible for the state backup chain
-  - Archiver is responsible for persistent archiving
-  - Manager is responsible for scheduling and recovery
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine also has recovery and supervision ideas,
-but overall it leans toward basic process recovery and database persistence,
-and does not have as complete a high-availability system as BigWorld.
-```
-
-### Pros and Cons
-
-```
-BigWorld's advantages:
-  - Complete disaster recovery chain
-  - Systematized recovery boundary
-
-KBEngine's advantages:
-  - Simple
-  - Easier to get running first
-
-Shared disadvantages:
-  - Real HA is highly complex
-  - Requires additional definition of backup consistency and recovery ordering
-```
-
-### theseed's Trade-offs
-
-```
-theseed MVP only commits to basic recovery and supervision,
-treating full HA as a separate phase,
-to avoid mistakenly writing BigWorld-level disaster recovery into the current implementation boundary.
-```
-
-### Why HA Cannot Be Crammed Entirely into This Document
-
-```
-Fault Tolerance only answers:
-  How the system recovers after a process dies
-
-It does not directly answer:
-  - How the hot-standby responsibility chain is organized
-  - How the backup target is switched
-  - Who has the authority to decide the recovery source
-
-These belong to BackupHash / HA Recovery Chain,
-and cannot continue to be mixed into the "recovery overview".
-```
+> 来源源头：BigWorld `Reviver / BackupSender / Archiver`。
+> 参考实现：KBEngine 的基础进程恢复与持久化恢复路径。
+> 这是 KBEngine 差距最大的领域之一，但也是 theseed 最不应在 `MVP` 阶段过度承诺的领域。
+> 当前实现基线以 [0-foundation/01-mvp-architecture-baseline](../0-foundation/01-mvp-architecture-baseline.md) 为准。
 
 ---
 
-## 0. MVP Boundary
+## 0.5 引擎实现对照与取舍
+
+### BigWorld 是怎么实现的
 
 ```
-MVP first guarantees:
-  - Process supervision and automatic startup
-  - Recoverability based on database archiving
-  - Basic route repair and client reconnection
-
-MVP does not directly commit to:
-  - Complete cross-BaseApp in-memory hot standby
-  - A unified recovery target of < 5 seconds
-  - Low RPO / low RTO that holds for all entity types
+BigWorld 的容错不是单一备份点，而是一套链条：
+  - Reviver 负责进程拉起
+  - BackupSender 负责状态备份链
+  - Archiver 负责持久化归档
+  - Manager 负责调度和恢复
 ```
 
+### KBEngine 是怎么实现的
+
 ```
-In other words:
-  ProcessSupervisor belongs to MVP
-  Archiver belongs to MVP
-  EntityBackup is a Phase 2 prototype capability and should not be written as a hard capability that currently exists
+KBEngine 也有恢复和守护思路，
+但整体更偏向基础进程恢复和数据库持久化，
+没有 BigWorld 那么完整的高可用体系。
+```
+
+### 优缺点
+
+```
+BigWorld 的优点：
+  - 容灾链条完整
+  - 恢复边界系统化
+
+KBEngine 的优点：
+  - 简单
+  - 更容易先跑起来
+
+共同缺点：
+  - 真正的 HA 复杂度高
+  - 需要额外定义备份一致性和恢复顺序
+```
+
+### theseed 的取舍
+
+```
+theseed MVP 只承诺基础恢复和守护，
+把完整 HA 作为单独阶段，
+避免把 BigWorld 级容灾误写进当前实现边界。
+```
+
+### 为什么不能把 HA 全塞进本篇
+
+```
+Fault Tolerance 只回答：
+  进程死了之后系统如何恢复
+
+它不直接回答：
+  - 热备责任链如何组织
+  - backup target 如何切换
+  - 谁有权裁定恢复来源
+
+这些属于 BackupHash / HA Recovery Chain，
+不能继续混在“恢复概述”里。
 ```
 
 ---
 
-## 1. Three-Level Assurance System
+## 0. MVP 边界
 
 ```
-Level 1: ProcessSupervisor (MVP)
-  Origin: BigWorld Reviver
-  Goal: automatic startup after process death, re-registration, restore routing table
+MVP 先保证：
+  - 进程守护和自动拉起
+  - 基于数据库归档的可恢复能力
+  - 基础路由修复与客户端重连
 
-Level 2: EntityBackup (Phase 2)
-  Origin: BigWorld BackupSender
-  Goal: cross-process hot standby for Base entities, reducing recovery time and data loss
+MVP 不直接承诺：
+  - 完整的跨 BaseApp 内存热备
+  - < 5 秒的统一恢复目标
+  - 对所有实体类型都成立的低 RPO / 低 RTO
+```
 
-Level 3: Archiver (MVP)
-  Origin: BigWorld Archiver / KBEngine writeToDB
-  Goal: periodic archiving to persistent storage, providing a recoverable baseline
+```
+换句话说：
+  ProcessSupervisor 属于 MVP
+  Archiver 属于 MVP
+  EntityBackup 是 Phase 2 原型能力，不应写成当前已具备的硬能力
 ```
 
 ---
 
-## 2. MVP Recovery Model
+## 1. 三级保障体系
+
+```
+第一级：ProcessSupervisor（MVP）
+  来源：BigWorld Reviver
+  目标：进程死亡后自动拉起、重新注册、恢复路由表
+
+第二级：EntityBackup（Phase 2）
+  来源：BigWorld BackupSender
+  目标：Base 实体跨进程热备，减少恢复时间和数据丢失
+
+第三级：Archiver（MVP）
+  来源：BigWorld Archiver / KBEngine writeToDB
+  目标：周期归档到持久化存储，提供可恢复基线
+```
+
+---
+
+## 2. MVP 恢复模型
 
 ### 2.1 ProcessSupervisor
 
 ```
-Responsibilities:
-  - Detect BaseApp / CellApp / Gateway process death
-  - Automatically start new processes by role
-  - Have new processes re-register with the Control Plane
-  - Trigger routing table re-publication
+职责：
+  - 检测 BaseApp / CellApp / Gateway 进程死亡
+  - 按角色自动拉起新进程
+  - 让新进程重新注册到 Control Plane
+  - 触发路由表重发布
 ```
 
-### 2.2 Archiver Recovery
+### 2.2 Archiver 恢复
 
 ```
-Main recovery path under MVP:
+MVP 下的恢复主路径：
 
-Process death
-  → Supervisor starts a new process
-  → Process rejoins the cluster
-  → Base entities are restored from database archive on demand
-  → Client re-binds the session after reconnecting
-```
-
-```
-Recovery guarantees:
-  - Can recover to the state of the most recent successful archive
-  - Does not commit to recovering all non-archived in-memory state
-  - Does not commit to recovering all in-flight runtime messages
-```
-
-### 2.3 RPO / RTO Notes
-
-```
-Recommended phrasing for MVP:
-
-RPO:
-  - Determined by the archive period
-  - Usually "at most the loss of non-persisted state within one archive period"
-
-RTO:
-  - Jointly determined by process startup, database recovery, and client reconnection
-  - Do not hard-code a global second-level metric
+进程死亡
+  → Supervisor 拉起新进程
+  → 进程重新加入集群
+  → Base 实体按需从数据库归档恢复
+  → 客户端重连后重新绑定会话
 ```
 
 ```
-Reason:
-  Before there is cross-process hot standby, WAL, and a unified in-flight drain mechanism,
-  hard-coding "< 5 second recovery, at most 5 seconds lost" is a vision, not a design constraint.
+恢复保证：
+  - 能恢复到最近一次成功归档的状态
+  - 不承诺恢复未归档的全部内存态
+  - 不承诺所有在途运行时消息都能恢复
+```
+
+### 2.3 RPO / RTO 说明
+
+```
+MVP 的建议表述：
+
+RPO：
+  - 由归档周期决定
+  - 通常是“最多丢失一个归档周期内的未持久化状态”
+
+RTO：
+  - 由进程拉起、数据库恢复、客户端重连共同决定
+  - 不写死全局秒级指标
+```
+
+```
+原因：
+  在没有跨进程热备、WAL 和统一 in-flight drain 机制之前，
+  写死 “< 5 秒恢复、最多丢 5 秒” 是愿景，不是设计约束。
 ```
 
 ---
 
-## 3. BigWorld's SecondaryDB Is Not Equal to EntityBackup
+## 3. BigWorld 的 SecondaryDB 不等于 EntityBackup
 
-In BigWorld's implementation, `Archiver` often appears together with `SecondaryDB`.
+BigWorld 的实现里，`Archiver` 经常和 `SecondaryDB` 一起出现。
 
-But note:
+但要注意：
 
 ```
-What SecondaryDB solves:
-  - Local archive staging
-  - Flushing to disk during shutdown / retirement windows
-  - Subsequent unified consolidation
+SecondaryDB 解决的是：
+  - 本地归档暂存
+  - 停服 / 退役窗口落盘
+  - 后续统一归并
 
-What EntityBackup solves:
-  - Cross-BaseApp in-memory hot standby
-  - Lower RPO / faster recovery
+EntityBackup 解决的是：
+  - 跨 BaseApp 内存热备
+  - 更低 RPO / 更快恢复
 ```
 
-Therefore, they must be separated in the design:
+因此在设计上必须拆开：
 
 ```
 Archiver / LocalArchiveStore
   ≠ EntityBackup
 ```
 
-Conversely:
+反过来说：
 
 ```
-As long as the core goal of a scheme is:
-  - Lower RPO / RTO
-  - Preserve in-memory state before the primary instance is flushed to the database
+只要某个方案的核心目标是：
+  - 降低 RPO / RTO
+  - 在主实例未落库前保住内存态
 
-then it is discussing hot standby,
-not an archive staging layer.
+那它就在讨论热备，
+而不是归档暂存层。
 ```
 
-The constraint on theseed is:
+对 theseed 的约束是：
 
 ```
-MVP:
-  - Only commit to "primary database archive + recoverable"
-  - Do not write SecondaryDB / LocalArchiveStore as a capability that currently exists
+MVP：
+  - 只承诺“主库归档 + 可恢复”
+  - 不把 SecondaryDB / LocalArchiveStore 写成当前已具备能力
 
-Phase 2 / 3:
-  - If the BigWorld-level data ops surface needs to be filled in, then introduce LocalArchiveStore
-  - But this still cannot replace EntityBackup
+Phase 2 / 3：
+  - 如需补齐 BigWorld 级数据运维面，再引入 LocalArchiveStore
+  - 但这仍然不能替代 EntityBackup
 ```
 
 ---
 
-## 4. EntityBackup — Phase 2 Capability
+## 4. EntityBackup — Phase 2 能力
 
 ```
-Problem: When BaseApp crashes, the un-flushed data of all entities on it may be lost.
+问题：BaseApp 宕机时，上面所有实体的未写库数据可能丢失。
 
-BigWorld's approach:
-  - BackupSender sends Base entity data to another BaseApp
-  - The backup is held in memory
-  - On crash, recover from the backup BaseApp
+BigWorld 的做法：
+  - BackupSender 把 Base 实体数据发送到另一个 BaseApp
+  - 备份在内存中
+  - 宕机时从备份 BaseApp 恢复
 
-theseed's direction:
-  - Introduce BackupHash + cross-BaseApp in-memory hot standby
-  - But this capability belongs to Phase 2, not an MVP must-have
+theseed 的方向：
+  - 引入 BackupHash + 跨 BaseApp 内存热备
+  - 但该能力属于 Phase 2，不是 MVP 必达项
 ```
 
-### 4.1 Reserved Interfaces
+### 4.1 预留接口
 
 ```cpp
 // runtime/EntityBackup.h
@@ -253,96 +253,96 @@ struct BackupPolicy {
 };
 ```
 
-### 4.2 Phase 2 Recovery Flow
+### 4.2 Phase 2 恢复流程
 
 ```
-BaseApp_A crashes
-  → Control Plane starts BaseApp_A'
-  → Query BackupHash
-  → Pull the Base entity snapshot from the backup BaseApp
-  → Restore properties / routing / session
-  → Notify the client to reconnect
+BaseApp_A 宕机
+  → Control Plane 拉起 BaseApp_A'
+  → 查询 BackupHash
+  → 从备份 BaseApp 拉取 Base 实体快照
+  → 恢复属性 / 路由 / 会话
+  → 通知客户端重连
 ```
 
 ```
-Preconditions:
-  - The backup replication chain is already stable
-  - Base / Cell route switching is observable
-  - Session recovery and async callback epoch validation are complete
+前提：
+  - 备份复制链路已经稳定
+  - Base / Cell 路由切换可观测
+  - 会话恢复和异步回调 epoch 校验已完善
 ```
 
 ---
 
-## 5. LocalArchiveStore — Phase 2 / 3 Data Ops Enhancement
+## 5. LocalArchiveStore — Phase 2 / 3 数据运维增强
 
-If theseed is to fill in the BigWorld-level data ops surface in the future, a layer should be added:
+如果 theseed 未来要补齐 BigWorld 级数据运维面，应新增一层：
 
 ```
 LocalArchiveStore
-  - Local archive staging
+  - 本地归档暂存
   - generation rotate
   - snapshot / transfer / consolidate
 ```
 
-But the document boundary must be made clear:
+但文档边界必须写清：
 
 ```
-It is not:
-  - The primary database
-  - A hot-standby in-memory replica
-  - The query platform of Runtime Core
+它不是：
+  - 主数据库
+  - 热备内存副本
+  - Runtime Core 的查询平台
 ```
 
-Suggested responsibilities:
+建议职责：
 
 ```
-Runtime:
-  - Generate archive snapshots
+Runtime：
+  - 生成归档快照
   - append / flush / rotate
 
-Data Ops:
+Data Ops：
   - consolidate generation
   - transfer / snapshot / cleanup
-  - Validation and synchronization
+  - 校验与同步
 ```
 
-Related design:
+相关设计见：
 
 `../4-data-and-ops/03-local-archive-and-secondary-db.md`
 
-For the hot-standby chain and the recovery authority boundary, see:
+热备链与恢复权威边界见：
 
 `./02-backup-hash-and-ha.md`
 
 ---
 
-## 6. Phased Goals
+## 6. 分阶段目标
 
 ```
-Phase A (MVP)
-  - Supervisor automatic startup
-  - Archiver recoverable
-  - Client reconnectable
+Phase A（MVP）
+  - Supervisor 自动拉起
+  - Archiver 可恢复
+  - 客户端可重连
 
 Phase B
-  - Base hot-standby prototype
-  - Automated route repair
-  - Observable recovery flow
+  - Base 热备原型
+  - 路由修复自动化
+  - 恢复流程可观测
 
 Phase C
-  - Stable cross-BaseApp in-memory hot standby
-  - Lower RPO / RTO
-  - Backup consistency monitoring
+  - 稳定的跨 BaseApp 内存热备
+  - 更低 RPO / RTO
+  - 备份一致性监控
 ```
 
 ---
 
-## 7. Comparison with the Two Engines
+## 7. 与两套引擎的对比
 
-| Dimension | BigWorld | KBEngine | theseed |
+| 维度 | BigWorld | KBEngine | theseed |
 |------|---------|---------|---------|
-| Process supervision | Reviver automatic startup | None built in | MVP does Agent + Control Plane first |
-| Entity hot standby | BackupSender cross-process | None (only DB archiving) | Phase 2 goal |
-| Main recovery path | In-memory hot standby + archiving | Database recovery | MVP does database recovery first |
-| Data loss | < 1 backup period | < 1 Archiver period | MVP determined by the archive period |
-| Archiving | Archiver + SecondaryDB + consolidate | writeToDB + Archiver | MVP primary database archiving, re-evaluate LocalArchiveStore in Phase 2 |
+| 进程守护 | Reviver 自动拉起 | 无内建 | MVP 先做 Agent + Control Plane |
+| 实体热备 | BackupSender 跨进程 | 无（只有 DB 归档） | Phase 2 目标 |
+| 恢复主路径 | 内存热备 + 归档 | 数据库恢复 | MVP 先走数据库恢复 |
+| 数据丢失 | < 1 个备份周期 | < 1 个 Archiver 周期 | MVP 由归档周期决定 |
+| 归档 | Archiver + SecondaryDB + consolidate | writeToDB + Archiver | MVP 主库归档，Phase 2 再评估 LocalArchiveStore |

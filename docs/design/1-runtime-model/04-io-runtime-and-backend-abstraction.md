@@ -1,99 +1,99 @@
-# IO Runtime & Backend Abstraction — Cross-Platform I/O Runtime and Backend Abstraction
+# IO Runtime & Backend Abstraction — 跨平台 I/O 运行时与后端抽象
 
-> **English** | [中文](04-io-runtime-and-backend-abstraction.zh.md)
+> **English** | 中文
 
-> Target platforms: Linux / Windows / macOS.
-> The goal is not to blend `epoll / kqueue / IOCP / io_uring` into a lowest common denominator,
-> but to provide a runtime abstraction high enough that Tick, Transport, Gateway, and the control plane can all reuse the same I/O lifecycle.
+> 目标平台：Linux / Windows / macOS。
+> 目标不是把 `epoll / kqueue / IOCP / io_uring` 混成一个最低公共分母，
+> 而是提供一层足够高的运行时抽象，让 Tick、Transport、Gateway、控制面都可以复用同一套 I/O 生命周期。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld is mainly Mercury::EventDispatcher + NetworkInterface:
-  - The event loop and the network interface are tightly bound
-  - The file descriptor registration model is clear
-  - Closer to the traditional Reactor style
-
-Its advantage is maturity and stability,
-but it is not modeled according to today's Reactor / Completion layering.
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine is mainly EventDispatcher -> EventPoller -> poller_*:
-  - epoll on Linux
-  - select as a fallback
-  - Some IOCP direction has been attempted on the Windows side
+BigWorld 主要是 Mercury::EventDispatcher + NetworkInterface：
+  - 事件循环和网络接口强绑定
+  - 文件描述符注册模型清晰
+  - 更接近传统 Reactor 风格
 
-It extracts the poller more explicitly than BigWorld,
-but the top-level abstraction still leans toward a "fd readiness poller",
-which is unsuitable as the overarching abstraction for io_uring / IOCP.
+它的优势在于成熟稳定，
+但不是按今天的 Reactor / Completion 分层来建模。
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-BigWorld / KBEngine pros:
-  - The event loop is simple and direct
-  - The network main path is easy to understand
-  - Pairs naturally with a single-threaded tick
+KBEngine 主要是 EventDispatcher -> EventPoller -> poller_*：
+  - Linux 下 epoll
+  - 兜底 select
+  - Windows 侧已有 IOCP 方向尝试
 
-Shared cons:
-  - The top-level abstraction sticks too closely to the select/epoll era
-  - fd/register/deregister is not the ideal semantics for io_uring / IOCP
-  - timer/task/wakeup/completion are not abstracted uniformly into the same runtime
+它比 BigWorld 更显式地把 poller 抽出来，
+但顶层抽象仍然偏“fd readiness poller”，
+不适合作为 io_uring / IOCP 的总抽象。
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed no longer treats EventPoller as the overarching abstraction,
-but splits it into three layers:
+BigWorld / KBEngine 的优点：
+  - 事件循环简单直接
+  - 网络主路径容易理解
+  - 与单线程 tick 配合自然
+
+共同缺点：
+  - 顶层抽象过于贴近 select/epoll 时代
+  - fd/register/deregister 不是 io_uring / IOCP 的理想语义
+  - timer/task/wakeup/completion 没被统一抽象成同一运行时
+```
+
+### theseed 的取舍
+
+```
+theseed 不再把 EventPoller 当总抽象，
+而是拆成三层：
 
   1. IORuntime
-     Unifies run / wakeup / submit / cancel / drainCompletions
+     统一 run / wakeup / submit / cancel / drainCompletions
 
   2. Backend Family
      - ReactorBackend: select / epoll / kqueue
      - CompletionBackend: io_uring / IOCP
 
   3. Transport Adapter
-     TCP / UDP / WebSocket / Runtime Channel are reused at the upper layer
+     TCP / UDP / WebSocket / Runtime Channel 在上层复用
 
-This lets us:
-  - Keep the tick-friendly main loop of BigWorld / KBEngine
-  - Without forcing modern completion-style backends into poller semantics
+这允许我们：
+  - 保留 BigWorld / KBEngine 的 tick 友好主循环
+  - 又不把现代完成式后端硬塞进 poller 语义
 ```
 
 ---
 
-## 0. Design Boundary
+## 0. 设计边界
 
-This document covers:
-
-```
-  - The I/O backend abstraction for Linux / Windows / macOS
-  - The two backend semantics, Reactor and Completion
-  - Startup-time capability probing and configuration decisions
-  - The interface between Tick Runtime and I/O Runtime
-  - The unified interface for handle / request / completion / cancel
-```
-
-This document does not cover:
+本篇负责：
 
 ```
-  - EntityCall / Mailbox semantics
-  - Business reliability tiers of the Runtime Data Plane
-  - The business state machine of Gateway / Login
-  - The MessageBus control plane
+  - Linux / Windows / macOS 的 I/O 后端抽象
+  - Reactor 与 Completion 两类后端语义
+  - 启动期能力探测与配置决策
+  - Tick Runtime 与 I/O Runtime 的衔接
+  - handle / request / completion / cancel 的统一接口
 ```
 
-Related topics:
+本篇不负责：
+
+```
+  - EntityCall / Mailbox 语义
+  - Runtime Data Plane 的业务可靠性分级
+  - Gateway / Login 的业务状态机
+  - MessageBus 控制面
+```
+
+相关主题见：
 
 ```
 ../2-replication-and-space/03-runtime-communication-and-transport
@@ -103,18 +103,18 @@ Related topics:
 
 ---
 
-## 1. Why It Can No Longer Be Called EventPoller
+## 1. 为什么不能继续叫 EventPoller
 
-`EventPoller` is only suitable for expressing:
+`EventPoller` 只适合表达：
 
 ```
   - register fd for read
   - register fd for write
   - wait until ready
-  - callback handling
+  - 回调处理
 ```
 
-This mental model is natural for:
+这套心智模型对：
 
 ```
 select
@@ -122,16 +122,16 @@ epoll
 kqueue
 ```
 
-It is natural.
+是自然的。
 
-But not for:
+但对：
 
 ```
 io_uring
 IOCP
 ```
 
-They are unnatural, because they are closer to:
+就不自然，因为它们更接近：
 
 ```
   - submit operation
@@ -140,44 +140,44 @@ They are unnatural, because they are closer to:
   - optionally cancel
 ```
 
-So if the overarching abstraction continues to be named `EventPoller`, three problems arise:
+所以如果继续把总抽象命名为 `EventPoller`，会出现三个问题：
 
 ```
-1. The top-level interface is locked into fd/register semantics
-2. io_uring / IOCP can only be "disguised as readiness"
-3. timer/task/wakeup/completion cannot be merged into the same runtime
+1. 顶层接口被 fd/register 语义绑死
+2. io_uring / IOCP 只能被“伪装成 readiness”
+3. timer/task/wakeup/completion 无法并入同一运行时
 ```
 
-Conclusion:
+结论：
 
 ```
-EventPoller may be kept as the implementation name of one class of backend,
-but it can no longer serve as theseed's overarching abstraction.
+EventPoller 可以保留为某一类后端的实现名，
+但不能继续做 theseed 的总抽象。
 ```
 
 ---
 
-## 2. Recommended Overarching Abstraction
+## 2. 推荐的总抽象
 
-Suggested name for the overarching abstraction:
+总抽象命名建议：
 
 ```
 IORuntime
 ```
 
-It expresses:
+它表达的是：
 
 ```
-"A runtime that drives I/O requests, waits for events or completions, and delivers results to the upper-layer Tick"
+“驱动 I/O 请求、等待事件或完成、投递结果给上层 Tick 的运行时”
 ```
 
-rather than:
+而不是：
 
 ```
-"some kind of fd poller"
+“某种 fd poller”
 ```
 
-### 2.1 Core Interfaces
+### 2.1 核心接口
 
 ```cpp
 enum class IoOp : uint8_t {
@@ -240,20 +240,20 @@ public:
 };
 ```
 
-The most important change here is:
+这里最重要的变化是：
 
 ```
-The unified semantics are submit / cancel / completion,
-not registerRead / registerWrite / triggerRead.
+统一语义是 submit / cancel / completion，
+不是 registerRead / registerWrite / triggerRead。
 ```
 
 ---
 
-## 3. The Two Backend Families
+## 3. 两类后端家族
 
 ### 3.1 ReactorBackend
 
-Applicable to:
+适用：
 
 ```
   - select
@@ -261,46 +261,46 @@ Applicable to:
   - kqueue
 ```
 
-Semantics:
+语义：
 
 ```
-  - The backend reports that a "handle is ready"
-  - The runtime then translates "readiness" into an IoRequest that can be advanced further
+  - 后端报告“句柄已就绪”
+  - runtime 再把“就绪”翻译成可继续推进的 IoRequest
 ```
 
 ### 3.2 CompletionBackend
 
-Applicable to:
+适用：
 
 ```
   - io_uring
   - IOCP
 ```
 
-Semantics:
+语义：
 
 ```
-  - A concrete I/O operation is submitted first
-  - The backend produces completion events directly
-  - The runtime consumes the completion queue
+  - 先提交具体 I/O 操作
+  - 后端直接产出完成事件
+  - runtime 消费 completion queue
 ```
 
-### 3.3 Why Not Hard-Code Proactor
+### 3.3 为什么不用写死 Proactor
 
-Strictly speaking:
+严格说：
 
 ```
-IOCP is more typically close to Proactor
-io_uring can do both poll and completion
+IOCP 更典型地接近 Proactor
+io_uring 既能做 poll，也能做 completion
 ```
 
-So the more accurate naming in the documentation should be:
+所以文档里更准确的叫法应是：
 
 ```
 Reactor / Completion
 ```
 
-rather than dogmatically writing only:
+而不是过度教条地只写：
 
 ```
 Reactor / Proactor
@@ -308,36 +308,36 @@ Reactor / Proactor
 
 ---
 
-## 4. Startup-Time Backend Selection
+## 4. 启动期后端选择
 
-Backend selection is only allowed at startup time; hot switching at runtime is not allowed.
+后端选择只允许发生在启动期，不允许运行时热切换。
 
-### 4.1 Selection Flow
-
-```
-1. Probe system capabilities
-2. Read the configuration policy
-3. Select the optimal backend
-4. Emit the final decision log
-5. Initialize the corresponding runtime
-```
-
-### 4.2 Capability Probing
-
-Must probe:
+### 4.1 选择流程
 
 ```
-  - OS type
-  - Whether the kernel / API supports the target backend
-  - Whether current permissions or resource limits allow enabling it
+1. 探测系统能力
+2. 读取配置策略
+3. 选择最优后端
+4. 输出最终决策日志
+5. 初始化对应 runtime
 ```
 
-Example:
+### 4.2 能力探测
+
+必须探测：
+
+```
+  - OS 类型
+  - kernel / API 是否支持目标后端
+  - 当前权限或资源限制是否允许启用
+```
+
+示例：
 
 ```
 Linux:
-  - Probe io_uring first
-  - Fall back to epoll if unavailable
+  - 先探测 io_uring
+  - 不可用则退回 epoll
 
 macOS:
   - kqueue
@@ -346,7 +346,7 @@ Windows:
   - IOCP
 ```
 
-### 4.3 Configuration Policy
+### 4.3 配置策略
 
 ```toml
 [runtime.io]
@@ -358,18 +358,18 @@ backend = "auto"
 # force:iocp
 ```
 
-Rules:
+规则：
 
 ```
 auto:
-  Automatically select the best available backend
+  自动选最优可用后端
 
 force:*:
-  The specified backend must be enabled
-  If the system does not support it, startup fails
+  必须启用指定后端
+  若系统不支持，启动失败
 ```
 
-### 4.4 Selection Interfaces
+### 4.4 选择接口
 
 ```cpp
 enum class IoBackendKind : uint8_t {
@@ -396,29 +396,29 @@ public:
 
 ---
 
-## 5. Relationship with Tick
+## 5. 与 Tick 的关系
 
-theseed still keeps:
-
-```
-A single-threaded Tick Runtime
-```
-
-The I/O Runtime does not start a separate business thread model; instead it:
+theseed 仍然保留：
 
 ```
-Provides input and completion events for the Tick's Network phase
+单线程 Tick Runtime
 ```
 
-### 5.1 Constraints on the Tick Side
+I/O Runtime 不是另起一套业务线程模型，而是：
 
 ```
-1. All completions are consumed only on the owning tick thread
-2. Background system threads may exist, but they cannot modify an Entity directly
-3. Completions must first enter the runtime queue, then enter the Network phase
+为 Tick 的 Network 阶段提供输入和完成事件
 ```
 
-### 5.2 Recommended Sequence
+### 5.1 Tick 侧约束
+
+```
+1. 所有 completion 只在 owning tick thread 消费
+2. 后台系统线程可以存在，但不能直接改 Entity
+3. completion 必须先入 runtime queue，再进 Network phase
+```
+
+### 5.2 推荐时序
 
 ```text
 Tick::NetworkPhase
@@ -428,69 +428,69 @@ Tick::NetworkPhase
   └─ dispatch to runtime message queue
 ```
 
-If some backends need helper threads internally:
+如果某些后端内部需要辅助线程：
 
 ```
-They are allowed to exist,
-but these threads do not own Entities, nor do they enter the script layer directly.
+允许存在，
+但这些线程不拥有 Entity，也不直接进入脚本层。
 ```
 
 ---
 
-## 6. Separation of Handle / Request / Completion
+## 6. Handle / Request / Completion 的分离
 
-This layer of abstraction must avoid exposing `fd` as a core concept of the upper layers.
+这层抽象必须避免把 `fd` 暴露成上层核心概念。
 
-### 6.1 Why Not Just Expose fd
+### 6.1 为什么不能只暴露 fd
 
 ```
-1. Windows is not naturally equivalent to Unix fd semantics
-2. The focus of IOCP / io_uring is not fd readiness
-3. If TLS, KCP, or WebSocket wrapping is added later, a logical handle is more stable
+1. Windows 不天然等价于 Unix fd 语义
+2. IOCP / io_uring 的重点不在 fd readiness
+3. 后续如果有 TLS、KCP、WebSocket 封装，逻辑句柄更稳定
 ```
 
-### 6.2 Recommended Object Hierarchy
+### 6.2 推荐对象层次
 
 ```
 IoHandle
-  Represents the identity of a low-level handle managed by the runtime
+  表示运行时管理的底层句柄身份
 
 IoRequest
-  Represents a single pending I/O operation
+  表示一次待执行的 I/O 操作
 
 IoCompletion
-  Represents the result of a single completed I/O operation
+  表示一次已完成的 I/O 结果
 ```
 
-### 6.3 Cancellation Semantics
+### 6.3 取消语义
 
-It must be made explicit:
-
-```
-cancel(token) only guarantees a "best-effort cancellation"
-It does not guarantee that no completion will be received after the call returns
-```
-
-Therefore the upper layers must accept:
+必须明确：
 
 ```
-Completions may arrive late
-Completions must carry a token / generation
-The upper layers perform idempotent filtering by epoch / handle generation
+cancel(token) 只保证“尽力取消”
+不保证调用返回后一定不会再收到 completion
+```
+
+因此上层必须接受：
+
+```
+completion 可能晚到
+completion 必须携带 token / generation
+上层按 epoch / handle generation 做幂等过滤
 ```
 
 ---
 
-## 7. Interface with Transport
+## 7. 与 Transport 的衔接
 
-Transport should not depend directly on a concrete backend,
-but on:
+Transport 不应直接依赖具体后端，
+而应依赖：
 
 ```
 IIORuntime
 ```
 
-### 7.1 Transport Adapter Layer
+### 7.1 传输适配层
 
 ```cpp
 class ITransportEndpoint {
@@ -505,17 +505,17 @@ public:
 };
 ```
 
-This way:
+这样：
 
 ```
 TCP / UDP / WebSocket / Runtime Channel
 ```
 
-all face only the unified completion semantics.
+都只面对统一 completion 语义。
 
-### 7.2 The Place of the Legacy poller
+### 7.2 旧式 poller 的位置
 
-If compatibility with legacy-style implementations is needed, it may be kept:
+如果需要兼容旧风格实现，可以保留：
 
 ```cpp
 class IReactorBackend {
@@ -527,78 +527,78 @@ public:
 };
 ```
 
-But it belongs only to:
+但它只属于：
 
 ```
-Inside ReactorBackend
+ReactorBackend 内部
 ```
 
-It can no longer propagate upward as an overarching interface.
+不能再向上传播成总接口。
 
 ---
 
-## 8. MVP Boundary
+## 8. MVP 边界
 
-MVP should support:
+MVP 建议支持：
 
 ```
 Linux:
-  - epoll is mandatory
-  - io_uring as Phase 2 or an experimental feature
+  - epoll 必做
+  - io_uring 作为 Phase 2 或实验特性
 
 Windows:
-  - Establish the IOCP design boundary first
-  - Implementation priority is later than the Linux epoll main path
+  - IOCP 设计边界先立住
+  - 实现优先级晚于 Linux epoll 主路径
 
 macOS:
-  - Establish the kqueue design boundary first
-  - Implementation priority is later than the Linux epoll main path
+  - kqueue 设计边界先立住
+  - 实现优先级晚于 Linux epoll 主路径
 ```
 
-The reasons for this are:
+这样做的原因是：
 
 ```
-1. MVP first ensures the main platform runs
-2. The documentation layer establishes the long-term abstraction first
-3. Avoid spreading the risk of early io_uring implementation into all upper-layer modules
+1. MVP 先保证主平台可跑
+2. 文档层先把长期抽象立住
+3. 不把 io_uring 早期实现风险扩散进所有上层模块
 ```
 
 ---
 
-## 9. Final Relationship with BigWorld / KBEngine
+## 9. 与 BigWorld / KBEngine 的最终关系
 
 ### BigWorld
 
 ```
-Worth borrowing:
-  - The stable boundary between EventDispatcher and the main loop
-  - The clear interface between NetworkInterface and upper-layer business
+可借鉴：
+  - EventDispatcher 和主循环的稳定边界
+  - NetworkInterface 与上层业务的清晰衔接
 
-Not copied directly:
-  - The old-style dispatcher as the overarching abstraction
+不直接照搬：
+  - 老式 dispatcher 直接作为总抽象
 ```
 
 ### KBEngine
 
 ```
-Worth borrowing:
-  - The explicit layering of EventDispatcher -> Poller
-  - The engineering reality of Linux epoll / fallback select
+可借鉴：
+  - EventDispatcher -> Poller 的显式拆层
+  - Linux epoll / fallback select 的工程现实
 
-Not copied directly:
-  - Covering IOCP / io_uring with poller semantics
+不直接照搬：
+  - 用 poller 语义覆盖 IOCP / io_uring
 ```
 
 ### theseed
 
 ```
-theseed's addition is not "inventing a new socket API",
-but upgrading the event-loop experience of the old engines
-into:
+theseed 的新增点不是“发明一种新 socket API”，
+而是把老引擎的事件循环经验，
+升级成：
 
-  - A unified IORuntime at the upper layer
-  - A Reactor / Completion family in the middle layer
-  - Platform backend selection at the lower layer
+  - 上层统一 IORuntime
+  - 中层 Reactor / Completion 家族
+  - 下层平台后端选择
 ```
 
-Only this fits the long-term support goal for Linux / Windows / macOS.
+这才适合 Linux / Windows / macOS 的长期支持目标。

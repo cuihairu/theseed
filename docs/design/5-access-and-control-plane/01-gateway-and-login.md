@@ -1,108 +1,108 @@
-# Gateway & Login — Access Layer, Login Service, and the Challenge Ops Boundary
+# Gateway & Login — 接入层、登录服务与 Challenge 运维边界
 
-> **English** | [中文](01-gateway-and-login.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `LoginApp / Login Challenge / statusCheck / clearIPAddressBans`.
-> Reference implementation: the lightweight access path of KBEngine's `LoginApp`.
-> theseed separates the responsibilities of Gateway and Login Service on this basis.
+> 来源源头：BigWorld `LoginApp / Login Challenge / statusCheck / clearIPAddressBans`。
+> 参考实现：KBEngine `LoginApp` 的轻量接入路径。
+> theseed 在此基础上把 Gateway 与 Login Service 的职责拆清。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
+### BigWorld 是怎么实现的
 
 ```
-BigWorld's LoginApp is not merely an access point:
+BigWorld 的 LoginApp 不只是接入点：
   - challenge
   - pending request
-  - IP ban management
+  - IP ban 管理
   - status check
-  - controlled shutdown coordination
+  - 受控停服配合
 
-It is essentially an independent ops subsystem.
+它本质上是一个独立运维子系统。
 ```
 
-### How KBEngine Implements It
+### KBEngine 是怎么实现的
 
 ```
-KBEngine also has a LoginApp,
-but it leans more toward access and session distribution,
-and its ops control plane is not as thick as BigWorld's.
+KBEngine 也有 LoginApp，
+但整体更偏向接入与会话分发，
+运维控制面没有 BigWorld 那么厚。
 ```
 
-### Implementation Capability Comparison
+### 实现能力对比
 
-| Dimension | BigWorld | KBEngine | theseed trade-off |
+| 维度 | BigWorld | KBEngine | theseed 取舍 |
 |------|----------|----------|--------------|
-| LoginApp positioning | login entry point + login state machine + ops subsystem | lightweight login entry point + session distribution | currently follows BigWorld, implementing the core login-plane services first |
-| Gateway boundary | access and login-plane responsibilities are historically coupled | LoginApp takes on more access responsibilities | logically retains the Gateway/Login boundary; MVP does not force a process split |
-| Challenge | Login Challenge / factory capabilities are explicit | basically does not emphasize complex challenge | currently keeps the switch and interface positions; the complex state machine is enhanced later |
-| Pending request | login request state is trackable and controllable | relatively lightweight | MVP may omit the complex state machine for now, but the interface reserves an audit point |
-| IP ban / risk control | temporary ban and cleanup commands built into the login plane | weaker | introduced in Phase C to avoid overloading the MVP |
-| statusCheck | part of the login-plane ops commands | weaker | Phase C integrates with the unified Ops Control Plane |
-| Controlled shutdown | coordinates draining / shutdown with the login entry point | weaker | Phase C implements controlledShutdown / draining |
-| Realm selection | not a core abstraction | common implementations rely on LoginApp routing | currently LoginApp directly returns the realm list and character summaries |
-| Realm entry routing | depends on cluster state or service discovery | lightweight distribution | currently supports a fixed ip:port per realm first; policy-driven routing goes into the pending plan |
-| Session issuance | the login service completes the session handoff | LoginApp directly distributes session information | theseed uses ISessionIssuer to issue a token bound to accountId + realmId |
-| Deployment form | leans toward a complete service plane | easier to land as a single point | currently lands a single LoginApp first; multiple entry points and Pipeline go into the pending plan |
+| LoginApp 定位 | 登录入口 + 登录状态机 + 运维子系统 | 轻量登录入口 + 会话分发 | 当前参考 BigWorld，先实现登录面核心服务 |
+| Gateway 边界 | 接入和登录面职责存在历史耦合 | LoginApp 承担较多接入职责 | 逻辑上保留 Gateway/Login 边界，MVP 不强制拆进程 |
+| Challenge | Login Challenge / factory 能力明确 | 基本不强调复杂 challenge | 当前先保留开关与接口位置，复杂状态机后续增强 |
+| Pending request | 登录请求状态可跟踪、可控 | 相对轻量 | MVP 可先省略复杂状态机，但接口预留审计点 |
+| IP ban / 风控 | 登录面内建临时 ban、清理命令 | 较弱 | Phase C 引入，避免 MVP 过重 |
+| statusCheck | 登录面运维命令的一部分 | 较弱 | Phase C 接入统一 Ops Control Plane |
+| 受控停服 | 与登录入口配合 draining / shutdown | 较弱 | Phase C 做 controlledShutdown / draining |
+| 区服选择 | 不是核心抽象 | 常见实现依赖 LoginApp 路由 | 当前由 LoginApp 直接返回分区列表和角色摘要 |
+| 分区入口路由 | 依赖集群状态或服务发现 | 轻量分发 | 当前先支持每区固定 ip:port，策略化放入待定计划 |
+| 会话签发 | 登录服务完成 session handoff | LoginApp 直接分发会话信息 | theseed 用 ISessionIssuer 签发绑定 accountId + realmId 的 token |
+| 部署形态 | 偏完整服务面 | 更容易单点落地 | 当前先单 LoginApp 落地，多入口和 Pipeline 放入待定计划 |
 
-### Pros and Cons
-
-```
-BigWorld's advantages:
-  - login path and ops path are integrated
-  - the attack-defense and shutdown boundaries are more complete
-
-KBEngine's advantages:
-  - simple
-  - easier to land first
-
-Shared drawbacks:
-  - if the boundary is unclear, Gateway and Login easily get mixed into one layer
-```
-
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed chooses to write Gateway and Login Service separately,
-and to establish the Challenge ops boundary explicitly,
-avoiding shrinking the login service into "a single access port".
+BigWorld 的优点：
+  - 登录链路与运维链路一体化
+  - 攻防和停服边界更完整
+
+KBEngine 的优点：
+  - 简单
+  - 更容易先落地
+
+共同缺点：
+  - 如果边界不清，Gateway 和 Login 很容易混层
 ```
 
-### Why There Cannot Be Only a Gateway Left
+### theseed 的取舍
 
 ```
-If Gateway and Login are merged into "a single access service",
-three kinds of confusion quickly appear:
-  1. connection access and the challenge state machine become tightly bound
-  2. TLS / protocol adaptation and risk control / ban / pending request get mixed together
-  3. login-plane ops capability degrades into "querying the connection count"
+theseed 选择把 Gateway 和 Login Service 分开写，
+并把 Challenge 运维边界显式立住，
+避免把登录服务缩成“一个接入端口”。
+```
+
+### 为什么不能只剩一个 Gateway
+
+```
+如果把 Gateway 和 Login 合成“一个接入服务”，
+很快就会出现三种混乱：
+  1. 连接接入和 challenge 状态机绑死
+  2. TLS / 协议适配和风控 / ban / pending request 混在一起
+  3. 登录面运维能力退化成“查连接数”
 ```
 
 ---
 
-## 0. Design Boundary
+## 0. 设计边界
 
-This document covers:
+本篇负责：
 
 ```
-  - external access path
-  - responsibility split between Gateway and Login Service
+  - 外部接入链路
+  - Gateway 与 Login Service 的职责拆分
   - challenge / pending / ban / session handoff
-  - login-plane ops boundary
+  - 登录面运维边界
 ```
 
-This document does not cover:
+本篇不负责：
 
 ```
-  - in-game Entity runtime
-  - MessageBus control plane
-  - Watcher-style unified control entry point
-  - OTel backend and visualization platform
+  - 游戏内 Entity runtime
+  - MessageBus 控制面
+  - Watcher 式统一控制入口
+  - OTel 后端与可视化平台
 ```
 
-These topics are covered respectively in:
+这些主题分别见：
 
 ```
 02-message-bus-and-cross-realm
@@ -113,48 +113,48 @@ These topics are covered respectively in:
 
 ---
 
-## 1. Why Gateway and Login Belong in the Same Layer
+## 1. 为什么要把 Gateway 和 Login 放在同一层
 
-The old structure splitting `Gateway` and `Login Service` into two documents is fine,
-but placed in the old directory it invites misjudgment:
+旧结构把 `Gateway` 和 `Login Service` 分成两篇没有问题，
+但放在旧目录里时容易让人误判：
 
 ```
-Gateway = external access
-Login Service = some functional sub-page
+Gateway = 外部接入
+Login Service = 某个功能子页
 ```
 
-The more accurate understanding is:
+实际更准确的理解是：
 
 ```
 Gateway + Login Service
-  together form the Access Plane
+  一起构成 Access Plane
 ```
 
-Wherein:
-
-```
-Gateway
-  responsible for connection access, protocol adaptation, TLS, coarse-grained rate limiting
-
-Login Service
-  responsible for challenge, pending request, risk control, ban, statusCheck, login session handoff
-```
-
-This is also the system boundary that BigWorld's `LoginApp` truly embodies.
-
-So the more accurate classification is:
+其中：
 
 ```
 Gateway
-  = access proxy layer
+  负责连接接入、协议适配、TLS、粗粒度限流
 
 Login Service
-  = login state machine + risk control + session issuance layer
+  负责 challenge、pending request、风控、ban、statusCheck、登录会话交接
+```
+
+这也是 BigWorld `LoginApp` 真正体现出来的系统边界。
+
+所以更准确的归类是：
+
+```
+Gateway
+  = 接入代理层
+
+Login Service
+  = 登录状态机 + 风控 + 会话签发层
 ```
 
 ---
 
-## 2. Overall Architecture
+## 2. 总体架构
 
 ```text
 Client
@@ -180,28 +180,28 @@ Base / Game entry
 
 ---
 
-## 3. Gateway Responsibilities
+## 3. Gateway 的职责
 
-Gateway is responsible for:
-
-```
-  - external port listening
-  - TLS termination
-  - protocol unpacking and connection management
-  - coarse-grained IP / connection rate limiting
-  - handing login traffic over to the Login Service
-```
-
-Gateway is not responsible for:
+Gateway 负责：
 
 ```
-  - challenge lifecycle management
-  - pending login deduplication
-  - ban cleanup policy
-  - login statistics dashboard
+  - 外部端口监听
+  - TLS 终结
+  - 协议解包与连接管理
+  - 粗粒度 IP / 连接限流
+  - 把登录流量转交给 Login Service
 ```
 
-### 3.1 Interfaces
+Gateway 不负责：
+
+```
+  - challenge 生命周期管理
+  - pending login 去重
+  - ban 清理策略
+  - 登录统计面板
+```
+
+### 3.1 接口
 
 ```cpp
 class IGateway {
@@ -216,20 +216,20 @@ public:
 
 ---
 
-## 4. Login Service Responsibilities
+## 4. Login Service 的职责
 
-Login Service is responsible for:
+Login Service 负责：
 
 ```
-  - generate and verify challenge
-  - maintain pending login request
-  - count challenge success / failure / retry
-  - temporary ban / rate limit / request dedupe
-  - session issuance after a successful login
+  - 生成与校验 challenge
+  - 维护 pending login request
+  - 统计 challenge success / failure / retry
+  - 临时 ban / rate limit / request dedupe
+  - 登录成功后的 session issuance
   - statusCheck / clearTemporaryBans / draining
 ```
 
-### 4.1 Core Interfaces
+### 4.1 核心接口
 
 ```cpp
 class ILoginService {
@@ -245,7 +245,7 @@ public:
 };
 ```
 
-### 4.2 Challenge Abstraction
+### 4.2 Challenge 抽象
 
 ```cpp
 class ILoginChallenge {
@@ -262,7 +262,7 @@ public:
 
 ---
 
-## 5. Login Request State Machine
+## 5. 登录请求状态机
 
 ```text
 Idle
@@ -278,23 +278,23 @@ Idle
   ChallengeIssued → Expired
 ```
 
-Key constraints:
+关键约束：
 
 ```
-1. repeated login requests must not issue challenges indefinitely
-2. challenge reissue must continue on the original request
-3. challenge failure must enter statistics and risk control
-4. session issuance and request completion must be auditable
+1. 重复 login 请求不能无限发 challenge
+2. challenge 重发必须在原 request 上继续
+3. challenge 失败要进入统计与风控
+4. session issuance 和 request 完成要可审计
 ```
 
 ---
 
-## 6. Ops Boundary
+## 6. 运维边界
 
-BigWorld's login plane is not "a few commands tacked onto the login code";
-it is a small ops subsystem.
+BigWorld 的登录面不是“登录代码里顺带有几个命令”，
+而是一个小型运维子系统。
 
-The theseed documentation now explicitly splits it into three categories of capability:
+theseed 文档现在明确把它拆成三类能力：
 
 ### 6.1 Inspect
 
@@ -302,8 +302,8 @@ The theseed documentation now explicitly splits it into three categories of capa
   - pending login count
   - challenge type
   - successes / failures / rate limited
-  - ban store summary
-  - current draining state
+  - ban store 摘要
+  - 当前 draining 状态
 ```
 
 ### 6.2 Command
@@ -319,20 +319,20 @@ The theseed documentation now explicitly splits it into three categories of capa
 ### 6.3 Guardrail
 
 ```
-  - protocol fields must not be changed online
-  - session authority must not be cleared directly bypassing the audit
-  - challenge policy switching must verify that the implementation is registered
+  - 不允许在线改协议字段
+  - 不允许绕过审计直接清空会话权威
+  - challenge policy 切换必须校验实现已注册
 ```
 
-The unified command entry point and permission model are not expanded in this document; see:
+其中统一命令入口和权限模型，不在本篇展开，见：
 
 `04-ops-control-plane`
 
 ---
 
-## 7. Session Handoff and Routing
+## 7. Session Handoff 与路由
 
-After a successful login, the Access Plane is only responsible for completing the handoff; it does not take over in-game authority.
+登录成功后，Access Plane 只负责完成交接，不接管游戏内权威。
 
 ```text
 Login Service
@@ -342,15 +342,15 @@ Login Service
   → runtime authority moved to Base / game session side
 ```
 
-This point must stay consistent with the old-style LoginApp approach of KBEngine / BigWorld:
+这点要和 KBEngine / BigWorld 的老式 LoginApp 思路保持一致：
 
 ```
-The login service is not a game-logic host.
+登录服务不是游戏逻辑宿主。
 ```
 
 ---
 
-## 8. Configuration Boundary
+## 8. 配置边界
 
 ```yaml
 gateway:
@@ -380,102 +380,102 @@ login_service:
 
 ---
 
-## 9. Phased Boundaries
+## 9. 分阶段边界
 
 ```text
-MVP:
-  - single challenge type
-  - basic pending management
-  - IP rate limiting
+MVP：
+  - 单一 challenge type
+  - 基础 pending 管理
+  - IP 限流
   - statusCheck / clearTemporaryBans
 
-Phase 2:
+Phase 2：
   - challenge factory registry
-  - richer statistics
-  - account / device dimension risk control
+  - 更丰富的统计
+  - account / device 维度风控
 
-Phase 3:
-  - multiple challenge policies
-  - integration with the unified Ops platform
-  - finer-grained access orchestration
+Phase 3：
+  - 多 challenge policy
+  - 与统一 Ops 平台联动
+  - 更细粒度的接入编排
 ```
 
 ---
 
-## 10. Comparison with BigWorld / KBEngine / theseed
+## 10. 与 BigWorld / KBEngine / theseed 的对比
 
-| Dimension | BigWorld | KBEngine | theseed |
+| 维度 | BigWorld | KBEngine | theseed |
 |------|------|------|------|
-| Login Challenge | built in, multiple factories | basically none | standalone Login Service |
-| statusCheck | yes | weaker | explicitly retained |
-| ban cleanup command | yes | weaker | explicitly retained |
-| Gateway | simplified access plane | simplified TCP forwarding | standalone Gateway |
-| login ops plane | yes | weaker | design boundary established |
+| Login Challenge | 内建，多 factory | 基本无 | 独立 Login Service |
+| statusCheck | 有 | 较弱 | 明确保留 |
+| ban 清理命令 | 有 | 较弱 | 明确保留 |
+| Gateway | 简化接入面 | 简化 TCP 转发 | 独立 Gateway |
+| 登录运维面 | 有 | 较弱 | 设计边界已立住 |
 
 ---
 
-## 11. One-Sentence Judgment
+## 11. 一句话判断
 
-The focus of this document is not "how login handshakes", but rather:
+本篇的重点不是”登录如何握手”，而是：
 
 ```
-theseed has already elevated the BigWorld-style login service system boundary
-from mere access details to an independent capability surface of the Access Plane.
+theseed 已经把 BigWorld 风格的登录服务系统边界
+从单纯接入细节提升为 Access Plane 的独立能力面。
 ```
 
 ---
 
-## 12. LoginApp — Implementation Baseline Referencing BigWorld
+## 12. LoginApp — 参考 BigWorld 的实现基线
 
-> This section first returns to BigWorld's implementation approach as the implementation baseline for the current phase.
-> LoginApp is first implemented as the core login-plane service, covering authentication, realm list, character summaries, risk control, and session handoff,
-> without first introducing the abstraction refactor of an assemblable Pipeline.
+> 本节先回到 BigWorld 的实现方式，作为当前阶段的落地基线。
+> LoginApp 先按登录面核心服务实现，包含认证、分区列表、角色摘要、风控、session handoff，
+> 不先引入可组装 Pipeline 的抽象化改造。
 
-### 12.1 LoginApp Responsibilities
+### 12.1 LoginApp 的职责
 
-LoginApp references BigWorld's login-plane implementation; its responsibilities include:
+LoginApp 参考 BigWorld 的登录面实现，职责包括：
 
 ```text
-  - authentication
-  - realm list query
-  - character summary return
-  - pending request maintenance
-  - temporary ban / risk control
+  - 认证
+  - 分区列表查询
+  - 角色摘要返回
+  - pending request 维护
+  - 临时 ban / 风控
   - statusCheck
   - session handoff
 ```
 
-LoginApp does not undertake the in-game Entity runtime, does not undertake the message bus control plane, and does not undertake the unified ops platform.
+LoginApp 不承担游戏内 Entity runtime，不承担消息总线控制面，也不承担统一运维平台。
 
-### 12.2 Login Flow
+### 12.2 登录流程
 
 ```text
 Client
   → login(account, credentials)
-  → LoginApp verifies the account
-  → returns realm list + per-realm character summary + realm ip:port
+  → LoginApp 校验账号
+  → 返回分区列表 + 每区角色摘要 + 分区 ip:port
 
-Client selects a realm
+Client 选择分区
   → connect realm.ip:realm.port
   → loginGateway(account, token, realmId)
-  → realm verifies the session
-  → create Account Entity
+  → 分区验证 session
+  → 创建 Account Entity
   → reqAvatarList / selectAvatarGame
 ```
 
-In single-realm mode the realm selection can be skipped, but the default implementation still handles it as a realm entry.
+单区模式时可跳过分区选择，但默认实现仍按分区入口处理。
 
-### 12.3 Implementation Points Compared with BigWorld
+### 12.3 BigWorld 对照的实现点
 
 ```text
-BigWorld-style key points:
-  - LoginApp is an independent login-plane subsystem
-  - login, risk control, ban, statusCheck, session handoff live within the same boundary
-  - realm information and character summaries are returned by the login plane
-  - the client ultimately connects directly to the realm entry
+BigWorld 风格的关键点：
+  - LoginApp 是一个独立登录面子系统
+  - 登录、风控、ban、statusCheck、session handoff 在同一边界内
+  - 分区信息与角色摘要由登录面返回
+  - 客户端最终直连分区入口
 ```
 
-### 12.4 Current Implementation Baseline
+### 12.4 当前实现基线
 
 ```cpp
 struct RealmInfo {
@@ -499,7 +499,7 @@ public:
 };
 ```
 
-### 12.5 Configuration Baseline
+### 12.5 配置基线
 
 ```yaml
 login_app:
@@ -523,20 +523,20 @@ login_app:
     enabled: false
 ```
 
-### 12.6 Plans Pending Discussion
+### 12.6 讨论待确定的计划
 
-The following content is kept for discussion for now and does not enter the current implementation baseline:
+以下内容先保留为讨论，不进入当前实现基线：
 
 ```text
-  - assemblable Login Pipeline
-  - standalone Gateway process
-  - login endpoint discovery / DNS polling / LB
-  - policy-driven realm entry (Static / Registry / Fixed)
-  - Challenge state machine enhancement
-  - finer-grained risk control policy
+  - 可组装 Login Pipeline
+  - 独立 Gateway 进程
+  - login endpoint 发现 / DNS 轮询 / LB
+  - 分区入口策略化（Static / Registry / Fixed）
+  - Challenge 状态机增强
+  - 更细粒度的风控策略
 ```
 
-### 12.7 Relationship Between the Design Document and the Implementation Baseline
+### 12.7 设计文档与实现基线的关系
 
-Chapters 1-11 of this document describe the complete system boundary of the theseed Access Plane.
-Chapter 12 currently adopts the BigWorld-style implementation baseline first, and later decides whether to introduce a more abstract pipelined approach based on validation results.
+本文档第 1-11 章描述的是 theseed Access Plane 的完整系统边界。
+第 12 章当前先采用 BigWorld 式实现基线，后续再根据验证结果决定是否引入更抽象的管道化方案。

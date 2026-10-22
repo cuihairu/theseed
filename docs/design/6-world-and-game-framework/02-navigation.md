@@ -1,53 +1,53 @@
-# Navigation — Navigation and Pathfinding
+# Navigation — 导航与寻路
 
-> **English** | [中文](02-navigation.zh.md)
+> [English](02-navigation.md) | **中文**
 
-> Recast/Detour is the industry-standard pathfinding engine, used by both BigWorld and KBEngine.
-> theseed integrates it directly and adds dynamic obstacle and multi-layer NavMesh support.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-BigWorld directly incorporates the navigation system into the space runtime:
-  - NavMesh queries
-  - Linked with space geometry and chunk assets
-  - Serves AI, movement, and physics validation
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine also uses the Recast/Detour route,
-but its overall world system support is lighter than BigWorld's.
-```
-
-### Pros and Cons
-
-```
-Common advantages:
-  - Mature in the industry
-  - High adaptability with server-side movement/AI
-
-Common disadvantages:
-  - Dynamic obstacles and multi-layer navigation increase complexity
-  - Still depends on world asset quality
-```
-
-### theseed's Trade-offs
-
-```
-theseed keeps the Recast/Detour main line,
-but writes dynamic obstacles and multi-layer support as explicit extension items,
-and does not mix world editor semantics into the runtime documentation.
-```
+> Recast/Detour 是行业标准寻路引擎，BigWorld 和 KBEngine 都使用。
+> theseed 直接集成，增加动态障碍物和多层 NavMesh 支持。
 
 ---
 
-## 1. INavigationSystem Interface
+## 0.5 引擎实现对照与取舍
+
+### BigWorld 是怎么实现的
+
+```
+BigWorld 直接把导航系统纳入空间运行时：
+  - NavMesh 查询
+  - 与空间几何和 chunk 资产联动
+  - 为 AI、移动和物理校验服务
+```
+
+### KBEngine 是怎么实现的
+
+```
+KBEngine 也使用 Recast/Detour 路线，
+但整体世界系统配套比 BigWorld 更轻。
+```
+
+### 优缺点
+
+```
+共同优点：
+  - 行业成熟
+  - 与服务端移动/AI 适配度高
+
+共同缺点：
+  - 动态障碍与多层导航会增加复杂度
+  - 仍然依赖世界资产质量
+```
+
+### theseed 的取舍
+
+```
+theseed 保留 Recast/Detour 主线，
+但把动态障碍和多层支持写成明确扩展项，
+不在运行时文档里混入世界编辑器语义。
+```
+
+---
+
+## 1. INavigationSystem 接口
 
 ```cpp
 class INavigationSystem {
@@ -73,7 +73,7 @@ public:
 
 ---
 
-## 2. Script Layer API
+## 2. 脚本层 API
 
 ```python
 class Monster(BaseEntity):
@@ -90,7 +90,7 @@ class Monster(BaseEntity):
 
 ---
 
-## 3. Binding NavMesh with Space
+## 3. NavMesh 与 Space 绑定
 
 ```xml
 <spaces>
@@ -102,15 +102,15 @@ class Monster(BaseEntity):
 </spaces>
 ```
 
-NavMesh is bound one-to-one with Space: loaded when the Space is created, unloaded when it is destroyed.
+NavMesh 与 Space 一一绑定：Space 创建时加载，销毁时卸载。
 
 ---
 
-## 4. Comparison
+## 4. 对比
 
-| Capability | BigWorld | KBEngine | theseed |
+| 能力 | BigWorld | KBEngine | theseed |
 |------|----------|----------|---------|
-| Pathfinding engine | Recast + AStar | Recast/Detour | Recast/Detour |
-| Dynamic obstacles | None | None | addObstacle/removeObstacle() |
-| Multi-layer NavMesh | Single layer | Multi-layer | Multi-layer |
-| Asynchronous loading | None | loadnavmesh_threadtasks | Future<void> |
+| 寻路引擎 | Recast + AStar | Recast/Detour | Recast/Detour |
+| 动态障碍 | 无 | 无 | addObstacle/removeObstacle() |
+| 多层 NavMesh | 单层 | 多层 | 多层 |
+| 异步加载 | 无 | loadnavmesh_threadtasks | Future<void> |

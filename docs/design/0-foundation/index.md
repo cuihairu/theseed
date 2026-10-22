@@ -1,11 +1,11 @@
-# 0-foundation — Design Baseline
+# 0-foundation — 设计基线
 
-> **English** | [中文](index.zh.md)
+> **English** | 中文
 
-This directory constrains the hard boundaries of the current implementation stage.
+本目录用于约束当前实现阶段的硬边界。
 
-Before continuing to the per-topic designs, it is recommended to first read:
+继续阅读分篇设计前，建议先看：
 
-- [01-mvp-architecture-baseline](01-mvp-architecture-baseline.md) — MVP scope, runtime boundaries, synchronization and migration constraints
-- [02-audit-scope-and-layering](02-audit-scope-and-layering.md) — Audit scope, BigWorld/KBEngine comparison, and new layering principles
-- [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md) — BigWorld origin, KBEngine reference, theseed's modernization integration basis
+- [01-mvp-architecture-baseline](01-mvp-architecture-baseline.md) — MVP 范围、运行时边界、同步与迁移约束
+- [02-audit-scope-and-layering](02-audit-scope-and-layering.md) — 审计口径、BigWorld/KBEngine 对照与新分层原则
+- [04-modern-mmo-engine-positioning](04-modern-mmo-engine-positioning.md) — BigWorld 源头、KBEngine 参考、theseed 现代化整合口径

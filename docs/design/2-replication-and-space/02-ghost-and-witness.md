@@ -1,62 +1,62 @@
-# Ghost & Witness — Cross-Boundary Perception and the View System
+# Ghost & Witness — 跨边界感知与视野系统
 
-> **English** | [中文](02-ghost-and-witness.zh.md)
+> **English** | 中文
 
-> Ghost solves the visibility problem of entities crossing Cell boundaries; Witness solves the view synchronization from entities to clients.
-> The two are the most critical runtime mechanisms on top of the AOI system.
+> Ghost 解决实体跨 Cell 边界的可见性问题；Witness 解决实体到客户端的视野同步。
+> 两者是 AOI 系统之上最关键的运行时机制。
 >
-> Origin: BigWorld `Witness / RealEntity / EntityCache / Ghost / Haunt`.
-> KBEngine is a lightweight reference implementation that inherits the real/ghost and Witness backbone, but with a thinner system periphery.
+> 来源源头：BigWorld `Witness / RealEntity / EntityCache / Ghost / Haunt`。
+> KBEngine 是轻量参考实现，继承 real/ghost 与 Witness 主干，但系统配套更薄。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld makes Witness and Ghost core runtime mechanisms:
-  - Witness is responsible for the client view and data packing
-  - Ghost is responsible for neighbor visibility across Cells
-  - EntityCache is responsible for the detail level, priority, and client state of each observation relationship
-  - AOI, detail level, priority update, and bandwidth budget form one chain
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine retains the same semantic backbone:
-  - Witness is responsible for view synchronization
-  - Ghost is responsible for cross-boundary perception
-  - But the overall system periphery is lighter than BigWorld's
+BigWorld 把 Witness 和 Ghost 做成核心运行时机制：
+  - Witness 负责客户端视野与数据打包
+  - Ghost 负责跨 Cell 的邻居可见性
+  - EntityCache 负责每个观察关系的 detail level、priority、client state
+  - AOI、detail level、priority update、bandwidth budget 串成一条链
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-Common advantages:
-  - Semantics directly fit MMO runtime
-  - Cross-boundary and client synchronization are modeled uniformly
-
-Common disadvantages:
-  - More complex than a pure event broadcast model
-  - Requires strong coupling with AOI / replication protocol
+KBEngine 保留了同样的语义主干：
+  - Witness 负责视野同步
+  - Ghost 负责跨边界感知
+  - 但整体系统配套比 BigWorld 更轻
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed inherits this model,
-because it is more suitable for entity-based game servers than "pure replication / pure subscription".
-The cost is that AOI, property synchronization, migration windows, and per-witness synchronization state must be designed together.
-Among them, BigWorld's `EntityCache` semantics cannot be lost; it is only that the MVP is not required to implement them fully right away.
+共同优点：
+  - 语义直接贴合 MMO 运行时
+  - 跨边界和客户端同步统一建模
+
+共同缺点：
+  - 比纯事件广播模型复杂
+  - 需要和 AOI / 复制协议强耦合
+```
+
+### theseed 的取舍
+
+```
+theseed 继承这个模型，
+因为它比“纯复制/纯订阅”更适合实体型游戏服务器。
+代价是必须把 AOI、属性同步、迁移窗口和 per-witness 同步状态一起设计。
+其中 BigWorld 的 `EntityCache` 语义不能丢，只是不要求 MVP 立即完整实现。
 ```
 
 ---
 
-## 1. Witness: The View System
+## 1. Witness：视野系统
 
-### 1.1 Core Interface
+### 1.1 核心接口
 
 ```cpp
 // runtime/Witness.h
@@ -110,85 +110,85 @@ private:
 };
 ```
 
-### 1.2 Core Logic of Witness::tick()
+### 1.2 Witness::tick() 核心逻辑
 
 ```
-Witness::tick() — executed at the end of each tick:
+Witness::tick() — 每 tick 末执行：
 
-1. Handle view enter/leave events
-   onEnterView → send createEntity message to the client
-                 → record into viewEntities_
-   onLeaveView → send leaveEntity message to the client
-                 → remove from viewEntities_
+1. 处理视野进出事件
+   onEnterView → 发送 createEntity 消息给客户端
+                 → 记录到 viewEntities_
+   onLeaveView → 发送 leaveEntity 消息给客户端
+                 → 从 viewEntities_ 移除
 
-2. Update detailLevel
-   For each viewEntity:
-     compute distance
+2. 更新 detailLevel
+   对每个 viewEntity：
+     计算 distance
      distance < near_threshold → detailLevel = 0
      distance < far_threshold  → detailLevel = 1
      else                      → detailLevel = 2
-   If detailLevel changed:
-     From a lower level up to a higher level → send the properties of the new level
-     From a higher level down to a lower level → no need to send (the client cleans up on its own)
+   如果 detailLevel 变化了：
+     从低级别升到高级别 → 发送新级别的属性
+     从高级别降到低级别 → 不需要发送（客户端自己清理）
 
-3. Broadcast dirty properties
-   For each viewEntity:
-     check changedProps[detailLevel]
-     Has dirty properties → serialize into Bundle → send to the client
+3. 广播脏属性
+   对每个 viewEntity：
+     检查 changedProps[detailLevel]
+     有脏属性 → 序列化到 Bundle → 发送给客户端
 
-4. Handle position/orientation updates (Volatile)
-   For each viewEntity:
-     Position change > threshold → send position update
-     Orientation change > threshold → send orientation update
+4. 处理位置/朝向更新（Volatile）
+   对每个 viewEntity：
+     位置变化 > threshold → 发送位置更新
+     朝向变化 > threshold → 发送朝向更新
 
 5. flush Bundle
-   Send all accumulated messages to the client through the Channel
+   将所有积累的消息通过 Channel 发送给客户端
 ```
 
 ---
 
-## 2. The Ghost System
+## 2. Ghost 系统
 
-### 2.1 Why Ghost Is Needed
-
-```
-Problem:
-  Space A is on CellApp 1, Space B is on CellApp 2
-  Entity X is in Space A, but X's AOI extends into Space B
-  A player on Space B should see X appear in their view
-
-  Without Ghost:
-    Space B does not know X exists → AOI events cannot trigger → the player cannot see X
-
-  With Ghost:
-    Create a read-only replica of X on Space B (Ghost X)
-    Ghost X participates in Space B's AOI → triggers work normally
-    The player sees X's state through Ghost X
-```
-
-### 2.2 The Real / Ghost Authority Model
+### 2.1 为什么需要 Ghost
 
 ```
-Core principle: single write authority
+问题：
+  Space A 在 CellApp 1，Space B 在 CellApp 2
+  实体 X 在 Space A，但 X 的 AOI 覆盖到了 Space B
+  Space B 上的玩家看到 X 应该出现在视野中
+
+  没有 Ghost：
+    Space B 不知道 X 存在 → AOI 事件无法触发 → 玩家看不到 X
+
+  有 Ghost：
+    在 Space B 上创建 X 的只读副本（Ghost X）
+    Ghost X 参与 Space B 的 AOI → 触发器正常工作
+    玩家通过 Ghost X 看到 X 的状态
+```
+
+### 2.2 Real / Ghost 权威模型
+
+```
+核心原则：单一写权限
 
   Real Entity:
-    - Has full properties
-    - Has write permission
-    - Handles all logic
-    - Location: the CellApp where the real resides
+    - 拥有完整属性
+    - 拥有写权限
+    - 处理所有逻辑
+    - 位置：real 所在的 CellApp
 
   Ghost Entity:
-    - Has partial properties (only those synchronized over)
-    - Read-only
-    - Does not handle logic
-    - Method calls are forwarded to the Real
-    - Location: other CellApps covered by AOI
+    - 拥有部分属性（只有同步过来的）
+    - 只读
+    - 不处理逻辑
+    - 方法调用转接到 Real
+    - 位置：AOI 覆盖到的其他 CellApp
 
-  Real → Ghost sync: when properties change, the real actively pushes to the ghost
-  Ghost → Real: method calls are forwarded through RealEntityMethod
+  Real → Ghost 同步：属性变更时 real 主动推送给 ghost
+  Ghost → Real：方法调用通过 RealEntityMethod 转接
 ```
 
-### 2.3 Core Interface
+### 2.3 核心接口
 
 ```cpp
 // runtime/GhostManager.h
@@ -223,19 +223,19 @@ private:
 };
 ```
 
-### 2.4 Ghost Message Forwarding
+### 2.4 Ghost 消息转发
 
 ```
-Method call flow on a Ghost (from KBEngine RealEntityMethod):
+Ghost 上的方法调用流程（来自 KBEngine RealEntityMethod）：
 
-1. The script calls methodA(args) on the Ghost
-2. GhostManager finds that it is a ghost (isReal() == false)
-3. Constructs a forwarding Bundle:
-   - Target: realCell_ (the CellApp where the real resides)
-   - Message: onGhostMessage
-   - Content: entityID + methodName + args
-4. Sends to the CellApp where the real resides
-5. After the Real receives it, it executes the actual methodA(args)
-6. If the method produces property changes → goes through onDefDataChanged normally
-   → triggers real → ghost synchronization
+1. 脚本在 Ghost 上调用 methodA(args)
+2. GhostManager 发现自己是 ghost（isReal() == false）
+3. 构造转发 Bundle：
+   - 目标：realCell_（real 所在的 CellApp）
+   - 消息：onGhostMessage
+   - 内容：entityID + methodName + args
+4. 发送到 real 所在 CellApp
+5. Real 收到后执行真正的 methodA(args)
+6. 如果方法产生属性变更 → 正常走 onDefDataChanged
+   → 触发 real → ghost 同步
 ```

@@ -1,89 +1,89 @@
-# Runtime Communication & Transport — EntityCall, the Runtime Data Plane, and Transport Semantics
+# Runtime Communication & Transport — EntityCall、运行时数据面与传输语义
 
-> **English** | [中文](03-runtime-communication-and-transport.zh.md)
+> **English** | 中文
 
-> Origin: BigWorld `Mailbox / Mercury / Channel / Bundle`,
-> Reference implementation: KBEngine `EntityCall / TCP`,
-> theseed adds a clearer runtime data plane boundary on top of this.
-
----
-
-## 0.5 Engine Implementation Comparison and Trade-offs
-
-### How BigWorld Implements It
-
-```
-The core of BigWorld's runtime communication is Mercury / Mailbox / Channel / Bundle:
-  - Expresses entity routing through channels and mailboxes
-  - Runtime messages are strongly bound to connection state
-  - Channel carries inactivity, RTT, encryption, statistics, and send state
-  - Bundle carries message aggregation, request/reply, and reliability roles
-  - Suitable for high-frequency entity main paths
-```
-
-### How KBEngine Implements It
-
-```
-KBEngine is more direct:
-  - EntityCall + TCP direct connection
-  - Fewer runtime semantics
-  - Easier to understand, but the system-layer abstraction is also thinner
-```
-
-### Pros and Cons
-
-```
-BigWorld / KBEngine advantages:
-  - The data plane is naturally close to entity routing
-  - It runs without introducing an additional bus
-
-Common disadvantages:
-  - The control plane, async plane, and data plane easily get mixed together
-  - Later expansion of cross-Realm coordination becomes awkward
-```
-
-### theseed's Trade-offs
-
-```
-theseed continues to separate the Runtime Data Plane from the control plane.
-The data plane takes BigWorld's Channel / Bundle state semantics as its upper bound,
-takes KBEngine's EntityCall direct connection path as the MVP reference,
-but does not let control/ops messages mix into the entity main path.
-```
-
-### Why the Layers Cannot Continue to Be Mixed
-
-```
-Once the Runtime Data Plane and the Control Plane are mixed into one layer,
-three kinds of errors quickly appear:
-  1. Treating EntityCall as a general-purpose RPC
-  2. Stuffing an MQ hop into the in-tick main path
-  3. Mixing ops broadcasts and entity ordered messages under the same backpressure semantics
-```
+> 来源源头：BigWorld `Mailbox / Mercury / Channel / Bundle`，
+> 参考实现：KBEngine `EntityCall / TCP`，
+> theseed 在此基础上补上更明确的运行时数据面边界。
 
 ---
 
-## 0. Design Boundary
+## 0.5 引擎实现对照与取舍
 
-This document is responsible for:
-
-```
-  - The essence of EntityCall
-  - The responsibilities of the Runtime Data Plane
-  - Runtime delivery semantics
-  - System boundaries such as piggyback / overflow / inactivity
-  - Transport implementation selection and abstraction interface
-```
-
-This document is not responsible for:
+### BigWorld 是怎么实现的
 
 ```
-  - MessageBus control plane semantics
-  - Cross-Realm async bridging
-  - Login access traffic
+BigWorld 的运行时通信核心是 Mercury / Mailbox / Channel / Bundle：
+  - 以通道和邮箱表达实体路由
+  - 运行时消息和连接状态强绑定
+  - Channel 承载 inactivity、RTT、加密、统计、发送状态
+  - Bundle 承载消息聚合、request/reply、可靠性角色
+  - 适合高频实体主路径
 ```
 
-The latter two are placed uniformly in:
+### KBEngine 是怎么实现的
+
+```
+KBEngine 更直接：
+  - EntityCall + TCP 直连
+  - 运行时语义更少
+  - 更容易理解，但系统层抽象也更薄
+```
+
+### 优缺点
+
+```
+BigWorld / KBEngine 的优点：
+  - 数据面和实体路由天然贴近
+  - 不需要额外引入总线才跑得起来
+
+共同缺点：
+  - 控制面、异步面、数据面容易混在一起
+  - 后期扩展跨 Realm 协调会变得别扭
+```
+
+### theseed 的取舍
+
+```
+theseed 继续把 Runtime Data Plane 和控制面拆开。
+数据面以 BigWorld 的 Channel / Bundle 状态语义为上限，
+以 KBEngine 的 EntityCall 直连路径作为 MVP 参考，
+但不让控制/运维消息混进实体主路径。
+```
+
+### 为什么不能继续混层
+
+```
+一旦把 Runtime Data Plane 和 Control Plane 混成一层，
+很快就会出现三种错误：
+  1. 把 EntityCall 当成通用 RPC
+  2. 把 MQ hop 塞进 tick 内主路径
+  3. 把运维广播和实体有序消息混用同一背压语义
+```
+
+---
+
+## 0. 设计边界
+
+本篇负责：
+
+```
+  - EntityCall 的本质
+  - Runtime Data Plane 的职责
+  - 运行时送达语义
+  - piggyback / overflow / inactivity 一类系统边界
+  - 传输实现选型与抽象接口
+```
+
+本篇不负责：
+
+```
+  - MessageBus 控制面语义
+  - 跨 Realm 异步桥接
+  - 登录接入流量
+```
+
+后两者统一放在：
 
 ```
 ../5-access-and-control-plane
@@ -91,13 +91,13 @@ The latter two are placed uniformly in:
 
 ---
 
-## 1. First Separate the Three Message Planes
+## 1. 先把三条消息平面分开
 
-One of the most important boundaries in the current theseed documentation is separating the three message planes:
+theseed 当前文档最重要的边界之一，就是把三条消息平面拆开：
 
 ### 1.1 Runtime Data Plane
 
-Responsible for:
+负责：
 
 ```
   - EntityCall
@@ -106,54 +106,54 @@ Responsible for:
   - runtime create / destroy / route update
 ```
 
-Requirements:
+要求：
 
 ```
-  - Clear ordering semantics
-  - Entity routing is perceptible
-  - Has backpressure capability
+  - 明确顺序语义
+  - 可感知实体路由
+  - 具备背压能力
 ```
 
 ### 1.2 Control Plane
 
-Responsible for:
+负责：
 
 ```
-  - Process online/offline
-  - Routing table publication
-  - Configuration broadcast
-  - Controlled shutdown / ops commands
+  - 进程上下线
+  - 路由表发布
+  - 配置广播
+  - 受控停服 / 运维命令
 ```
 
 ### 1.3 Cross-Realm Async Plane
 
-Responsible for:
+负责：
 
 ```
-  - Cross-server queries
-  - Cross-server notifications
-  - Matchmaking / mail / async orchestration
+  - 跨服查询
+  - 跨服通知
+  - 匹配 / 邮件 / 异步编排
 ```
 
-So the conclusion is:
+所以结论是：
 
 ```
-EntityCall does not go through MessageBus.
+EntityCall 不走 MessageBus。
 ```
 
-This is not an implementation preference, but an engine boundary.
+这不是实现偏好，而是引擎边界。
 
 ---
 
-## 2. The Real Semantics of EntityCall
+## 2. EntityCall 的真实语义
 
-EntityCall is not a general-purpose RPC framework, but rather:
+EntityCall 不是通用 RPC 框架，而是：
 
 ```
-"a proxy handle to the authoritative instance of some entity in another process"
+“另一个进程上某个实体权威实例的代理句柄”
 ```
 
-### 2.1 The Handle Model
+### 2.1 句柄模型
 
 ```cpp
 class EntityCall {
@@ -173,33 +173,33 @@ public:
 };
 ```
 
-### 2.2 Why It Cannot Go Through MQ
+### 2.2 为什么不能走 MQ
 
 ```
-1. Calls on the same entity have ordering dependencies
-2. Routing switches dynamically during migration
-3. The in-tick path does not allow an extra broker hop
-4. Runtime backpressure must return to the engine itself
+1. 同一实体的调用具备顺序依赖
+2. 迁移期间路由会动态切换
+3. tick 内路径不允许额外 broker hop
+4. 运行时背压必须回到引擎自身
 ```
 
-This is also the common system premise of BigWorld's `Mailbox / Mercury` and KBEngine's `EntityCall`.
+这也是 BigWorld `Mailbox / Mercury` 和 KBEngine `EntityCall` 的共同系统前提。
 
-Conversely:
+反过来说：
 
 ```
-If a message does not need:
-  - Entity authoritative routing
-  - In-tick ordering dependencies
-  - Migration window consistency
+如果某条消息不需要：
+  - 实体权威路由
+  - tick 内顺序依赖
+  - migration 窗口一致性
 
-Then it most likely does not belong to the Runtime Data Plane.
+那它大概率就不属于 Runtime Data Plane。
 ```
 
 ---
 
-## 3. Runtime Delivery Semantics
+## 3. 运行时送达语义
 
-### 3.1 The MVP Only Commits to Two Business-Visible Semantics
+### 3.1 MVP 只承诺两类业务可见语义
 
 ```cpp
 enum class DeliveryClass : uint8_t {
@@ -208,72 +208,72 @@ enum class DeliveryClass : uint8_t {
 };
 ```
 
-Scope of application:
+适用范围：
 
 ```
-ORDERED_RELIABLE:
+ORDERED_RELIABLE：
   - EntityCall
   - create / destroy
   - migration
-  - ghost core state
+  - ghost 核心状态
 
-UNORDERED_LOSSY:
-  - volatile position / orientation
-  - Auxiliary updates that can be overwritten by newer state
+UNORDERED_LOSSY：
+  - volatile 位置 / 朝向
+  - 可被新状态覆盖的辅助更新
 ```
 
-### 3.2 This Does Not Mean BigWorld Has Only Two Levels
+### 3.2 这不等于 BigWorld 只剩两级
 
-BigWorld's real system area also includes:
+BigWorld 真正的系统面还包括：
 
 ```
 driver / passenger / critical / none
 piggyback
 overflow
 inactivity
-channel / bundle backpressure and disconnect semantics
+channel / bundle 的背压与断链语义
 ```
 
-This round of reorganization keeps these boundaries in the same document, rather than continuing to scatter them across two directories.
+这轮重组把这些边界留在同一篇里，而不是继续散落在两个目录。
 
 ---
 
-## 4. BigWorld-Level Reliability Boundaries
+## 4. BigWorld 级可靠性边界
 
 ### 4.1 piggyback
 
-`piggyback` is not just "carrying a bit of data along the way", but rather:
+`piggyback` 不只是“顺手带点数据”，而是：
 
 ```
-A system semantics that reuses acknowledgments on an existing message flow, attaches small payloads, and reduces the cost of extra packets
+在已有消息流上复用确认、附带小负载、减少额外包成本的系统语义
 ```
 
 ### 4.2 overflow
 
-`overflow` is not a log event, but rather:
+`overflow` 不是日志事件，而是：
 
 ```
-When the send window, queue, or bundle capacity is exhausted,
-the runtime must enter an explicit discard, degradation, or retry path.
+发送窗口、队列或 bundle 容量被打满时，
+运行时必须进入明确的丢弃、降级或重试路径。
 ```
 
 ### 4.3 inactivity
 
-`inactivity` is not a simple timeout log either; it means:
+`inactivity` 也不是简单超时日志，它意味着：
 
 ```
-The liveness state of a connection or channel has already affected routing, recovery, or reconnection decisions.
+连接或 channel 的活性状态已经影响路由、恢复或重连判断。
 ```
 
-In BigWorld, none of these boundaries are "transport library implementation details".
+这些边界在 BigWorld 里都不是“传输库实现细节”。
 
-In theseed they must also continue to be preserved as runtime semantics.
+在 theseed 里也必须继续保留为 runtime 语义。
 
 ---
 
-## 5. Transport Abstraction
+## 5. 传输抽象
 
-### 5.1 Interface
+### 5.1 接口
 
 ```cpp
 class IRuntimeTransport {
@@ -296,134 +296,134 @@ public:
 };
 ```
 
-### 5.2 Recommended Implementation
+### 5.2 推荐实现
 
-theseed still recommends:
-
-```
-MVP:
-  - The Runtime Data Plane goes uniformly through IRuntimeTransport
-  - The default implementation may prioritize evaluating Aeron
-
-Alternatives:
-  - TCPTransport for simplified deployment
-```
-
-The reason is not "pursuing new technology", but rather:
+theseed 仍推荐：
 
 ```
-1. The same-machine IPC path has value
-2. Publication backpressure is observable
-3. The runtime can decide lossy merging and degradation on its own
+MVP：
+  - Runtime Data Plane 统一走 IRuntimeTransport
+  - 默认实现可优先评估 Aeron
+
+备选：
+  - TCPTransport 用于简化部署
 ```
 
----
-
-## 6. The System Role of Channel / Bundle
-
-In BigWorld / KBEngine, `Channel / Bundle` has never been just a serialization buffer.
-
-What they express is:
+原因不是“追求新技术”，而是：
 
 ```
-  - Ordering ownership
-  - Window and send cadence
-  - piggyback position
-  - overflow / retry decision points
-```
-
-So the theseed documentation should not describe them as:
-
-```
-A thin "message packet object"
-```
-
-A more reasonable formulation is:
-
-```
-Bundle = runtime message aggregation unit
-Channel = the stateful send context to some target route
+1. 同机 IPC 路径有价值
+2. Publication 背压可观测
+3. 运行时可自行决定 lossy 合并与降级
 ```
 
 ---
 
-## 7. Relationship with Migration, HA, and Lifecycle
+## 6. Channel / Bundle 的系统角色
 
-### 7.1 With Migration
+在 BigWorld / KBEngine 里，`Channel / Bundle` 从来不只是序列化缓冲区。
 
-The migration window needs:
-
-```
-  - An epoch identifiable before and after the route switch
-  - A clear handling policy for unfinished messages
-  - Messages on the old route can be forwarded, rejected, or discarded
-```
-
-### 7.2 With HA
-
-HA cares not only about "the snapshot exists", but also about:
+它们表达的是：
 
 ```
-When the primary instance fails,
-which runtime channel state needs to be rebuilt,
-which unfinished messages can be replayed,
-and which must be compensated for by upper-layer semantics.
+  - 顺序归属
+  - 窗口与发送节奏
+  - piggyback 位置
+  - overflow / retry 决策点
 ```
 
-### 7.3 With Lifecycle
-
-During `drain / retire / controlled shutdown`:
+所以 theseed 文档不应把它们写成：
 
 ```
-The runtime transport also needs to enter a controlled convergence state,
-rather than continuing to accept new load indefinitely as it does during the stable period.
+一个薄薄的“消息包对象”
+```
+
+更合理的表述是：
+
+```
+Bundle = 运行时消息聚合单元
+Channel = 到某个目标路由的状态化发送上下文
 ```
 
 ---
 
-## 8. Phased Boundary
+## 7. 与迁移、HA、生命周期的关系
+
+### 7.1 与迁移
+
+迁移窗口需要：
 
 ```
-MVP:
-  - EntityCall goes uniformly through the Runtime Data Plane
-  - Two business-visible semantics: ORDERED_RELIABLE / UNORDERED_LOSSY
-  - Basic backpressure and statistics
+  - 路由切换前后可识别 epoch
+  - 未完成消息有明确处理策略
+  - 旧路由上的消息可转发、拒绝或丢弃
+```
 
-Phase 2:
-  - A clearer channel / bundle state machine
-  - Explicit policy interfaces for piggyback / overflow / inactivity
-  - Tighter linkage with migration / lifecycle
+### 7.2 与 HA
 
-Phase 3:
-  - A complete reliability role model closer to BigWorld's
-  - More mature runtime degradation and recovery strategies
+HA 不只关心“快照存在”，还关心：
+
+```
+主实例故障时，
+哪些 runtime channel 状态需要重建、
+哪些未完成消息可以重放、
+哪些必须靠上层语义补偿。
+```
+
+### 7.3 与 lifecycle
+
+在 `drain / retire / controlled shutdown` 过程中：
+
+```
+runtime transport 也需要进入受控收敛状态，
+而不是一直像稳定期一样无限接收新负载。
 ```
 
 ---
 
-## 9. Comparison with BigWorld / KBEngine / theseed
+## 8. 分阶段边界
 
-| Dimension | BigWorld | KBEngine | theseed |
+```
+MVP：
+  - EntityCall 统一走 Runtime Data Plane
+  - ORDERED_RELIABLE / UNORDERED_LOSSY 两类业务可见语义
+  - 基础背压与统计
+
+Phase 2：
+  - 更清晰的 channel / bundle 状态机
+  - piggyback / overflow / inactivity 的显式策略接口
+  - 与 migration / lifecycle 更紧密联动
+
+Phase 3：
+  - 更接近 BigWorld 的完整可靠性角色模型
+  - 更成熟的运行时降级与恢复策略
+```
+
+---
+
+## 9. 与 BigWorld / KBEngine / theseed 的对比
+
+| 维度 | BigWorld | KBEngine | theseed |
 |------|------|------|------|
-| Entity remote handle | Mailbox | EntityCall | EntityCall |
-| Main-path message plane | Mercury direct connection | TCP direct connection | Runtime Data Plane |
-| MQ carries the main path | No | No | No |
-| Reliability system area | Complete and fine-grained | Relatively simplified | MVP converges, boundaries retained |
-| piggyback / overflow / inactivity | Yes | Weak | Explicitly written into the design boundary |
+| 实体远程句柄 | Mailbox | EntityCall | EntityCall |
+| 主路径消息平面 | Mercury 直连 | TCP 直连 | Runtime Data Plane |
+| MQ 承载主路径 | 否 | 否 | 否 |
+| 可靠性系统面 | 完整且细粒度 | 相对简化 | MVP 收敛，边界保留 |
+| piggyback / overflow / inactivity | 有 | 弱 | 明确写入设计边界 |
 
 ---
 
-## 10. One-Sentence Judgment
+## 10. 一句话判断
 
-The goal of this document is not to prove:
-
-```
-theseed has already equivalently implemented Mercury
-```
-
-But rather to make clear:
+这篇的目标不是证明：
 
 ```
-Runtime communication must be modeled as part of the "Replication and Space" layer,
-and the BigWorld-style reliability system area has already been established independently within the documentation boundary.
+theseed 已经等价实现 Mercury
+```
+
+而是明确：
+
+```
+运行时通信必须作为“复制与空间”层的一部分建模，
+并且 BigWorld 式可靠性系统面已经在文档边界中被单独立住。
 ```

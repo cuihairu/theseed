@@ -1,70 +1,70 @@
-# Physics — Server-Side Physics and Collision
+# Physics — 服务端物理与碰撞
 
-> **English** | [中文](01-physics.zh.md)
+> [English](01-physics.md) | **中文**
 
-> Server-side physics ≠ client rendering physics. The server only performs game rule validation: raycasts, overlap checks, collision queries.
+> 服务端物理 ≠ 客户端渲染物理。服务端只做游戏规则验证：射线检测、范围判定、碰撞查询。
 >
-> Source of truth: BigWorld Physics2's complete server-side physics boundary.
-> KBEngine essentially has no complete server-side physics layer and can only serve as a lightweight gap reference.
+> 来源源头：BigWorld Physics2 的完整服务端物理边界。
+> KBEngine 基本没有完整服务端物理层，只能作为轻量缺口参考。
 
 ---
 
-## 0.5 Engine Implementation Comparison and Trade-offs
+## 0.5 引擎实现对照与取舍
 
-### How BigWorld Implements It
-
-```
-BigWorld has a complete server-side physics subsystem:
-  - Physics queries
-  - Collision body management
-  - Linked with space and Chunk assets
-```
-
-### How KBEngine Implements It
+### BigWorld 是怎么实现的
 
 ```
-KBEngine essentially has no complete server-side physics layer,
-and usually relies more on script logic, simplified geometry, and external components.
+BigWorld 有完整的服务端物理子系统：
+  - 物理查询
+  - 碰撞体管理
+  - 与空间和 Chunk 资产联动
 ```
 
-### Pros and Cons
+### KBEngine 是怎么实现的
 
 ```
-BigWorld's advantages:
-  - Can push rule validation down to the engine layer
-  - Tighter coordination with space and navigation systems
-
-KBEngine's advantages:
-  - Lightweight
-  - One less layer of system complexity
-
-Common disadvantages:
-  - Truly complete server-side physics is very costly
+KBEngine 基本没有完整服务端物理层，
+通常更依赖脚本逻辑、简化几何和外部组件。
 ```
 
-### theseed's Trade-offs
+### 优缺点
 
 ```
-theseed only retains the server-side physics query boundary
-and does not make a complete Physics2 an MVP goal.
+BigWorld 的优点：
+  - 能把规则验证下沉到引擎层
+  - 与空间和导航系统协同更紧
+
+KBEngine 的优点：
+  - 轻
+  - 少一层系统复杂度
+
+共同缺点：
+  - 真正完整的服务端物理成本很高
 ```
 
----
-
-## 1. Why the Server Needs Physics
+### theseed 的取舍
 
 ```
-Hard requirements for server-side physics:
-  1. Raycasts: did the skill projectile hit? Is the line of sight blocked?
-  2. Overlap checks: which entities are affected by an AOE skill?
-  3. Collision queries: can a character walk through walls? Is the movement legal?
-  4. Drop detection: where on the ground does an item land?
-  5. NavMesh dependency: pathfinding requires collision geometry
+theseed 只保留服务端物理查询边界，
+不把完整 Physics2 作为 MVP 目标。
 ```
 
 ---
 
-## 2. IPhysicsQuery Interface
+## 1. 为什么服务端需要物理
+
+```
+服务端物理的刚需场景：
+  1. 射线检测：技能弹道是否命中？视线是否被遮挡？
+  2. 范围判定：AOE 技能影响哪些实体？
+  3. 碰撞查询：角色能不能穿墙？移动是否合法？
+  4. 掉落检测：物品掉落在地面哪个位置？
+  5. NavMesh 依赖：寻路需要碰撞几何体
+```
+
+---
+
+## 2. IPhysicsQuery 接口
 
 ```cpp
 class IPhysicsQuery {
@@ -94,7 +94,7 @@ public:
 
 ---
 
-## 3. Script Layer API
+## 3. 脚本层 API
 
 ```python
 import theseed.physics
@@ -124,12 +124,12 @@ class Avatar(BaseEntity):
 
 ---
 
-## 4. Comparison
+## 4. 对比
 
-| Capability | BigWorld | KBEngine | theseed |
+| 能力 | BigWorld | KBEngine | theseed |
 |------|----------|----------|---------|
-| Raycast | Physics2 collide() | None | IPhysicsQuery::raycast() |
-| Overlap query | QuadTree | None | overlapSphere/Box() |
-| Line of sight | raycast with callback | None | lineOfSight() |
-| Collision data | WorldTriangle + QuadTree | None | NavMesh + collision mesh |
-| Physics simulation | None (server does not simulate) | None | Not doing |
+| 射线检测 | Physics2 collide() | 无 | IPhysicsQuery::raycast() |
+| 范围查询 | QuadTree | 无 | overlapSphere/Box() |
+| 视线检测 | raycast with callback | 无 | lineOfSight() |
+| 碰撞数据 | WorldTriangle + QuadTree | 无 | NavMesh + 碰撞网格 |
+| 物理模拟 | 无（服务端不模拟） | 无 | 不做 |
