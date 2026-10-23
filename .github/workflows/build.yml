@@ -24,7 +24,7 @@ concurrency:
 jobs:
   linux:
     name: linux-${{ matrix.preset }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +47,7 @@ jobs:
     # 伪 0 行（Entity.h:232/233、TickScheduler.h:56，gcc-14 起不再产出，
     # 实测见 todo.md 2026-09-27 批）；STL 内联的异常/cleanup 边各版本都
     # 有，由 gcovr 排除旗标处理（见 Coverage gate 注释）。
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -101,7 +101,7 @@ jobs:
 
   windows:
     name: windows-msvc-debug
-    runs-on: windows-latest
+    runs-on: ${{ vars.CI_RUNNER || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -120,7 +120,7 @@ jobs:
   # MySQL 等缺依赖的测试沿仓库既有环境门控自跳，不在此硬编码。
   macos:
     name: macos-clang-debug
-    runs-on: macos-latest
+    runs-on: ${{ vars.CI_RUNNER || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
 
