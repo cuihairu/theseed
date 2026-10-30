@@ -37,3 +37,9 @@ features:
     details: Script security, hot update, script debugging, client SDK, code generation
 ---
 
+
+## Architecture
+
+![theseed · distributed MMO game server engine](/images/architecture-en.svg)
+
+> 三平面分离：运行时数据面（baseapp / cellapp，单线程 tick）· 控制面（machine 进程监管、ops 只读 HTTP）· 跨服异步面（Redis）；持久化走 IEntityStore 三后端。进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine。

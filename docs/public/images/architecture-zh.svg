@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1100" viewBox="0 0 1280 1100" role="img" aria-labelledby="title desc" xml:lang="zh-CN">
+<title id="title">theseed · 分布式 MMO 游戏服务器引擎</title>
+<desc id="desc">BigWorld 谱系 · KBEngine 参考 · C++23 · 6 个进程目标 · 三平面分离 · EntityDef 驱动</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:Arial,'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b4d}.title{font-size:30px;font-weight:700}.name{font-size:22px;font-weight:700}.body{font-size:16px;fill:#435570}.small{font-size:14px;fill:#52647b}.label{font-size:14px;fill:#435570;paint-order:stroke;stroke:#f8fafc;stroke-width:5px;stroke-linejoin:round}.edge{fill:none;stroke-linejoin:round}.control{stroke-dasharray:7 5}</style>
+<rect width="1280" height="1100" rx="20" fill="#f8fafc"/>
+<text x="40" y="48" class="title" text-anchor="start">theseed · 分布式 MMO 游戏服务器引擎</text>
+<text x="40" y="80" class="body" text-anchor="start">BigWorld 谱系 · KBEngine 参考 · C++23 · 6 个进程目标 · 三平面分离 · EntityDef 驱动</text>
+<path d="M205 210 V250" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="217" y="240" class="label" text-anchor="start">登录</text>
+<path d="M370 310 H470" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="420" y="302" class="label" text-anchor="middle">大区</text>
+<path d="M205 370 V420" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="217" y="408" class="label" text-anchor="start">进入世界</text>
+<path d="M635 370 V395 H300 V420" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M370 505 H470" class="edge" style="stroke:#2563eb;stroke-width:2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<text x="420" y="498" class="label" text-anchor="middle">EntityCall</text>
+<text x="420" y="530" class="label" text-anchor="middle">属性复制</text>
+<path d="M205 590 V650" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M635 590 V650" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="647" y="638" class="label" text-anchor="start">持久化</text>
+<path d="M420 770 V785 H205 V820" class="edge" style="stroke:#2563eb;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="219" y="806" class="label" text-anchor="start">IEntityStore</text>
+<path d="M40 310 H20 V865 H470" class="edge control" style="stroke:#64748b;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="140" y="855" class="label" text-anchor="start" style="fill:#64748b">会话 · 限流</text>
+<path d="M880 480 H800" class="edge control" style="stroke:#64748b;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="840" y="472" class="label" text-anchor="middle" style="fill:#64748b">监管</text>
+<path d="M880 700 H800" class="edge control" style="stroke:#64748b;stroke-width:2" marker-end="url(#arrow)"/>
+<text x="840" y="692" class="label" text-anchor="middle" style="fill:#64748b">只读</text>
+<g><rect x="40" y="120" width="330" height="90" rx="14" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="58" y="154" class="name" text-anchor="start">游戏客户端</text>
+<text x="58" y="184" class="body" text-anchor="start">登录 · 会话令牌 · 实体视图</text>
+</g>
+<g><rect x="40" y="250" width="330" height="120" rx="14" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+<text x="58" y="284" class="name" text-anchor="start">loginapp</text>
+<text x="58" y="314" class="body" text-anchor="start">LoginApp · ClientSession</text>
+<text x="58" y="340" class="body" text-anchor="start">LoginProtocol · SessionToken</text>
+</g>
+<g><rect x="470" y="250" width="330" height="120" rx="14" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+<text x="488" y="284" class="name" text-anchor="start">realmapp</text>
+<text x="488" y="314" class="body" text-anchor="start">RealmApp</text>
+<text x="488" y="340" class="body" text-anchor="start">大区选择</text>
+</g>
+<g><rect x="40" y="420" width="330" height="170" rx="14" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="58" y="454" class="name" text-anchor="start">baseapp</text>
+<text x="58" y="484" class="body" text-anchor="start">BaseApp · Base 实体</text>
+<text x="58" y="510" class="body" text-anchor="start">单线程 tick · EntityCall</text>
+</g>
+<g><rect x="470" y="420" width="330" height="170" rx="14" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+<text x="488" y="454" class="name" text-anchor="start">cellapp</text>
+<text x="488" y="484" class="body" text-anchor="start">CellApp · Cell 实体</text>
+<text x="488" y="510" class="body" text-anchor="start">Space · AOI · Witness / Ghost</text>
+</g>
+<g><rect x="40" y="650" width="760" height="120" rx="14" fill="#ecfdf5" stroke="#86c9b3" stroke-width="1.5"/>
+<text x="58" y="684" class="name" text-anchor="start">dbapp</text>
+<text x="58" y="714" class="body" text-anchor="start">DBApp · DBProtocol</text>
+<text x="58" y="740" class="body" text-anchor="start">IEntityStore / IAccountStore 抽象</text>
+</g>
+<g><rect x="40" y="820" width="330" height="90" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="58" y="854" class="name" text-anchor="start">File / MySQL / PostgreSQL</text>
+<text x="58" y="884" class="body" text-anchor="start">FileEntityStore · MySQLEntityStore</text>
+<text x="58" y="910" class="body" text-anchor="start">PostgreSQLEntityStore</text>
+</g>
+<g><rect x="470" y="820" width="330" height="90" rx="14" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+<text x="488" y="854" class="name" text-anchor="start">Redis</text>
+<text x="488" y="884" class="body" text-anchor="start">会话存储 · 限流</text>
+</g>
+<g><rect x="40" y="960" width="760" height="80" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="58" y="994" class="name" text-anchor="start">res/entities/*.xml</text>
+<text x="58" y="1024" class="body" text-anchor="start">EntityDefRegistry（src/core）· 启动加载 → baseapp / cellapp</text>
+</g>
+<g><rect x="880" y="420" width="360" height="200" rx="14" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5"/>
+<text x="898" y="454" class="name" text-anchor="start">machine</text>
+<text x="898" y="484" class="body" text-anchor="start">MachineAgent · ProcessSupervisor · HostProbe</text>
+<text x="898" y="510" class="body" text-anchor="start">监管全部 6 个进程目标</text>
+</g>
+<g><rect x="880" y="650" width="360" height="120" rx="14" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5"/>
+<text x="898" y="684" class="name" text-anchor="start">ops</text>
+<text x="898" y="714" class="body" text-anchor="start">OpsInspector · OpsServer</text>
+<text x="898" y="740" class="body" text-anchor="start">只读 HTTP · /metrics · /health · /inspect</text>
+</g>
+<text x="40" y="1080" class="small" text-anchor="start">实线：运行时数据面 · 虚线：控制/数据运维面 · 无圆点交叉不表示连通</text>
+</svg>
