@@ -70,6 +70,9 @@ int main() {
         bad.port = 1;
         bad.autoReconnect = false;
         MySQLConnection c(bad);
+        // P2-3：构造时不急切 mysql_init，避免 connect 再 init 同一 MYSQL
+        // 结构导致首句柄泄漏。句柄生命周期：构造 false → 连接成功 true。
+        CHECK(!c.handleInitialized(), "fresh connection must not eagerly initialize MYSQL");
         CHECK(!c.connect(), "connect to dead port should fail");
         CHECK(!c.isConnected(), "not connected after failed connect");
         CHECK(!c.lastError().empty(), "lastError captured after failed connect");
@@ -95,14 +98,17 @@ int main() {
     CHECK(c.connect(), "connect");
     CHECK(c.connect(), "second connect is idempotent");
     CHECK(c.isConnected(), "isConnected");
+    CHECK(c.handleInitialized(), "connected MYSQL handle is initialized");
     CHECK(c.ping(), "ping");
 
     // disconnect 关闭连接并复位句柄；重连后依然可用
     c.disconnect();
     CHECK(!c.isConnected(), "not connected after disconnect");
+    CHECK(!c.handleInitialized(), "disconnect releases MYSQL handle");
     CHECK(!c.ping(), "ping after disconnect");
     CHECK(c.connect(), "reconnect after disconnect");
     CHECK(c.ping(), "ping after reconnect");
+    CHECK(c.handleInitialized(), "reconnect reinitializes MYSQL handle");
 
     // move 赋值
     {

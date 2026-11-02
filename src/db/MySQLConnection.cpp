@@ -140,15 +140,13 @@ std::size_t MySQLResult::rowCount() const {
 struct MySQLConnection::Impl {
     MYSQL mysql;
     bool connected = false;
+    bool initialized = false;
     mutable std::string lastError;
     std::uint64_t lastInsertIdVal = 0;
     std::uint64_t affectedRowsVal = 0;
 
-    Impl() {
-        mysql_init(&mysql);
-    }
     ~Impl() {
-        if (connected) mysql_close(&mysql);
+        if (initialized) mysql_close(&mysql);
     }
 
     void captureError() {
@@ -164,7 +162,13 @@ MySQLConnection::~MySQLConnection() = default;
 bool MySQLConnection::connect() {
     if (impl_->connected) return true;
 
-    // 重新初始化以防之前 close 过
+    // 首次连接才 init。此前若 disconnect/close 过，必须先释放旧句柄再
+    // 重新初始化——MYSQL 结构经 mysql_close 后失效，但同址直接 mysql_init
+    // 会泄漏旧句柄资源。initialized 跟踪当前结构是否持有有效句柄。
+    if (impl_->initialized) {
+        mysql_close(&impl_->mysql);
+        impl_->initialized = false;
+    }
     if (!mysql_init(&impl_->mysql)) {  // LCOV_EXCL_BR_LINE mysql_init 失败即 OOM，不可注入
         // LCOV_EXCL_START mysql_init 失败即 OOM，不可注入
         impl_->lastError = "mysql_init failed";
@@ -193,20 +197,22 @@ bool MySQLConnection::connect() {
                            CLIENT_MULTI_STATEMENTS) == nullptr) {
         impl_->captureError();
         impl_->connected = false;
+        mysql_close(&impl_->mysql);
+        impl_->initialized = false;
         return false;
     }
 
     impl_->connected = true;
+    impl_->initialized = true;
     return true;
 }
 
 void MySQLConnection::disconnect() {
-    if (impl_->connected) {
+    if (impl_->initialized) {
         mysql_close(&impl_->mysql);
-        // mysql_close 后 MYSQL 结构失效，需重新 init 以便再次 connect
-        mysql_init(&impl_->mysql);
-        impl_->connected = false;
+        impl_->initialized = false;
     }
+    impl_->connected = false;
 }
 
 bool MySQLConnection::isConnected() const {
@@ -531,14 +537,17 @@ bool MySQLConnection::ping() {
     return mysql_ping(&impl_->mysql) == 0;
 }
 
+bool MySQLConnection::handleInitialized() const {
+    return impl_->initialized;
+}
+
 bool MySQLConnection::ensureConnected() {
     if (impl_->connected && mysql_ping(&impl_->mysql) == 0) {
         return true;
     }
     impl_->connected = false;
     if (!config_.autoReconnect) return false;
-    // 重新 init 后重连
-    mysql_init(&impl_->mysql);
+    // connect() 会安全释放旧句柄并重新初始化（若仍持有有效句柄）。
     return connect();
 }
 
