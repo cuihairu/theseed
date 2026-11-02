@@ -84,6 +84,12 @@ bool decodeProperty(MemoryStream& stream, PropertyData& prop) {
         size = PropertyData::fixedSizeOfType(prop.type);
     }
 
+    // 界检查前置于分配：变长 size 来自不可信流，谎报时不得先按不可信长度
+    // resize 再被 readBytes 拒绝（分配炸弹）。decodeEntityData 外层 catch 会
+    // 把本 throw 统一转 false，语义不变。
+    if (size > stream.readRemaining()) {
+        throw std::invalid_argument("property size exceeds stream");
+    }
     prop.rawValue.resize(size);
     if (size > 0) {
         stream.readBytes(prop.rawValue.data(), size);
