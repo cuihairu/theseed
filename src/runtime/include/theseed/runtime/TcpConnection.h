@@ -30,6 +30,12 @@ public:
     void setOnReceived(std::function<void(std::span<const std::byte>)> callback) override;
     void close() override;
     bool isConnected() const override;
+    // 待发缓冲上限（字节）：对端滞止时 write 超过该水位即拒绝并返回 false，
+    // 防止无界增长（P2-1 深审）。0 = 不设上限（测试/回环兼容）。
+    void setMaxSendBuffer(std::size_t maxBytes);
+    std::size_t maxSendBuffer() const noexcept;
+    // 当前待发缓冲字节数（诊断/测试）。
+    std::size_t sendBufferSize() const noexcept;
 
     void pump() override;
     std::size_t pumpWithResult();
@@ -50,6 +56,7 @@ private:
     std::function<void(std::span<const std::byte>)> onReceived_;
     std::vector<std::byte> sendBuffer_;
     std::vector<std::byte> recvBuffer_;
+    std::size_t maxSendBuffer_ = 8 * 1024 * 1024;
 
     friend class TcpListener;
 };

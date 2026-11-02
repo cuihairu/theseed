@@ -76,6 +76,12 @@ bool TcpConnection::connect(const std::string& host, std::uint16_t port) {
 bool TcpConnection::write(std::span<const std::byte> data) {
     if (!connected_ || data.empty()) return connected_;
 
+    // P2-1：待发缓冲有界。对端滞止（read 不消费）会让 sendBuffer_ 无界
+    // 增长；超过水位拒绝本次写入并保持连接可重试，由上层退避或断开。
+    if (maxSendBuffer_ > 0 && sendBuffer_.size() + data.size() > maxSendBuffer_) {
+        return false;
+    }
+
     sendBuffer_.insert(sendBuffer_.end(), data.begin(), data.end());
     trySendBuffered();
     return true;
@@ -172,6 +178,18 @@ bool TcpConnection::trySendBuffered() {
 
     sendBuffer_.erase(sendBuffer_.begin(), sendBuffer_.begin() + n);
     return sendBuffer_.empty();
+}
+
+void TcpConnection::setMaxSendBuffer(std::size_t maxBytes) {
+    maxSendBuffer_ = maxBytes;
+}
+
+std::size_t TcpConnection::maxSendBuffer() const noexcept {
+    return maxSendBuffer_;
+}
+
+std::size_t TcpConnection::sendBufferSize() const noexcept {
+    return sendBuffer_.size();
 }
 
 }  // namespace theseed::runtime

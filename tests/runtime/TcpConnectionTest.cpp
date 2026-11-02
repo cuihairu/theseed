@@ -5,6 +5,7 @@
 #include "SocketDetail.h"  // TU 私有胶合头（测试目标私有 include）：connectStillPending 纯函数直测
 
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -252,6 +253,35 @@ int main() {
             client->close();
             server->close();
         }
+        listener.close();
+    }
+
+    // P2-1：sendBuffer 有界。守卫在插入前判定 sendBuffer_.size() +
+    // data.size() > maxSendBuffer_——与内核是否已 flush 无关（回环可能
+    // 立即吸收，但守卫只看待发字节数）。超水位必须被拒绝（false）。
+    {
+        TcpListener listener;
+        CHECK(listener.listen("127.0.0.1", 0), "listen for cap");
+        const auto port = listener.localPort();
+
+        auto client = TcpConnection::create();
+        CHECK(client->connect("127.0.0.1", port), "client connect for cap");
+        auto server = listener.accept();
+        CHECK(server != nullptr, "accept for cap");
+        // 对端不 read：server 只保持连接，不消费数据。
+
+        client->setMaxSendBuffer(1);
+        const std::array<std::byte, 2> two{std::byte{0xAA}, std::byte{0xBB}};
+        const std::span<const std::byte> one(two.data(), 1);
+        const std::span<const std::byte> twoSpan(two.data(), two.size());  // 2 字节 > 水位 1
+        CHECK(client->write(one), "write within cap accepted");
+        CHECK(!client->write(twoSpan), "write over cap rejected");
+        CHECK(client->maxSendBuffer() == 1, "maxSendBuffer accessor");
+        // 关闭后 write 拒绝（未连接）。
+
+        // 关闭连接后 write 拒绝（未连接）。
+        client->close();
+        server->close();
         listener.close();
     }
 
