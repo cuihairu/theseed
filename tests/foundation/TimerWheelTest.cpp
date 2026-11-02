@@ -77,6 +77,29 @@ static void testPeriodicTimer() {
     else FAIL("expected 3, got " + std::to_string(fired));
 }
 
+// 回归：周期为 256 tick 整倍数的定时器，级联时 fireTick == currentTick_
+// （diff=0）曾把条目重插回本 tick 已排空的 level-0 槽，晚一轮触发、有效
+// 周期翻倍。必须当轮触发。
+static void testPeriodicTimerExactWheelBoundary() {
+    TEST("periodic timer at 256-tick boundary fires on time");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+    int fired = 0;
+    // 2560ms = 256 ticks，恰为 level-0 轮转周期（kLevelMask[0]+1）。
+    wheel.addPeriodic(std::chrono::milliseconds{2560}, [&] { ++fired; });
+
+    wheel.advance(std::chrono::milliseconds{2560});
+    if (fired != 1) {
+        FAIL("expected 1 at boundary, got " + std::to_string(fired));
+        return;
+    }
+
+    // 下一整轮：应照常每 256 tick 触发一次，而非两轮后。
+    wheel.advance(std::chrono::milliseconds{2560});
+    if (fired == 2) PASS();
+    else FAIL("expected 2, got " + std::to_string(fired));
+}
+
 static void testCancelTimer() {
     TEST("cancel timer prevents firing");
 
@@ -345,6 +368,7 @@ int main() {
     testOneShotTimer();
     testOneShotTimerExactTick();
     testPeriodicTimer();
+    testPeriodicTimerExactWheelBoundary();
     testCancelTimer();
     testCancelPeriodicTimer();
     testMultipleTimers();

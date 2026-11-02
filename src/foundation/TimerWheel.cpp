@@ -121,7 +121,15 @@ void TimerWheel::advance(Duration dt) {
 
             for (auto idx : moved) {
                 if (!entries_[idx].cancelled) {
-                    insertEntry(idx);
+                    // 级联时 fireTick 恰为 currentTick_（周期为 256 的倍数）的
+                    // 条目 diff=0，insertEntry 会把它插回本 tick 已排空的
+                    // level-0 槽，导致晚一轮（256 tick）才触发、周期翻倍。
+                    // 到期条目必须立即触发，不得重插。
+                    if (entries_[idx].fireTick <= currentTick_) {
+                        fireEntry(idx);
+                    } else {
+                        insertEntry(idx);
+                    }
                 }
             }
         }
