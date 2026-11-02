@@ -91,17 +91,23 @@ Counter& MetricsRegistry::counter(std::string_view name, std::string_view desc) 
     const std::lock_guard lock(mutex_);
     const std::string key(name);
     auto it = entries_.find(key);
+    // 与 gauge()/histogram() 同型：已注册为其它类型时按本类型重建，
+    // 否则 counter 成员为 null 的 Gauge/Histogram 条目会在此解引用 null。
+    if (it != entries_.end() && it->second->type == MetricType::Counter) {
+        return *it->second->counter;
+    }
+    auto entry = std::make_unique<Entry>();
+    entry->type = MetricType::Counter;
+    entry->desc = std::string(desc);
+    entry->counter = std::make_unique<Counter>();
+    Counter* ptr = entry->counter.get();
     if (it == entries_.end()) {
-        auto entry = std::make_unique<Entry>();
-        entry->type = MetricType::Counter;
-        entry->desc = std::string(desc);
-        entry->counter = std::make_unique<Counter>();
-        Counter* ptr = entry->counter.get();
         order_.push_back(key);
         entries_.emplace(key, std::move(entry));
-        return *ptr;
+    } else {
+        it->second = std::move(entry);
     }
-    return *it->second->counter;
+    return *ptr;
 }
 
 Gauge& MetricsRegistry::gauge(std::string_view name, std::string_view desc) {

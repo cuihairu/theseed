@@ -48,6 +48,20 @@ static void testCounterIncrement() {
     if (ok) PASS(); else FAIL("counter arithmetic or identity wrong");
 }
 
+// 回归：对已注册为 Gauge/Histogram 的名称调 counter()，不得解引用
+// 空 counter 成员（此前 *nullptr 直接 abort）。与 gauge()/histogram()
+// 一致，按本类型重建条目。
+static void testCounterOnExistingGauge() {
+    TEST("counter on existing gauge name rebuilds as counter");
+    MetricsRegistry::instance().reset();
+    auto& g = MetricsRegistry::instance().gauge("conflict_metric");
+    g.set(7.0);
+    auto& c = MetricsRegistry::instance().counter("conflict_metric", "rebuilt counter");
+    bool ok = c.value() == 0.0;
+    ok = ok && MetricsRegistry::instance().gauge("conflict_metric").value() == 0.0;
+    if (ok) PASS(); else FAIL("counter over gauge must not deref null");
+}
+
 static void testCounterMultithread() {
     TEST("counter multithread atomic increments");
     MetricsRegistry::instance().reset();
@@ -272,6 +286,7 @@ int main() {
     std::cout << "Metrics tests:\n";
 
     testCounterIncrement();
+    testCounterOnExistingGauge();
     testCounterMultithread();
     testGaugeSetIncDec();
     testHistogramBucket();
