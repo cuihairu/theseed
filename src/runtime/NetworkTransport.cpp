@@ -184,6 +184,15 @@ bool NetworkTransport::parseOneMessage() {
     // 恒真；断言用于防御未来 decodeHeader 引入字段校验后的静默破坏。
     assert(headerOk);  // LCOV_EXCL_BR_LINE decodeHeader 已预检长度恒真（见上方注释），断言假臂不可达
 
+    // 接收侧对称上限（发送侧 send() 已查 Oversized）：对端可谎报
+    // payloadLength（u32 最大 4GB）并慢速滴流，令 recvBuffer_ 无界增长
+    // （slowloris/内存耗尽 DoS）。超过本地允许的最大消息即视为协议错误
+    // 断开，不等完整帧体到齐再裁。
+    if (header.payloadLength > config_.maxMessageSize) {
+        close();
+        return false;
+    }
+
     if (recvBuffer_.readRemaining() < header.payloadLength) {
         // Not enough data for the full payload yet.
         // Restore read position so we can try again later.

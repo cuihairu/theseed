@@ -523,6 +523,33 @@ static void testMalformedInvocationFrameDisconnects() {
     else PASS();
 }
 
+// 接收侧上限：对端谎报 payloadLength（u32 上限 4GB）并只滴流少数帧体
+// 字节，必须被按协议错误断开，而非让 recvBuffer 无界增长（内存耗尽）。
+static void testOversizedClaimedPayloadDisconnects() {
+    TEST("payload claiming more than maxMessageSize is rejected, no buffer growth");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport client(pipeA);
+    NetworkTransport server(pipeB);
+
+    // 帧头合法但 payloadLength 谎报 0xFFFFFFFF >> 默认 maxMessageSize(64KB)。
+    MemoryStream frame;
+    MessageHeader header;
+    header.messageId = NetworkTransport::kInvocationMessageId;
+    header.payloadLength = 0xFFFFFFFFu;
+    theseed::foundation::encodeHeader(header, frame);
+    frame.writeUint32(0);  // 只滴流 4 字节帧体，远不足完整 payload
+
+    if (!pipeB->write(std::span<const std::byte>(frame.data(), frame.size()))) {
+        FAIL("pipe write failed");
+        return;
+    }
+    pipeB->pump();
+
+    if (client.isConnected()) FAIL("oversized claimed payload must disconnect");
+    else PASS();
+}
+
 // receive 容量 0 早退（防御臂）。
 static void testReceiveZeroCapacity() {
     TEST("receive with zero capacity returns 0");
@@ -556,6 +583,7 @@ int main() {
     testUnreliableFullQueueDiscards();
     testAutoFlushBackPressure();
     testMalformedInvocationFrameDisconnects();
+    testOversizedClaimedPayloadDisconnects();
     testReceiveZeroCapacity();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
