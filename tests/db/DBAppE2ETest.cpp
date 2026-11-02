@@ -413,6 +413,23 @@ int main() {
             FAIL("no response to listIds(\"\")");
         if (resp.method != DBMethod::kListIdsOk) FAIL("wrong response method");
         PASS();
+
+        // P2-4 回归：帧体短于 4 字节长度前缀时曾静默 return，不发响应，
+        // 调用方只能靠 requestTimeout 兜底烧满超时。必须立即回空表。
+        TEST("truncated listIds payload gets an empty-list response");
+        for (const std::size_t size : {std::size_t{0}, std::size_t{2}}) {
+            std::vector<std::byte> shortPayload(size, std::byte{0x01});
+            if (!client.request(DBMethod::kListIds, shortPayload, appTick, resp))
+                FAIL("no response to truncated listIds payload");
+            if (resp.method != DBMethod::kListIdsOk) FAIL("wrong response method");
+            std::vector<EntityId> outIds{1};
+            if (!DBProtocol::decodeListIdsResponse(
+                    std::span<const std::byte>(resp.payload.data(), resp.payload.size()),
+                    outIds))
+                FAIL("truncated listIds response must be decodable");
+            if (!outIds.empty()) FAIL("truncated listIds should yield empty list");
+        }
+        PASS();
     }
 
     // --- 畸形载荷 → 错误响应分支 ---
@@ -466,8 +483,18 @@ int main() {
         PASS();
 
         TEST("short listIds payload and unknown method do not kill server");
-        // 这两类请求服务端不回包；随后一条合法请求能正常应答即证明存活。
-        client.sendRequest(DBMethod::kListIds, std::vector<std::byte>(2, std::byte{0}));
+        // 短 payload（<4 字节）经 P2-4 修复后不再静默丢弃，而是立即回空表，
+        // 因此服务端会回包（旧行为是不回包）。未知方法（db.nope）仍不回包。
+        // 先消费短 payload 的空表响应，再发合法请求——残留响应会让下一步
+        // 的 request() 拿到错误帧。
+        {
+            RuntimeInvocation listResp;
+            if (!client.request(DBMethod::kListIds, std::vector<std::byte>(2, std::byte{0}),
+                                appTick, listResp))
+                FAIL("no response to short listIds after P2-4 fix");
+            if (listResp.method != DBMethod::kListIdsOk)
+                FAIL("short listIds should get empty-list response");
+        }
         client.sendRequest("db.nope", {});
         if (!client.request(DBMethod::kAllocId, {}, appTick, resp))
             FAIL("server unresponsive after junk requests");

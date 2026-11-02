@@ -305,18 +305,32 @@ void DBApp::handleAllocId(const runtime::RuntimeInvocation& inv) {
 void DBApp::handleListIds(const runtime::RuntimeInvocation& inv) {
     std::string entityType;
     auto payload = inv.payload;
-    // Decode entityType from payload
-    if (payload.size() < 4) return;
+
+    // Decode entityType from payload。畸形请求（帧体 < 4 字节长度前缀，或
+    // 长度前缀谎报超出帧体）不得静默丢弃——否则调用方只能靠 requestTimeout
+    // 兜底烧满整个超时（P2-4）。ListIds 响应无错误变体（只有 count+ids），
+    // 回空表（count=0，可解码）立即解除阻塞，风格同 handleLoad 畸形即回失败。
+    if (payload.size() < 4) {
+        auto empty = DBProtocol::encodeListIdsResponse({});
+        sendResponse(inv.sourceComponent, DBMethod::kListIdsOk,
+                     std::span<const std::byte>(empty.data(), empty.size()));
+        return;
+    }
     std::size_t offset = 0;
     auto len = static_cast<std::uint32_t>(payload[0])
              | (static_cast<std::uint32_t>(payload[1]) << 8)
              | (static_cast<std::uint32_t>(payload[2]) << 16)
              | (static_cast<std::uint32_t>(payload[3]) << 24);
     offset = 4;
-    if (offset + len <= payload.size()) {
-        entityType.resize(len);
-        if (len > 0) std::memcpy(entityType.data(), payload.data() + offset, len);
+    if (offset + len > payload.size()) {
+        // 长度前缀谎报（超出帧体）：同上回空表，不按空类型查询。
+        auto empty = DBProtocol::encodeListIdsResponse({});
+        sendResponse(inv.sourceComponent, DBMethod::kListIdsOk,
+                     std::span<const std::byte>(empty.data(), empty.size()));
+        return;
     }
+    entityType.resize(len);
+    if (len > 0) std::memcpy(entityType.data(), payload.data() + offset, len);
 
     auto ids = store_->listIdsByType(entityType);
     auto resp = DBProtocol::encodeListIdsResponse(ids);

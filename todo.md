@@ -51,7 +51,7 @@
 - [x] `TcpConnection::write` 无 sendBuffer 上限（对端滞止 → 无界增长）—— `src/runtime/TcpConnection.cpp:76`
 - [x] `createAccount` 两阶段写非原子（主表行先落库，索引行失败/崩溃遗留孤儿 Account）—— `src/db/MySQLEntityStore.cpp:324`、`src/db/PostgreSQLEntityStore.cpp:329`
 - [x] `MySQLConnection` 双重 `mysql_init` 未先 close 泄漏首句柄 —— `src/db/MySQLConnection.cpp:141`、`:164`
-- [ ] `handleListIds` 对畸形 payload 静默返回不发错误响应（调用方永久等待）—— `src/db/DBApp.cpp:305`
+- [x] `handleListIds` 对畸形 payload 静默返回不发错误响应（调用方永久等待）—— `src/db/DBApp.cpp:305`
 - [ ] `RemoteEntityStore` 按 method 字符串而非 requestId 关联响应，乱序可错配 —— `src/db/RemoteEntityStore.cpp:35`
 - [ ] `MachineAgent::execute` 负数 pid 经 `from_chars` 回绕成巨大值 —— `src/control/machine/MachineAgent.cpp:74`
 - [ ] `TimerWheel::cancel` 只置 cancelled 从不删除，已取消定时器累积 —— `src/foundation/TimerWheel.cpp:86`
@@ -72,3 +72,12 @@
 - [ ] 审核发现：MySQLConnection::ping() 可在未初始化/已关闭 MYSQL 句柄上调用 mysql_ping，属 API 契约外行为（越界/UB）——构造函数已移除急切 mysql_init（:146 起）、disconnect() 不再重初始化句柄（:211），但 ping() 未检查 initialized（:535）；测试 MySQLConnectionTest.cpp:83/:108 即触发此路径（src/db/MySQLConnection.cpp:535）
 - [x] 审核发现：TcpConnection 新增 sendBuffer 上限（:81）后，ClientSession::send 忽略 pipe_->write() 返回值（:30）——对端滞止超水位（默认 8MB）时消息被静默丢弃，而非退避/断开，引入静默丢包（src/login/ClientSession.cpp:30）
 - [ ] 审核发现：PhaseCIntegrationTest 负载剖面断言 vacuous——仅检查 rawLoad/smoothedLoad >= 0（:119-120），负载不可能为负，故定时器恒为 0 或 Scope 未累计真实耗时也会通过，未证明 dispatch 路径确实测量了非零负载（tests/core/PhaseCIntegrationTest.cpp:119）
+
+## 审核发现（6e25c6b1..HEAD，只审不改）
+
+- [ ] 审核发现：ClientSession::send 写失败即调用 close()（ClientSession.cpp:33-35），该路径位于 TcpConnection::pump 的 recv 回调栈内（pump→onReceived_→onRawReceived→tryParseMessages→onMessage_→handleLogin→send）；close() 将 socket_ 置 0 后，pumpWithResult 的 while 循环下一轮仍以 toSocket(0)=fd0（stdin）调用 ::recv（TcpConnection.cpp:137,150-154），属错误 fd 越界读；fd0 恰为 socket（systemd/inetd 激活）时会把外部数据投喂给已关闭连接的回调（src/login/ClientSession.cpp:33；src/runtime/TcpConnection.cpp:137）
+- [ ] 审核发现：ClientSession::send 改为返回 bool，但全部 4 个生产调用点均忽略返回值（LoginApp.cpp:601/709/714/760），"传播失败给上层"契约无消费方，仅测试使用；失败语义实际靠 close()+下一 tick cleanupDisconnected 收敛，未提供退避/重试选择（src/login/LoginApp.cpp:601）
+- [ ] 审核发现：knownTables_ 播种仅在 autoCreateSchema=true 时执行（MySQLEntityStore.cpp:86,135）；autoCreateSchema=false（DBApp.h:45 可配）时 createAccount 事务内 save()→ensureTable("Account") 仍发 CREATE TABLE IF NOT EXISTS DDL，依 MySQL DDL 隐式提交语义仍可能破坏两阶段写原子性，P2-2 修复未覆盖该配置（src/db/MySQLEntityStore.cpp:86,143-161）
+- [ ] 审核发现：MySqlBranchTest P2-2 回归依赖服务器严格 sql_mode（130 字符 username 超 VARCHAR(128)）且无凭据时整体跳过；非严格模式下索引 INSERT 静默截断成功，CHECK(!createAccount) 反而失败，该用例在非严格/无凭据环境不可靠，行为级验证未在 CI 落地（tests/db/MySqlBranchTest.cpp:303-317）
+- [ ] 审核发现：RealmAppTest 新 send 写失败用例只覆盖 write()=false 分支（:92-107）；null/未连接 pipe（:79/:83）与成功返回 true 均未断言新返回值，send 返回值契约覆盖不全（tests/realm/RealmAppTest.cpp:75-107）
+- [ ] 审核发现：MySqlBranchTest:320-321 注释"新实例（knownTables_ 为空…）"已过时——init()→createSchema 现已播种 knownTables_（:135），幸福路径用例的已知表状态描述与实现不符（tests/db/MySqlBranchTest.cpp:320）
