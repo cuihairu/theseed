@@ -296,6 +296,27 @@ int main() {
               "createAccount fails on entity save");
     }
 
+    // P2-2 回归（审核发现 1）：新实例 init() 已预建 tbl_Account，但若
+    // knownTables_ 未随预建同步填充，createAccount 事务内 save()→ensureTable
+    // 会补发 CREATE TABLE DDL——MySQL DDL 隐式提交当前事务，两阶段写的主表
+    // 行先于索引写被提交，索引写失败后 rollback 无法撤销，遗留孤儿。
+    // 用超长 username（> VARCHAR(128)）在严格模式强制索引 INSERT 失败，
+    // 且不依赖表锁，使 createAccount 成为该实例的首个操作（knownTables_
+    // 为空，正是未修复代码触发 DDL 的窗口）。
+    {
+        MySQLEntityStore fresh(storeConfigFromEnv());
+        CHECK(fresh.init(), "P2-2 regression init");
+
+        const std::string longUser(130, 'a');  // > VARCHAR(128)
+        theseed::core::EntityId id = 0;
+        CHECK(!fresh.createAccount(longUser, "pw", id),
+              "P2-2 regression createAccount fails on index insert");
+        // 索引写失败后主表行必须已回滚，不得遗留孤儿。
+        EntityData orphan;
+        CHECK(!fresh.load(id, "Account", orphan),
+              "P2-2 regression no orphan Account row after rollback");
+    }
+
     // 幸福路径回归：新实例（knownTables_ 为空，ensureTable 会重建 B7 删掉的
     // 主表；init 重建 B6 删掉的索引表），确认防御场景没污染正常语义。
     {

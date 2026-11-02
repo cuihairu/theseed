@@ -128,6 +128,11 @@ bool MySQLEntityStore::createSchema() {
         lastError_ = "create tbl_Account failed: " + conn_->lastError();
         return false;
     }
+    // 预建表已就绪，填入 knownTables_ 缓存：createAccount 事务内的
+    // save()→ensureTable("Account") 据此短路，不再发出 CREATE TABLE DDL。
+    // MySQL DDL 会隐式提交当前事务（见上注释），若在事务内补发 DDL，
+    // 两阶段写的主表行会先于索引写被提交，回滚无法撤销，仍遗留孤儿。
+    knownTables_.insert("tbl_Account");
     return true;
 }
 
