@@ -46,6 +46,7 @@ bool TcpConnection::connect(const std::string& host, std::uint16_t port) {
     detail::SocketHandle s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == detail::kInvalidSocket) return false;  // LCOV_EXCL_BR_LINE socket() 仅在 fd 耗尽时失败，测试环境无法稳定触发
 
+    detail::setCloseOnExec(s);  // 受管子进程不得继承本连接 fd
     socket_ = fromSocket(s);
     setNonBlocking();
 

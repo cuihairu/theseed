@@ -32,6 +32,8 @@ bool TcpListener::listen(const std::string& host, std::uint16_t port, int backlo
     detail::SocketHandle s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == detail::kInvalidSocket) return false;  // LCOV_EXCL_BR_LINE socket() 仅在 fd 耗尽时失败，测试环境无法稳定触发
 
+    detail::setCloseOnExec(s);  // 受管子进程不得继承监听 fd（否则端口滞留、重启 EADDRINUSE）
+
     // Allow address reuse
     int opt = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
@@ -89,6 +91,8 @@ std::shared_ptr<TcpConnection> TcpListener::accept() {
         reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
 
     if (clientSocket == detail::kInvalidSocket) return nullptr;
+
+    detail::setCloseOnExec(clientSocket);  // accept 结果与新建 socket 同需 CLOEXEC
 
     auto conn = factory_ ? factory_() : TcpConnection::create();
     conn->socket_ = static_cast<std::uintptr_t>(clientSocket);

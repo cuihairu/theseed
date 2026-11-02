@@ -172,6 +172,7 @@ std::string probeProcessVersion(std::uint16_t port, std::chrono::milliseconds ti
     if (fd < 0) {
         return "";  // fd 上限耗尽等资源异常（测试以 setrlimit 压 0 注入）
     }
+    ::fcntl(fd, F_SETFD, FD_CLOEXEC);  // 受管子进程不得继承探测 fd
     // RAII 收口：任何 return 路径都关 fd，不留泄漏描述符
     struct FdGuard {
         int fd;

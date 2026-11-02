@@ -27,6 +27,10 @@ inline void setNonBlocking(SocketHandle s) {
     ioctlsocket(s, FIONBIO, &mode);
 }
 
+// 子进程不继承 socket：Windows 侧 CreateProcess 以 bInheritHandles=FALSE
+// 启动受管进程，句柄默认不继承，无需额外处理（与 POSIX 分支语义对齐）。
+inline void setCloseOnExec(SocketHandle) {}
+
 // 与 POSIX 分支同语义（见彼处注释）：关 Nagle、ENOTCONN 可重试、
 // 未决 connect 的 SO_ERROR 读取。macOS 首发的 ENOTCONN 窗口问题在
 // Windows 侧同样存在于 WSAENOTCONN。
@@ -113,6 +117,14 @@ inline bool connectInProgress() {
 inline void setNonBlocking(SocketHandle s) {
     const int flags = ::fcntl(s, F_GETFL, 0);
     ::fcntl(s, F_SETFL, flags | O_NONBLOCK);
+}
+
+// 子进程不继承 socket：MachineDaemon 以 fork+execvp 启动受管游戏进程，
+// 若监听/连接 fd 未置 FD_CLOEXEC，子进程会继承这些句柄——daemon 停止后
+// 端口仍被子进程持有导致重启 EADDRINUSE，且连接 fd 被复制破坏断开语义。
+// 每个新 socket 与 accept 结果都必须调用。
+inline void setCloseOnExec(SocketHandle s) {
+    ::fcntl(s, F_SETFD, FD_CLOEXEC);
 }
 
 // 关闭 Nagle：请求/响应式控制面在非阻塞 tick 循环里逐条写小包，
