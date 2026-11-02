@@ -37,7 +37,7 @@ features:
     details: 脚本安全、热更新、脚本调试、客户端 SDK、代码生成
 ---
 
-> [English](index.md) | **中文**
+> English | **中文**
 
 ## 架构
 

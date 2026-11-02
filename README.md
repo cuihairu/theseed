@@ -1,8 +1,8 @@
 # theseed
 
 <p align="center">
-  <a href="https://github.com/cuihairu/theseed/releases"></a> <a href="https://cuihairu.github.io/theseed//"></a>
-  <img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"> <img src="https://img.shields.io/badge/docs-blue" alt="docs">
+  <a href="https://github.com/cuihairu/theseed/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
+  <a href="https://cuihairu.github.io/theseed/"><img alt="docs" src="https://img.shields.io/badge/docs-blue"></a>
 </p>
 
 > **English** | [中文](README.zh.md)
@@ -19,11 +19,12 @@ src/       Reusable libraries (one static library per directory)
              foundation  MemoryStream / TimerWheel / ObjectPool / Metrics / Logger / Tracing
                           / RedisProvider / SessionStore / RateLimiter
              runtime     Entity / EntityDef / PropertyBlock / Space / AOI / Witness /
-                          Ghost / Controller / TickScheduler / TcpTransport / BackupTopology /
-                          LoadProfiler / BehaviorTree / StateMachine
+                          Ghost / Controller / TickScheduler / TcpConnection / TcpListener /
+                          BackupTopology / LoadProfiler / BehaviorTree / StateMachine
              core        BaseRuntime / BaseApp / CellApp / EntityDefRegistry / EntityDefLoader /
                           FileEntityStore / EntityQuery
-             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection
+             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection /
+                          PostgreSQLEntityStore / PostgreSQLConnection
              login       LoginApp / ClientSession / LoginProtocol / SessionToken
              realm       RealmApp
              ops         OpsInspector / OpsServer (read-only inspect + /metrics + /health)
@@ -50,10 +51,12 @@ cmake --build build/gcc-debug
 ctest --test-dir build/gcc-debug --output-on-failure
 ```
 
-> MySQL backend: `vcpkg.json` declares `libmysql` by default. On Linux, building libmysql requires the
-> system prerequisite `libtirpc-dev` (`sudo apt-get install -y libtirpc-dev`) and compiles the full
-> mysql-server source tree (about 15-30 minutes on first build). When libmysql is unavailable, the
-> build automatically falls back to `FileEntityStore` (conditional compilation `THESEED_HAS_MYSQL`).
+> MySQL / PostgreSQL backends: `vcpkg.json` declares `libmysql` by default; the PostgreSQL backend is
+> detected via `libpq` (`find_package(PostgreSQL)`). On Linux, building libmysql requires the system
+> prerequisite `libtirpc-dev` (`sudo apt-get install -y libtirpc-dev`) and compiles the full
+> mysql-server source tree (about 15-30 minutes on first build). When a client library is unavailable,
+> the build automatically falls back to `FileEntityStore` (conditional compilation `THESEED_HAS_MYSQL`
+> / `THESEED_HAS_POSTGRESQL`).
 
 ## Implementation Phases
 
@@ -66,7 +69,7 @@ Witness synchronization, FileEntityStore, LoginApp minimal login.
 
 - Cross-linked list AOI (`runtime/AOI`) — O(K) range queries ✅
 - Controller system (MoveToPoint / MoveToEntity) ✅
-- MySQL persistence backend (`db/MySQLEntityStore`) — implemented, pending link verification in a real environment
+- MySQL / PostgreSQL persistence backends (`db/MySQLEntityStore` + `db/PostgreSQLEntityStore`) — implemented, verified against real instances
 - Redis session/rate-limiting wired into the login path (`foundation/SessionStore` + `RateLimiter`) ✅
 - Unity C# code generation (`tools/codegen/CSharpEmitter`) ✅
 - Basic Metrics / Logger / Tracing ✅

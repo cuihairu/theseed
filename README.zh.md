@@ -1,6 +1,8 @@
 # theseed
 
-<p align="center">[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/theseed/releases) <a href="https://cuihairu.github.io/theseed/zh//"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
+<p align="center">
+  <a href="https://github.com/cuihairu/theseed/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
+  <a href="https://cuihairu.github.io/theseed/zh/"><img alt="文档" src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue"></a>
 </p>
 
 > [English](README.md) | **中文**
@@ -17,11 +19,12 @@ src/       可复用库（每目录一个静态库）
              foundation  MemoryStream / TimerWheel / ObjectPool / Metrics / Logger / Tracing
                           / RedisProvider / SessionStore / RateLimiter
              runtime     Entity / EntityDef / PropertyBlock / Space / AOI / Witness /
-                          Ghost / Controller / TickScheduler / TcpTransport / BackupTopology /
-                          LoadProfiler / BehaviorTree / StateMachine
+                          Ghost / Controller / TickScheduler / TcpConnection / TcpListener /
+                          BackupTopology / LoadProfiler / BehaviorTree / StateMachine
              core        BaseRuntime / BaseApp / CellApp / EntityDefRegistry / EntityDefLoader /
                           FileEntityStore / EntityQuery
-             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection
+             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection /
+                          PostgreSQLEntityStore / PostgreSQLConnection
              login       LoginApp / ClientSession / LoginProtocol / SessionToken
              realm       RealmApp
              ops         OpsInspector / OpsServer（只读 inspect + /metrics + /health）
@@ -48,9 +51,11 @@ cmake --build build/gcc-debug
 ctest --test-dir build/gcc-debug --output-on-failure
 ```
 
-> MySQL 后端：vcpkg.json 默认声明 `libmysql`。Linux 上 libmysql 构建需要系统前置依赖
+> MySQL / PostgreSQL 后端：vcpkg.json 默认声明 `libmysql`；PostgreSQL 后端经 `libpq` 探测
+> （`find_package(PostgreSQL)`）。Linux 上 libmysql 构建需要系统前置依赖
 > `libtirpc-dev`（`sudo apt-get install -y libtirpc-dev`），且会完整编译 mysql-server 源码
-> （首次约 15-30 分钟）。无 libmysql 时自动回退 `FileEntityStore`（条件编译 `THESEED_HAS_MYSQL`）。
+> （首次约 15-30 分钟）。客户端库缺失时自动回退 `FileEntityStore`（条件编译
+> `THESEED_HAS_MYSQL` / `THESEED_HAS_POSTGRESQL`）。
 
 ## 实现阶段
 
@@ -63,7 +68,7 @@ Witness 同步、FileEntityStore、LoginApp 极简登录。
 
 - 十字链表 AOI（`runtime/AOI`）— O(K) 范围查询 ✅
 - Controller 系统（MoveToPoint / MoveToEntity）✅
-- MySQL 持久化后端（`db/MySQLEntityStore`）— 已实现，待真实环境链接验证
+- MySQL / PostgreSQL 持久化后端（`db/MySQLEntityStore` + `db/PostgreSQLEntityStore`）— 已实现，已在真实环境验证通过
 - Redis 会话/限流接入登录链路（`foundation/SessionStore` + `RateLimiter`）✅
 - Unity C# 代码生成（`tools/codegen/CSharpEmitter`）✅
 - 基础 Metrics / Logger / Tracing ✅
