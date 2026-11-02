@@ -40,3 +40,28 @@
 
 - [ ] Phase C 端到端集成（受限热更 / 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler）
 - [ ] 更完整的单元测试（跨平台 CI 矩阵已落地；测试覆盖仍开放）
+
+## 代码深审待办（2026-11-01）
+
+> 来源：全仓深审 `docs/review/2026-11-01-code-review.md`。P1（12 项）已当场修复并各自成 commit；
+> 此处仅列 P2/P3。每项修复须带回归测试且测试在未修复源码上必失败。
+
+### P2（12 项）
+
+- [ ] `TcpConnection::write` 无 sendBuffer 上限（对端滞止 → 无界增长）—— `src/runtime/TcpConnection.cpp:76`
+- [ ] `createAccount` 两阶段写非原子（主表行先落库，索引行失败/崩溃遗留孤儿 Account）—— `src/db/MySQLEntityStore.cpp:324`、`src/db/PostgreSQLEntityStore.cpp:329`
+- [ ] `MySQLConnection` 双重 `mysql_init` 未先 close 泄漏首句柄 —— `src/db/MySQLConnection.cpp:141`、`:164`
+- [ ] `handleListIds` 对畸形 payload 静默返回不发错误响应（调用方永久等待）—— `src/db/DBApp.cpp:305`
+- [ ] `RemoteEntityStore` 按 method 字符串而非 requestId 关联响应，乱序可错配 —— `src/db/RemoteEntityStore.cpp:35`
+- [ ] `MachineAgent::execute` 负数 pid 经 `from_chars` 回绕成巨大值 —— `src/control/machine/MachineAgent.cpp:74`
+- [ ] `TimerWheel::cancel` 只置 cancelled 从不删除，已取消定时器累积 —— `src/foundation/TimerWheel.cpp:86`
+- [ ] `RateLimiter::tryConsume` refillInterval<1ms 除零（限流器静默失效）—— `src/foundation/RateLimiter.cpp:41`
+- [ ] `CellRuntime` 分发路径无异常隔离，抛异常 handler 逃逸 `pumpInbound` —— `src/runtime/CellRuntime.cpp:354`
+- [ ] `FileEntityStore::allocId` 非原子读改写，并发可拿到同一 id —— `src/core/FileEntityStore.cpp:102`
+- [ ] `RateLimiter::tryConsume` 跨 Redis 往返读改写非原子，并发超发 —— `src/foundation/RateLimiter.cpp:27`
+- [ ] `EntityDef::mergeFrom` 中途属性冲突遗留半合并定义 —— `src/runtime/EntityDef.cpp:33`
+
+### P3（2 项）
+
+- [ ] `trySendBuffered` `sendBuffer_.size()` 强转 `int` 传给 `send()`，>2GB 截断/UB —— `src/runtime/TcpConnection.cpp:160`
+- [ ] 各 app `main` `std::stoi` 无 catch 解析数字参数；`volatile bool` 应用 `sig_atomic_t` —— `src/` 各入口
