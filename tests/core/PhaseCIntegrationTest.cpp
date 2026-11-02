@@ -84,7 +84,17 @@ static void testLoadProfilerWiredIntoCellRuntime() {
     entity->activate();
     int dispatchCount = 0;
     entity->bindMethodHandler("onDamage",
-        [&dispatchCount](theseed::runtime::Entity&, std::span<const std::byte>) { ++dispatchCount; });
+        [&dispatchCount](theseed::runtime::Entity&, std::span<const std::byte>) {
+            ++dispatchCount;
+            // 确定性忙等：让 Scope 记录到非零 wall-clock 耗时。无实际业务
+            // 载荷时 rawLoad 可能为 0，旧断言（>=0）对空转恒真，测不出
+            // dispatch 路径是否真的计量了负载（审核发现 vacuous）。
+            volatile std::uint64_t sink = 0;
+            for (std::uint64_t i = 0; i < 2000000ULL; ++i) {
+                sink += i;
+            }
+            (void)sink;
+        });
 
     // dispatch 一条实体方法，触发 loadProfiler Scope。
     RuntimeInvocation inv;
@@ -116,8 +126,11 @@ static void testLoadProfilerWiredIntoCellRuntime() {
     app.detach(scheduler);
 
     snap = profiler.snapshot(entity->id());
-    if (snap.rawLoad < 0.0F) { std::filesystem::remove_all(dir); FAIL("raw load negative"); return; }
-    if (snap.smoothedLoad < 0.0F) { std::filesystem::remove_all(dir); FAIL("smoothed load negative"); return; }
+    // 负载不可能为负——旧断言（>=0）对定时器恒 0 或 Scope 未累计真实耗时
+    // 也会通过，未证明 dispatch 路径确实测量了非零负载（审核发现）。必须
+    // 严格 > 0：handler 的确定性忙等保证 Scope 记录到非零耗时。
+    if (snap.rawLoad <= 0.0F) { std::filesystem::remove_all(dir); FAIL("raw load must be positive"); return; }
+    if (snap.smoothedLoad <= 0.0F) { std::filesystem::remove_all(dir); FAIL("smoothed load must be positive"); return; }
 
     std::filesystem::remove_all(dir);
     PASS();
