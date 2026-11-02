@@ -112,6 +112,22 @@ const EntityDefRegistry& CellApp::registry() const {
     return registry_;
 }
 
+runtime::BackupTopologyCoordinator& CellApp::backupTopology() {
+    return backupTopology_;
+}
+
+const runtime::BackupTopologyCoordinator& CellApp::backupTopology() const {
+    return backupTopology_;
+}
+
+scripting::HotUpdateManager& CellApp::hotUpdate() {
+    return hotUpdate_;
+}
+
+const scripting::HotUpdateManager& CellApp::hotUpdate() const {
+    return hotUpdate_;
+}
+
 runtime::Entity* CellApp::createEntity(const std::string& entityType,
                                         const runtime::Vector3& position,
                                         runtime::EntityId id) {

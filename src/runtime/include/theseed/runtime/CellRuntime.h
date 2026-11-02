@@ -3,6 +3,7 @@
 #include "theseed/runtime/GhostManager.h"
 #include "theseed/runtime/GroupManager.h"
 #include "theseed/runtime/EntityMigration.h"
+#include "theseed/runtime/LoadProfiler.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/SpaceRuntime.h"
 
@@ -64,6 +65,11 @@ public:
                             std::string method,
                             std::span<const std::byte> payload = {});
     bool dispatchInvocation(const RuntimeInvocation& invocation);
+    // 实体级负载剖面（Phase C-2）：返回本 runtime 的 EntityLoadProfiler，
+    // 调用方可在每个 tick 读取快照供调度/运维决策。只读语义在访问器；
+    // 剖面采集由 dispatch 路径自动进行（Scope 包裹每次实体分发）。
+    EntityLoadProfiler& loadProfiler() noexcept;
+    const EntityLoadProfiler& loadProfiler() const noexcept;
     bool applyGhostSync(const RuntimeInvocation& invocation);
     bool handleCreateCell(const RuntimeInvocation& invocation);
     bool handleDestroyCell(const RuntimeInvocation& invocation);
@@ -151,6 +157,7 @@ private:
     void advanceTimers(TickContext& context);
     void buildSync(TickContext& context);
     void flushRuntimeTransport();
+    void advanceLoadProfiler();
     bool applyMigrationTransfer(const RuntimeInvocation& invocation);
     bool applyMigrationCommit(const RuntimeInvocation& invocation);
     bool routeMigratingInvocation(const RuntimeInvocation& invocation);
@@ -179,6 +186,7 @@ private:
     std::unordered_map<EntityId, std::vector<foundation::TimerHandle>> entityTimers_;
     EntityFactoryHook factoryHook_;
     GroupManager groupManager_;
+    EntityLoadProfiler loadProfiler_;
 };
 
 }  // namespace theseed::runtime

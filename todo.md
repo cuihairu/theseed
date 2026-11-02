@@ -8,7 +8,7 @@
 
 - [x] Phase A — 现代化运行时最小闭环：TickScheduler / Entity 双体 / PropertyBlock / Base↔Cell EntityCall / SingleCell Space / Witness 同步 / FileEntityStore / 极简登录
 - [x] Phase B — 在线玩法与基础运维：十字链表 AOI / Controller（MoveToPoint·MoveToEntity）/ MySQL+PostgreSQL 持久化 / Redis 会话限流 / C# codegen / Metrics·Logger·Tracing / 只读 Ops inspect / Channel·Bundle 统计
-- [ ] Phase C — BigWorld 级系统面原型，均待端到端集成：受限热更（L1/L2）/ 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler
+- [x] Phase C — BigWorld 级系统面原型，端到端集成：受限热更（L1/L2）/ 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler（`PhaseCIntegrationTest`，121/121 全绿，含两个既有环境性失败见下）
 
 ## 数据与运维
 
@@ -38,7 +38,7 @@
 
 ## 打开项
 
-- [ ] Phase C 端到端集成（受限热更 / 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler）
+- [x] Phase C 端到端集成（受限热更 / 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler）
 - [ ] 更完整的单元测试（跨平台 CI 矩阵已落地；测试覆盖仍开放）
 
 ## 代码深审待办（2026-11-01）

@@ -3,11 +3,13 @@
 #include "theseed/core/EntityDefRegistry.h"
 #include "theseed/ops/OpsInspector.h"
 #include "theseed/ops/OpsServer.h"
+#include "theseed/runtime/BackupTopologyCoordinator.h"
 #include "theseed/runtime/CellRuntime.h"
 #include "theseed/runtime/RuntimeLoop.h"
 #include "theseed/runtime/Space.h"
 #include "theseed/runtime/SpaceRuntime.h"
 #include "theseed/runtime/TransportStatsCollector.h"
+#include "theseed/scripting/HotUpdate.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +49,10 @@ public:
     const runtime::CellRuntime& runtime() const;
     EntityDefRegistry& registry();
     const EntityDefRegistry& registry() const;
+    runtime::BackupTopologyCoordinator& backupTopology();
+    const runtime::BackupTopologyCoordinator& backupTopology() const;
+    scripting::HotUpdateManager& hotUpdate();
+    const scripting::HotUpdateManager& hotUpdate() const;
 
     runtime::Entity* createEntity(const std::string& entityType,
                                   const runtime::Vector3& position,
@@ -64,6 +70,8 @@ private:
     std::unique_ptr<runtime::CellRuntime> runtime_;
     std::shared_ptr<runtime::IRuntimeTransport> transport_;
     runtime::TransportStatsCollector transportStatsCollector_;
+    runtime::BackupTopologyCoordinator backupTopology_;
+    scripting::HotUpdateManager hotUpdate_;
     std::unordered_map<runtime::EntityId, std::unique_ptr<runtime::Entity>> ownedEntities_;
 
     std::unique_ptr<ops::OpsInspector> opsInspector_;

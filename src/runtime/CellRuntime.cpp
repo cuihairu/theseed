@@ -100,6 +100,10 @@ CellRuntime::FlushPump::FlushPump(CellRuntime& owner) : owner_(&owner) {}
 void CellRuntime::FlushPump::tick(TickContext& context) {
     static_cast<void>(context);
     owner_->flushRuntimeTransport();
+    // Phase C-2：实体级负载剖面在 Flush 阶段推进 EMA（每 tick 一次）。
+    // 放在 FlushPump（scheduler 注册的 tickable）里，确保生产 app 主循环
+    // scheduler.runOnce() 真实驱动剖面，而非依赖手动 runtime.tick() 约定。
+    owner_->advanceLoadProfiler();
 }
 
 CellRuntime::CellRuntime(std::unique_ptr<SpaceRuntime> spaceRuntime,
@@ -144,6 +148,14 @@ IRuntimeTransport& CellRuntime::transport() {
 
 ComponentId CellRuntime::localComponentId() const {
     return localComponentId_;
+}
+
+EntityLoadProfiler& CellRuntime::loadProfiler() noexcept {
+    return loadProfiler_;
+}
+
+const EntityLoadProfiler& CellRuntime::loadProfiler() const noexcept {
+    return loadProfiler_;
 }
 
 void CellRuntime::attach(TickScheduler& scheduler) {
@@ -432,6 +444,10 @@ bool CellRuntime::dispatchInvocation(const RuntimeInvocation& invocation) {
         return transport_->send(*forwarded) == SendResult::Accepted;
     }
 
+    // 实体级负载剖面（Phase C-2）：用 Scope 包裹实际分发，把该实体本 tick
+    // 的分发耗时记入 EntityLoadProfiler。findEntity 已保证实体存在，故
+    // scope 用 entity->entityType() 作为类型标签。
+    const auto profilerScope = loadProfiler_.scope(invocation.entityId, entity->entityType());
     return entity->dispatchInvocation(invocation);
 }
 
@@ -847,6 +863,12 @@ void CellRuntime::tick(TickContext& context) {
     advanceTimers(context);
     buildSync(context);
     flushRuntimeTransport();
+}
+
+void CellRuntime::advanceLoadProfiler() {
+    // 每个 tick 末尾推进 EMA：把刚完成的分发负载从 currentRawLoad 提升为
+    // lastRawLoad 并平滑，供 snapshot()/all() 读取（见 EntityLoadProfiler::tick）。
+    loadProfiler_.tick();
 }
 
 void CellRuntime::flushRuntimeTransport() {

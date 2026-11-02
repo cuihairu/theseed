@@ -75,9 +75,13 @@ Witness synchronization, FileEntityStore, LoginApp minimal login.
 - Read-only Ops inspect (`/metrics` `/health` `/inspect` `/entities`) ✅
 - Channel / Bundle statistics (`TransportStatsCollector`) ✅
 
-### Phase C — BigWorld-level system-area prototypes (started, all pending end-to-end integration)
+### Phase C — BigWorld-level system-area prototypes (complete)
 
-Restricted script hot-update, migration routing windows, BackupTopologyCoordinator, LoadProfiler, basic Tracing.
+- Restricted script hot-update (`scripting/HotUpdate`, L1 config + restricted L2) — wired into `CellApp.hotUpdate()` ✅
+- Migration routing windows (`runtime/EntityMigration` + `runtime/CellRuntime` route-window) — E2E verified ✅
+- BackupTopologyCoordinator (`runtime/BackupTopologyCoordinator`) — wired into `CellApp.backupTopology()` ✅
+- Entity / EntityType load profiler (`runtime/LoadProfiler`) — wired into `CellRuntime.loadProfiler()` ✅
+- Basic Tracing ✅
 
 ## Architecture Baseline Highlights
 

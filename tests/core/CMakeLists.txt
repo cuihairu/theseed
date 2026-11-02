@@ -70,6 +70,18 @@ target_link_libraries(
 add_test(NAME theseed_cell_app_observability_test COMMAND theseed_cell_app_observability_test)
 
 endif()
+
+# Phase C：受限热更 / 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler
+# 四个系统面原型的端到端整合测试（CellApp + runtime + ops 观测面）。
+add_executable(theseed_phase_c_integration_test PhaseCIntegrationTest.cpp)
+
+target_link_libraries(
+    theseed_phase_c_integration_test
+    PRIVATE theseed_project_options theseed_test_options
+    PRIVATE theseed_core)
+
+add_test(NAME theseed_phase_c_integration_test COMMAND theseed_phase_c_integration_test)
+
 if(UNIX AND NOT APPLE)
 add_executable(theseed_integration_test IntegrationTest.cpp)
 

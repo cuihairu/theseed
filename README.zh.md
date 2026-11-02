@@ -74,9 +74,13 @@ Witness 同步、FileEntityStore、LoginApp 极简登录。
 - 只读 Ops inspect（`/metrics` `/health` `/inspect` `/entities`）✅
 - Channel / Bundle 状态统计（`TransportStatsCollector`）✅
 
-### Phase C — BigWorld 级系统面原型（已启动，均待端到端集成）
+### Phase C — BigWorld 级系统面原型（已完成）
 
-受限脚本热更、迁移路由窗口、BackupTopologyCoordinator、LoadProfiler、基础 Tracing。
+- 受限脚本热更（`scripting/HotUpdate`，L1 配置 + 受限 L2）— 接入 `CellApp.hotUpdate()` ✅
+- 迁移路由窗口（`runtime/EntityMigration` + `runtime/CellRuntime` 路由窗口）— 端到端验证 ✅
+- BackupTopologyCoordinator（`runtime/BackupTopologyCoordinator`）— 接入 `CellApp.backupTopology()` ✅
+- 实体/实体类型负载剖面（`runtime/LoadProfiler`）— 接入 `CellRuntime.loadProfiler()` ✅
+- 基础 Tracing ✅
 
 ## 架构基线要点
 
