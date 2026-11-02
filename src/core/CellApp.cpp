@@ -130,9 +130,14 @@ runtime::Entity* CellApp::createEntity(const std::string& entityType,
     ptr->activate();
     ptr->notifyCreate();
 
-    ownedEntities_.emplace(id, std::move(entity));
-    runtime_->addEntity(*ptr, position);
-    return ptr;
+    // emplace 失败（id 已存在）会销毁被移动的 unique_ptr，ptr 立即悬垂：
+    // 必须检查插入结果，否则下方对 *ptr 是 use-after-free。
+    const auto [it, inserted] = ownedEntities_.emplace(id, std::move(entity));
+    if (!inserted) {
+        return nullptr;
+    }
+    runtime_->addEntity(*it->second, position);
+    return it->second.get();
 }
 
 runtime::Entity* CellApp::findEntity(runtime::EntityId id) const {

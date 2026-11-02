@@ -137,6 +137,37 @@ static void testCreateEntity() {
     std::filesystem::remove_all(dir);
 }
 
+// 回归：以重复显式 id 创建实体——emplace 失败销毁被移动的实体后，
+// 原代码继续对悬垂指针 addEntity（use-after-free）。现在必须返回 nullptr。
+static void testCreateEntityDuplicateId() {
+    TEST("createEntity with duplicate id returns nullptr");
+
+    auto dir = createDefDir();
+    auto transport = std::make_shared<InMemoryRuntimeTransport>();
+
+    CellApp::Config config;
+    config.entityDefPath = dir;
+    config.componentId = 2;
+
+    CellApp app(config, transport);
+    app.init();
+
+    const theseed::runtime::EntityId id = 4242;
+    auto* first = app.createEntity("Avatar", Vector3{0, 0, 0}, id);
+    bool ok = first != nullptr;
+    ok = ok && app.findEntity(id) == first;
+
+    // 同 id 再建：必须安全返回 nullptr，且首个实体仍可正常访问。
+    auto* dup = app.createEntity("Avatar", Vector3{5, 0, 0}, id);
+    ok = ok && dup == nullptr;
+    ok = ok && app.findEntity(id) == first;
+    ok = ok && first->entityType() == "Avatar";
+    ok = ok && first->state() == EntityState::Active;
+
+    if (ok) PASS(); else FAIL("duplicate id create must not use-after-free");
+    std::filesystem::remove_all(dir);
+}
+
 static void testFindAndDestroy() {
     TEST("find and destroy entity");
 
@@ -383,6 +414,7 @@ int main() {
     testInit();
     testInitWithoutDefPath();
     testCreateEntity();
+    testCreateEntityDuplicateId();
     testFindAndDestroy();
     testSetProperty();
     testMultipleEntities();
