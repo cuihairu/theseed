@@ -7,8 +7,10 @@
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -118,6 +120,59 @@ int main() {
         CHECK(consumed, "recv consumed bytes without callback");
         client->close();
         server->close();
+    }
+
+    // 审核发现回归：回调内 close() 后 pump 不得再读 fd0。旧实现把 recv 循环
+    // 挂在 while(true) 上，回调 close() 把 socket_ 清零后下一轮仍以 toSocket(0)
+    // 调用 ::recv——fd0 若恰为 socket（systemd/inetd 激活）会投喂外部数据；
+    // 否则也是错误 fd 越界读。必须在回调返回后立即停止循环。
+    {
+        TcpListener listener;
+        CHECK(listener.listen("127.0.0.1", 0), "listen for close-in-callback");
+        auto client = TcpConnection::create();
+        CHECK(client->connect("127.0.0.1", listener.localPort()), "client connect for close-in-callback");
+        auto server = listener.accept();
+        CHECK(server != nullptr, "accept for close-in-callback");
+
+        // 服务端回调收到首包即关闭自己——模拟 ClientSession::send 写失败后
+        // 的 close()（位于 recv 回调栈内）。
+        int serverCallbacks = 0;
+        server->setOnReceived([&server, &serverCallbacks](std::span<const std::byte>) {
+            ++serverCallbacks;
+            server->close();
+        });
+
+        // 把 fd0 换成带哨兵字节的 socketpair 读端：若旧实现（while(true)）
+        // 在回调 close 后仍以 toSocket(0) 调用 ::recv，会读到哨兵并再次触发
+        // onReceived_（serverCallbacks 变 2）。修复后循环停在回调返回处。
+        int savedStdin = ::dup(0);
+        int sentinelFds[2];
+        CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, sentinelFds) == 0,
+              "create sentinel socketpair");
+        // 非阻塞读端：旧实现读空哨兵后 recv 返回 EAGAIN 立即退出（wouldBlock），
+        // 不会挂死；但哨兵已被消费且 serverCallbacks 已增至 2，断言仍失败。
+        ::fcntl(sentinelFds[0], F_SETFL, O_NONBLOCK);
+        CHECK(::dup2(sentinelFds[0], 0) >= 0, "replace fd0 with socketpair read end");
+        const std::byte sentinel{0x5A};
+        CHECK(::write(sentinelFds[1], &sentinel, 1) == 1, "write sentinel to socketpair");
+
+        const std::byte one{0x01};
+        CHECK(client->write(std::span<const std::byte>(&one, 1)), "write to server");
+        // 单次 pump 内：recv 收到字节 → 回调 close → 循环必须停止，不得再
+        // 对 fd0 做 recv。若仍继续，哨兵会被消费且 serverCallbacks 增至 2。
+        static_cast<void>(server->pumpWithResult());
+        CHECK(!server->isConnected(), "server must be closed by callback");
+        CHECK(serverCallbacks == 1, "fd0 must not feed the closed connection (old impl would re-read sentinel)");
+
+        // 恢复 fd0 并关闭哨兵 socketpair。
+        ::dup2(savedStdin, 0);
+        ::close(savedStdin);
+        ::close(sentinelFds[0]);
+        ::close(sentinelFds[1]);
+
+        client->close();
+        server->close();
+        listener.close();
     }
 
     // 写满内核发送缓冲：send 返回 EAGAIN 走 wouldBlock 分支

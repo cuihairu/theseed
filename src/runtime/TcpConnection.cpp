@@ -133,7 +133,12 @@ std::size_t TcpConnection::pumpWithResult() {
 
     // Read available data
     char buf[4096];
-    while (true) {
+    while (connected_) {
+        // 回调内 close() 把 socket_ 清零时（如 ClientSession::send 失败即断）
+        // 立即停止本轮 recv：否则下一轮 ::recv(toSocket(0)) 会读 fd0（stdin），
+        // 属错误 fd 越界读（审核发现）。回调返回后重读 connected_ 而非缓存
+        // 到局部变量，close() 的副作用（含对 socket_ 的写回）对循环可见。
+        if (socket_ == 0) break;
         auto n = ::recv(toSocket(socket_), buf, sizeof(buf), 0);
         if (n == detail::kSocketError) {
             if (!detail::wouldBlock()) {
