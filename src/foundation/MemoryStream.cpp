@@ -168,6 +168,11 @@ bool MemoryStream::readBool() {
 std::string MemoryStream::readString() {
     const auto len = readUint32();
     if (len == 0) return {};
+    // 界检查前置于分配：len 来自不可信流（网络/磁盘），谎报的长度前缀
+    // 不得先触发大额零填充分配再被 readBytes 拒绝（分配炸弹）。
+    if (len > readRemaining()) {
+        throw std::runtime_error("MemoryStream read overflow");
+    }
     std::string result(len, '\0');
     readBytes(result.data(), len);
     return result;

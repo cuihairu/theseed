@@ -143,6 +143,26 @@ static void testReadOverflow() {
     if (threw) PASS(); else FAIL("expected exception");
 }
 
+// 分配炸弹回归：长度前缀谎报（claim > remaining）必须在分配前被拒绝，
+// 而非先按不可信长度零填充分配再抛（readString 界检查前置于分配）。
+static void testReadStringLiedLength() {
+    TEST("readString rejects lied length before allocating");
+
+    MemoryStream stream;
+    stream.writeUint32(1000000000U);  // 谎报 1GB 长度
+    stream.writeUint8(0x42);          // 但只给了 1 字节体
+    stream.resetRead();
+
+    bool threw = false;
+    try {
+        static_cast<void>(stream.readString());
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+
+    if (threw) PASS(); else FAIL("lied length should throw before allocation");
+}
+
 static void testReadSkip() {
     TEST("read skip");
 
@@ -331,6 +351,7 @@ int main() {
     testWriteReadString();
     testWriteReadBytes();
     testReadOverflow();
+    testReadStringLiedLength();
     testReadSkip();
     testWriteSkip();
     testClear();
