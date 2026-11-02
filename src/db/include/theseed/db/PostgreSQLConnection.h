@@ -90,6 +90,13 @@ public:
     bool ping();
     bool ensureConnected();
 
+    // 显式事务（P2-2）：createAccount 的两阶段写（主表行 + 索引行）必须
+    // 原子提交。beginTransaction 成功后可执行多个 DML，commit 落库，
+    // rollback 回滚全部未提交变更。任一失败返回 false 并填充 lastError。
+    bool beginTransaction();
+    bool commit();
+    bool rollback();
+
     const std::string& lastError() const;
 
 private:

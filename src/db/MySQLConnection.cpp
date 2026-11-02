@@ -546,4 +546,31 @@ const std::string& MySQLConnection::lastError() const {
     return impl_->lastError;
 }
 
+bool MySQLConnection::beginTransaction() {
+    if (!ensureConnected()) return false;
+    if (!execute("START TRANSACTION")) {
+        impl_->lastError = "begin transaction failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
+bool MySQLConnection::commit() {
+    if (!ensureConnected()) return false;
+    if (!execute("COMMIT")) {
+        impl_->lastError = "commit failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
+bool MySQLConnection::rollback() {
+    if (!ensureConnected()) return false;
+    if (!execute("ROLLBACK")) {
+        impl_->lastError = "rollback failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
 }  // namespace theseed::db

@@ -306,6 +306,10 @@ int main() {
             theseed::core::EntityId blockedId = 0;
             CHECK(!injected.createAccount("locked_out", "pw", blockedId),
                   "createAccount blocked by lock");
+            // P2-2：索引写失败后必须回滚 tbl_Account 主表行，不得遗留孤儿。
+            EntityData orphan;
+            CHECK(!injected.load(blockedId, "Account", orphan),
+                  "createAccount rollback removes orphan Account row");
         }
         CHECK(locker.execute("UNLOCK TABLES"), "unlock _account_index");
 

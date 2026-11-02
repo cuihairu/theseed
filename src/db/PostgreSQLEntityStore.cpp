@@ -118,6 +118,15 @@ bool PostgreSQLEntityStore::createSchema() {
         lastError_ = "create _account_index index failed: " + conn_->lastError();
         return false;
     }
+    // Account 主表行（P2-2）：预建以便 createAccount 在事务内只发 DML。
+    if (!conn_->execute(
+            "CREATE TABLE IF NOT EXISTS tbl_Account ("
+            "  id BIGINT NOT NULL PRIMARY KEY,"
+            "  data BYTEA NOT NULL"
+            ")")) {
+        lastError_ = "create tbl_Account failed: " + conn_->lastError();
+        return false;
+    }
     return true;
 }
 
@@ -368,7 +377,16 @@ bool PostgreSQLEntityStore::createAccount(const std::string& username,
         reinterpret_cast<const std::byte*>(password.data()) + password.size());
     data.properties.push_back(passwordProp);
 
-    if (!save(outId, data)) return false;
+    // P2-2：两阶段写（主表行 + 索引行）必须原子。先开事务，任一阶段失败
+    // 即回滚，避免索引行失败/崩溃遗留孤儿 Account 主表行。
+    if (!conn_->beginTransaction()) {
+        lastError_ = "createAccount begin transaction failed: " + conn_->lastError();
+        return false;
+    }
+    if (!save(outId, data)) {
+        static_cast<void>(conn_->rollback());
+        return false;
+    }
 
     // 写索引表
     if (!conn_->execute(  // LCOV_EXCL_BR_LINE 初始化列表构造参数 vector 的库内联分支，非业务分支
@@ -377,7 +395,13 @@ bool PostgreSQLEntityStore::createAccount(const std::string& username,
             "ON CONFLICT (username) DO UPDATE SET entity_id = EXCLUDED.entity_id, "
             "password = EXCLUDED.password",
             {SqlParam::str(username), SqlParam::u64(outId), strToBytes(password)})) {
+        static_cast<void>(conn_->rollback());
         lastError_ = "createAccount index insert failed: " + conn_->lastError();
+        return false;
+    }
+    if (!conn_->commit()) {
+        static_cast<void>(conn_->rollback());
+        lastError_ = "createAccount commit failed: " + conn_->lastError();
         return false;
     }
     return true;

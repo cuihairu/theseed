@@ -320,4 +320,31 @@ const std::string& PostgreSQLConnection::lastError() const {
     return impl_->lastError;
 }
 
+bool PostgreSQLConnection::beginTransaction() {
+    if (!ensureConnected()) return false;
+    if (!execute("BEGIN")) {
+        impl_->lastError = "begin transaction failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
+bool PostgreSQLConnection::commit() {
+    if (!ensureConnected()) return false;
+    if (!execute("COMMIT")) {
+        impl_->lastError = "commit failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
+bool PostgreSQLConnection::rollback() {
+    if (!ensureConnected()) return false;
+    if (!execute("ROLLBACK")) {
+        impl_->lastError = "rollback failed: " + impl_->lastError;
+        return false;
+    }
+    return true;
+}
+
 }  // namespace theseed::db

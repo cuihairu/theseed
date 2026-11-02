@@ -114,6 +114,20 @@ bool MySQLEntityStore::createSchema() {
         lastError_ = "create _account_index failed: " + conn_->lastError();
         return false;
     }
+    // Account 主表行（P2-2）：预建以便 createAccount 在事务内只发 DML。
+    // MySQL 的 DDL 会隐式提交当前事务——若等到事务内 ensureTable 才建表，
+    // 回滚无法撤销已提交的主表行，两阶段写仍可能遗留孤儿。
+    if (!conn_->execute(
+            "CREATE TABLE IF NOT EXISTS `tbl_Account` ("
+            "  `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,"
+            "  `data` MEDIUMBLOB NOT NULL,"
+            "  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            "    ON UPDATE CURRENT_TIMESTAMP,"
+            "  INDEX `idx_updated` (`updated_at`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")) {
+        lastError_ = "create tbl_Account failed: " + conn_->lastError();
+        return false;
+    }
     return true;
 }
 
@@ -364,7 +378,16 @@ bool MySQLEntityStore::createAccount(const std::string& username,
         reinterpret_cast<const std::byte*>(password.data()) + password.size());
     data.properties.push_back(passwordProp);
 
-    if (!save(outId, data)) return false;
+    // P2-2：两阶段写（主表行 + 索引行）必须原子。先开事务，任一阶段失败
+    // 即回滚，避免索引行失败/崩溃遗留孤儿 Account 主表行。
+    if (!conn_->beginTransaction()) {
+        lastError_ = "createAccount begin transaction failed: " + conn_->lastError();
+        return false;
+    }
+    if (!save(outId, data)) {
+        static_cast<void>(conn_->rollback());
+        return false;
+    }
 
     // 写索引表
     if (!conn_->executeParams(  // LCOV_EXCL_BR_LINE 初始化列表构造参数 vector 的库内联分支，非业务分支
@@ -373,7 +396,13 @@ bool MySQLEntityStore::createAccount(const std::string& username,
             "ON DUPLICATE KEY UPDATE `entity_id` = VALUES(`entity_id`), "
             "`password` = VALUES(`password`)",
             {strToBytes(username), MySqlParam::u64(outId), strToBytes(password)})) {
+        static_cast<void>(conn_->rollback());
         lastError_ = "createAccount index insert failed: " + conn_->lastError();
+        return false;
+    }
+    if (!conn_->commit()) {
+        static_cast<void>(conn_->rollback());
+        lastError_ = "createAccount commit failed: " + conn_->lastError();
         return false;
     }
     return true;
