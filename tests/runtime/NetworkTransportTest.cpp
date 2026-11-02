@@ -1,3 +1,5 @@
+#include "theseed/foundation/MessageHeader.h"
+#include "theseed/foundation/MemoryStream.h"
 #include "theseed/runtime/InMemoryBytePipe.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
@@ -9,6 +11,8 @@
 #include <memory>
 #include <vector>
 
+using theseed::foundation::MemoryStream;
+using theseed::foundation::MessageHeader;
 using theseed::runtime::DeliveryClass;
 using theseed::runtime::IBytePipe;
 using theseed::runtime::InMemoryBytePipe;
@@ -479,6 +483,46 @@ static void testAutoFlushBackPressure() {
     else FAIL("autoFlush backlog/BackPressure mismatch");
 }
 
+// 畸形 invocation 帧（帧头合法、payload 使 InvocationCodec::decode 抛异常）
+// 必须被吞掉并断开，而非让异常逃逸到 tick 链触发 std::terminate。
+static void testMalformedInvocationFrameDisconnects() {
+    TEST("malformed invocation frame is dropped and disconnects, no crash");
+
+    auto [pipeA, pipeB] = InMemoryBytePipe::createPair();
+    NetworkTransport client(pipeA);
+    NetworkTransport server(pipeB);
+
+    // 帧头合法（messageId=invocation, payloadLength=37）；payload 内实体
+    // 三元组/请求号/空字符串均合法，但末尾 payloadLen 谎报 0x7FFFFFFF，
+    // 远超剩余 0 字节 → decode 抛 invalid_argument。此前无 try/catch，
+    // 异常逃逸触发 std::terminate；回归须断开不崩。
+    MemoryStream frame;
+    MessageHeader header;
+    header.messageId = NetworkTransport::kInvocationMessageId;
+    header.payloadLength = 37;
+    theseed::foundation::encodeHeader(header, frame);
+    frame.writeUint64(0);  // entityId
+    frame.writeUint32(0);  // sourceComponent
+    frame.writeUint32(0);  // targetComponent
+    frame.writeUint64(0);  // requestId
+    frame.writeUint32(0);  // entityType: 空串
+    frame.writeUint32(0);  // method: 空串
+    frame.writeUint8(0);   // deliveryClass
+    frame.writeUint32(0x7FFFFFFFu);  // payloadLen 谎报
+    // payload 总长 = 8+4+4+8+4+4+1+4 = 37 ✓
+
+    // InMemoryBytePipe 方向：write 存入本端 pending，本端 pump 才投递给对端。
+    // 注入到 client 的接收侧。
+    if (!pipeB->write(std::span<const std::byte>(frame.data(), frame.size()))) {
+        FAIL("pipe write failed");
+        return;
+    }
+    pipeB->pump();
+
+    if (client.isConnected()) FAIL("malformed frame must disconnect the transport");
+    else PASS();
+}
+
 // receive 容量 0 早退（防御臂）。
 static void testReceiveZeroCapacity() {
     TEST("receive with zero capacity returns 0");
@@ -511,6 +555,7 @@ int main() {
     testDisconnectedTickAndFlush();
     testUnreliableFullQueueDiscards();
     testAutoFlushBackPressure();
+    testMalformedInvocationFrameDisconnects();
     testReceiveZeroCapacity();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";

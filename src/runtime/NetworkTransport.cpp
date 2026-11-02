@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <utility>
 
@@ -213,7 +214,19 @@ bool NetworkTransport::parseOneMessage() {
 
     // Dispatch by message ID
     if (header.messageId == kInvocationMessageId && !payload.empty()) {  // LCOV_EXCL_BR_LINE InvocationCodec 编码至少含 method 串，空 payload invocation 结构性不可达
-        auto invocation = InvocationCodec::decode(payload);
+        RuntimeInvocation invocation;
+        try {
+            invocation = InvocationCodec::decode(payload);
+        } catch (const std::exception&) {
+            // 不可信对端送来畸形 invocation 帧（谎报长度/截断字符串/越界
+            // 属性）：此前无 try/catch，异常逃逸 tick 链触发 std::terminate，
+            // 单个坏帧拖垮整个 runtime 进程。按协议错误断开——帧已从
+            // recvBuffer 消耗、对端字节流位置未知，不再信任后续字节，交由
+            // 上层重连。InMemoryBytePipe::pump 在调回调前已释放互斥，此处
+            // close() 无重入死锁。
+            close();
+            return false;
+        }
         std::lock_guard lock(inboxMutex_);
         inbox_.push_back(std::move(invocation));
     }
