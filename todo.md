@@ -65,3 +65,10 @@
 
 - [ ] `trySendBuffered` `sendBuffer_.size()` 强转 `int` 传给 `send()`，>2GB 截断/UB —— `src/runtime/TcpConnection.cpp:160`
 - [ ] 各 app `main` `std::stoi` 无 catch 解析数字参数；`volatile bool` 应用 `sig_atomic_t` —— `src/` 各入口
+
+## 审核发现（5123ad4058ff..HEAD，只审不改）
+
+- [ ] 审核发现：MySQL createAccount 的 P2-2 原子性未真正达成——createSchema 预建 tbl_Account 走直接 execute（:121）未填充 knownTables_ 缓存，事务内 save()→ensureTable("Account") 首次调用（缓存未命中 :140）仍发 CREATE TABLE IF NOT EXISTS DDL（:143）；按代码自身注释（MySQL DDL 隐式提交当前事务 :118-120），该 DDL 会终止事务，回滚无法撤销已提交的主表行，首个账号创建仍可能遗留孤儿（src/db/MySQLEntityStore.cpp:121）
+- [ ] 审核发现：MySQLConnection::ping() 可在未初始化/已关闭 MYSQL 句柄上调用 mysql_ping，属 API 契约外行为（越界/UB）——构造函数已移除急切 mysql_init（:146 起）、disconnect() 不再重初始化句柄（:211），但 ping() 未检查 initialized（:535）；测试 MySQLConnectionTest.cpp:83/:108 即触发此路径（src/db/MySQLConnection.cpp:535）
+- [x] 审核发现：TcpConnection 新增 sendBuffer 上限（:81）后，ClientSession::send 忽略 pipe_->write() 返回值（:30）——对端滞止超水位（默认 8MB）时消息被静默丢弃，而非退避/断开，引入静默丢包（src/login/ClientSession.cpp:30）
+- [ ] 审核发现：PhaseCIntegrationTest 负载剖面断言 vacuous——仅检查 rawLoad/smoothedLoad >= 0（:119-120），负载不可能为负，故定时器恒为 0 或 Scope 未累计真实耗时也会通过，未证明 dispatch 路径确实测量了非零负载（tests/core/PhaseCIntegrationTest.cpp:119）

@@ -25,10 +25,16 @@ void ClientSession::setMessageCallback(MessageCallback callback) {
     onMessage_ = std::move(callback);
 }
 
-void ClientSession::send(std::span<const std::byte> data) {
-    if (pipe_ && pipe_->isConnected()) {
-        pipe_->write(data);
+bool ClientSession::send(std::span<const std::byte> data) {
+    if (!pipe_ || !pipe_->isConnected()) return false;
+    // write() 为 false 表示对端滞止（待发缓冲超水位）或管道失效：立即
+    // 关闭连接，让上层 cleanupDisconnected() 回收本会话，避免消息被
+    // 静默丢弃（审核发现：ClientSession::send 曾忽略 write 返回值）。
+    if (!pipe_->write(data)) {
+        close();
+        return false;
     }
+    return true;
 }
 
 void ClientSession::close() {

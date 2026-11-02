@@ -70,7 +70,8 @@ struct MockClient {
 int main() {
     std::cout << "RealmApp tests:" << std::endl;
 
-    // ClientSession::send 防御臂：无 pipe（nullptr）与 pipe 未连接时静默丢弃。
+    // ClientSession::send 防御臂：无 pipe（nullptr）与 pipe 未连接时
+    // 不写管道；写失败（对端滞止等）则关闭连接并返回 false，避免静默丢包。
     TEST("client session send guards");
     {
         ClientSession nullSession(nullptr);
@@ -84,6 +85,26 @@ int main() {
         detachedSession.close();
     }
     PASS();
+
+    // P2 深审回归：send 必须把 write 失败传播给调用方，并关闭连接。
+    TEST("client session send write failure closes pipe");
+    {
+        struct FailingPipe final : public IBytePipe {
+            bool write(std::span<const std::byte>) override { return false; }
+            void pump() override {}
+            void setOnReceived(std::function<void(std::span<const std::byte>)>) override {}
+            void close() override { closed = true; }
+            bool isConnected() const override { return !closed; }
+            bool closed = false;
+        };
+        auto pipe = std::make_shared<FailingPipe>();
+        ClientSession session(pipe);
+        const std::byte buf[] = {std::byte{0x01}};
+        const bool accepted = session.send(std::span<const std::byte>(buf, 1));
+        if (accepted) FAIL("send should reject when pipe write fails");
+        if (pipe->closed) PASS();
+        else FAIL("send should close pipe after write failure");
+    }
 
     TEST("query realms returns configured list");
     {
