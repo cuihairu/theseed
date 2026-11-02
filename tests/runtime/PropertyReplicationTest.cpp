@@ -168,6 +168,28 @@ int main() {
         }
         if (!threw) return fail("decode_truncated_value");
 
+        // 回归：count 闸只按「每条最少 8 字节」核账，不抵扣前条 value
+        // 已吃掉的余量——entry0 valueSize=4 后，entry1 的 valueSize 读取
+        // 会越过 payload 末尾（堆越界读）。必须在 header memcpy 前查界。
+        std::vector<std::byte> liedHeader(sizeof(std::uint32_t) * 5, std::byte{0});
+        const std::uint32_t two = 2;
+        std::memcpy(liedHeader.data(), &two, sizeof(two));        // count=2
+        const std::uint32_t e0id = 0;
+        const std::uint32_t e0vs = 4;                              // entry0 value 4B
+        std::memcpy(liedHeader.data() + 4, &e0id, sizeof(e0id));
+        std::memcpy(liedHeader.data() + 8, &e0vs, sizeof(e0vs));
+        // bytes 12..15: entry0 的 4 字节 value（零初始化即可）
+        const std::uint32_t e1id = 1;                              // entry1 propertyId
+        std::memcpy(liedHeader.data() + 16, &e1id, sizeof(e1id));
+        // 到 20 字节截断：entry1 valueSize 应读 [20,24) —— 越界。
+        threw = false;
+        try {
+            PropertyReplication::decodeDelta(liedHeader);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        if (!threw) return fail("decode_truncated_header_after_value");
+
         // count 超限：声称的条数超出 payload 剩余字节能容纳的最小条目数
         //（防畸形 count 触发 reserve 内存放大）
         std::vector<std::byte> evilCount(sizeof(std::uint32_t));

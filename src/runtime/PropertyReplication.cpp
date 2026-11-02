@@ -100,8 +100,12 @@ std::vector<PropertyDelta> PropertyReplication::decodeDelta(std::span<const std:
     std::vector<PropertyDelta> deltas;
     deltas.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
-        // count 一致性闸已保证每条的 header（propertyId+valueSize 共 8 字节）
-        // 完整在界内，无需再单查 header 截断；value 部分仍需单独校验。
+        // count 闸只保证「按最小 8 字节/条」够分，不管前面条目吃掉多少
+        // value 字节——前一条 valueSize > 0 时，后续 header 读取可能越过
+        // payload 末尾（堆越界读）。每条 header 读取前必须单独查界。
+        if (cursor + kMinEntryBytes > payload.size()) {
+            throw std::invalid_argument("property delta header is truncated");
+        }
         PropertyDelta delta;
         std::uint32_t valueSize = 0;
         std::memcpy(&delta.propertyId, payload.data() + cursor, sizeof(delta.propertyId));
