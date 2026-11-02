@@ -120,6 +120,32 @@ static void testRoundTripLargePayload() {
     }
 }
 
+// 分配炸弹回归：payload 长度前缀谎报（claim > remaining）必须在 resize 前
+// 被拒绝，而非先按不可信长度大额分配再抛（decode 界检查前置于分配）。
+static void testDecodeRejectsLiedPayloadLength() {
+    TEST("decode rejects lied payload length before allocating");
+
+    RuntimeInvocation original;
+    original.entityId = 1;
+    original.entityType = "Item";
+    original.method = "use";
+    original.payload.resize(16, std::byte{0xAB});
+
+    auto bytes = InvocationCodec::encode(original);
+    // 只保留定长头 + entityType/method/deliveryClass + payload 长度前缀，
+    // 去掉 payload 本体：payloadLen=16 但 readRemaining=0。
+    auto truncated = std::span<const std::byte>(bytes.data(), bytes.size() - 16);
+
+    bool threw = false;
+    try {
+        static_cast<void>(InvocationCodec::decode(truncated));
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+
+    if (threw) PASS(); else FAIL("lied payload length should throw before allocation");
+}
+
 static void testEncodedSizeIsDeterministic() {
     TEST("same invocation produces same encoded size");
 
@@ -308,6 +334,7 @@ int main() {
     testRoundTripBasic();
     testRoundTripEmptyPayload();
     testRoundTripLargePayload();
+    testDecodeRejectsLiedPayloadLength();
     testEncodedSizeIsDeterministic();
     testPipedTransportSendReceive();
     testPipedTransportFilterByComponent();

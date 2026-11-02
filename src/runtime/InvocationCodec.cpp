@@ -46,6 +46,11 @@ RuntimeInvocation InvocationCodec::decode(std::span<const std::byte> data) {
     invocation.deliveryClass = static_cast<DeliveryClass>(stream.readUint8());
 
     const auto payloadLen = stream.readUint32();
+    // 界检查前置于分配：payloadLen 谎报时先 resize 会按不可信长度大额分配
+    // 再被 readBytes 拒绝（分配炸弹）。PipedTransport 自编码往返恒等，不触发。
+    if (payloadLen > stream.readRemaining()) {
+        throw std::invalid_argument("invocation payload length exceeds message");
+    }
     invocation.payload.resize(payloadLen);
     if (payloadLen > 0) {
         stream.readBytes(invocation.payload.data(), payloadLen);
