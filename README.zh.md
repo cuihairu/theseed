@@ -1,8 +1,7 @@
 # theseed
 
 <p align="center">
-  <a href="https://github.com/cuihairu/theseed/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
-  <a href="https://cuihairu.github.io/theseed/zh/"><img alt="文档" src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue"></a>
+  <a href="https://github.com/cuihairu/theseed/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a> <a href="https://cuihairu.github.io/theseed/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="文档"></a>
 </p>
 
 > [English](README.md) | **中文**
