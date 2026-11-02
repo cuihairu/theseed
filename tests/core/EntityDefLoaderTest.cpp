@@ -532,6 +532,8 @@ static void testXmlDeclCommentsAndMinMax() {
         <Property name="large" type="Int64" minValue="-5000" maxValue="5000"/>
         <Property name="ratio" type="Float32" minValue="0.5" maxValue="0.99"/>
         <Property name="precise" type="Float64" minValue="1.5" maxValue="2.5"/>
+        <Property name="u32" type="UInt32" minValue="0" maxValue="4294967295"/>
+        <Property name="u64" type="UInt64" minValue="0" maxValue="18446744073709551615"/>
     </Properties>
 </EntityDef>
 )";
@@ -543,6 +545,8 @@ static void testXmlDeclCommentsAndMinMax() {
     ok = ok && def->findProperty("large") != nullptr;
     ok = ok && def->findProperty("ratio") != nullptr;
     ok = ok && def->findProperty("precise") != nullptr;
+    ok = ok && def->findProperty("u32") != nullptr;
+    ok = ok && def->findProperty("u64") != nullptr;
 
     // 校验 minValue/maxValue 编码内容与类型宽度一致
     const auto* tiny = def->findProperty("tiny");
@@ -568,6 +572,23 @@ static void testXmlDeclCommentsAndMinMax() {
     double preciseMin = 0;
     std::memcpy(&preciseMin, precise->minValue.data(), 8);
     ok = ok && std::abs(preciseMin - 1.5) < 0.0001;
+
+    // 回归：UInt32/UInt64 合法域上限（> INT_MAX/INT64_MAX）不得使
+    // std::stoi/stoll 抛 out_of_range 丢弃整个 def（原 encodeNumericValue
+    // 用有符号解析）。编码内容应与类型宽度一致。
+    const auto* u32 = def->findProperty("u32");
+    const auto* u64 = def->findProperty("u64");
+    ok = ok && u32 != nullptr && u64 != nullptr;
+    if (ok) {
+        ok = ok && u32->maxValue.size() == 4;
+        std::uint32_t u32Max = 0;
+        std::memcpy(&u32Max, u32->maxValue.data(), 4);
+        ok = ok && u32Max == 4294967295u;
+        ok = ok && u64->maxValue.size() == 8;
+        std::uint64_t u64Max = 0;
+        std::memcpy(&u64Max, u64->maxValue.data(), 8);
+        ok = ok && u64Max == 18446744073709551615ull;
+    }
 
     if (ok) PASS();
     else FAIL("constraint encoding mismatch");
