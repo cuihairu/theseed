@@ -5,12 +5,14 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -554,9 +556,33 @@ bool LocalProcessSupervisor::terminateManagedProcess(std::uint32_t pid) {
         // LCOV_EXCL_STOP
     }
 
+    // 有界等待：子进程忽略/滞止 SIGTERM 时，阻塞式 waitpid 会无限挂起
+    // daemon 的单一 tick 线程（冻结整个控制面）。宽限后升级 SIGKILL，
+    // 再给一段收尸窗口；仍不退则放弃（子进程处于不可中断状态）。
     int status = 0;
-    const pid_t waited = waitpid(child->pid, &status, 0);
-    return waited == child->pid || (waited == -1 && errno == ECHILD);  // LCOV_EXCL_BR_LINE 阻塞式 waitpid 对自有 child 恒收尸成功，ECHILD 臂不可达
+    constexpr auto kSigtermGrace = std::chrono::milliseconds(3000);
+    constexpr auto kSigkillGrace = std::chrono::milliseconds(2000);
+    auto deadline = std::chrono::steady_clock::now() + kSigtermGrace;
+    bool sentKill = false;
+    while (true) {
+        const pid_t waited = waitpid(child->pid, &status, WNOHANG);
+        if (waited == child->pid) return true;
+        if (waited == -1 && errno == ECHILD) return true;
+        if (waited == -1) return false;  // LCOV_EXCL_BR_LINE waitpid 非 ECHILD 错误需 pid 复用竞态，不可达
+        // waited == 0：子进程仍在运行
+        if (std::chrono::steady_clock::now() >= deadline) {
+            if (!sentKill) {
+                if (kill(child->pid, SIGKILL) != 0 && errno != ESRCH) {  // LCOV_EXCL_BR_LINE SIGKILL 失败需竞态窗口，不可达
+                    return false;  // LCOV_EXCL_LINE kill 失败非 ESRCH 需竞态窗口
+                }
+                sentKill = true;
+                deadline = std::chrono::steady_clock::now() + kSigkillGrace;
+            } else {
+                return false;  // LCOV_EXCL_LINE SIGKILL 后 2s 仍未退出需不可中断态，测试环境不可达
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 #endif
 }
 

@@ -136,6 +136,48 @@ static void test_start_stop_round_trip() {
     PASS();
 }
 
+static void test_stop_escalates_to_sigkill() {
+    TEST("stop: child ignoring SIGTERM is SIGKILL-ed within bound");
+    LocalProcessSupervisor supervisor;
+
+    // sh 忽略 SIGTERM 后 exec sleep：SIG_IGN 处置在 exec 后保留，子进程
+    // 对 SIGTERM 无响应——只能由宽限后的 SIGKILL 兜底，且必须是有界返回
+    // （回归：此前阻塞式 waitpid 会无限挂起 daemon 的 tick 线程）。
+    if (!supervisor.start("/bin/sh -c \"trap '' TERM; exec sleep 30\"")) {
+        FAIL("could not spawn sigterm-ignoring child");
+        return;
+    }
+    // 受管记账名 = basenameOf(首个 token) = basenameOf("/bin/sh") = "sh"；
+    // exec sleep 只改 /proc/<pid>/comm，不改记账名，故按 "sh" 匹配。
+    // findManaged 返回 vector 内部元素的裸指针：必须先绑定命名局部量，
+    // 直接绑 listProcesses() 临时值会在声明结束时析构（悬垂→SIGSEGV）。
+    const auto managedList = supervisor.listProcesses();
+    const auto* managed = findManaged(managedList, "sh");
+    if (managed == nullptr) {
+        FAIL("sigterm-ignoring child not listed");
+        return;
+    }
+    const std::uint32_t pid = managed->pid;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool stopped = supervisor.stop(pid);
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+
+    if (!stopped) {
+        FAIL("stop must escalate to SIGKILL and succeed");
+        return;
+    }
+    // 宽限 3s + SIGKILL 收尸 2s：应在有界窗口内返回，远短于无限阻塞。
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    if (elapsedMs > 6500) {
+        FAIL("stop took too long: " + std::to_string(elapsedMs) + "ms");
+        return;
+    }
+    EXPECT(findManaged(supervisor.listProcesses(), "sh") == nullptr,
+           "sigkill-ed child must disappear from managed list");
+    PASS();
+}
+
 static void test_restart_replaces_child() {
     TEST("restart: old pid replaced by a fresh child");
     LocalProcessSupervisor supervisor;
@@ -258,6 +300,7 @@ int main() {
     test_basename_of();
 #ifndef _WIN32
     test_start_stop_round_trip();
+    test_stop_escalates_to_sigkill();
     test_restart_replaces_child();
     test_reap_removes_exited_children();
     test_destructor_terminates_remaining_children();
