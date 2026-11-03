@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <string>
 
 namespace theseed::core {
@@ -27,6 +28,7 @@ private:
     bool ensureDir(const std::string& entityType) const;
 
     std::filesystem::path rootDir_;
+    std::mutex allocMutex_;
 };
 
 }  // namespace theseed::core

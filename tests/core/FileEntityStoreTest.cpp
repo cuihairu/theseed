@@ -6,7 +6,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
+#include <set>
 #include <string>
+#include <thread>
+#include <vector>
 
 using theseed::core::EntityData;
 using theseed::core::FileEntityStore;
@@ -60,6 +64,44 @@ static float readFloat32(const PropertyData& prop) {
     float v = 0;
     std::memcpy(&v, prop.rawValue.data(), sizeof(v));
     return v;
+}
+
+// P2-10 回归：FileEntityStore::allocId 是跨文件 I/O 的读改写，并发调用者
+// 会读到同一个 nextId 而拿到重复 id。修复前（无锁）多线程下必然出现重复，
+// 修复后（互斥）全部 id 唯一且恰为 1..N 的连续序列。
+static void testConcurrentAllocId() {
+    TEST("allocId unique ids under concurrent callers");
+
+    auto dir = std::filesystem::temp_directory_path() / "theseed_file_store_test_conc";
+    std::filesystem::remove_all(dir);
+    FileEntityStore store(dir);
+
+    constexpr int kThreads = 8;
+    constexpr int kIters = 500;
+    std::mutex collectMutex;
+    std::vector<theseed::core::EntityId> ids;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&] {
+            for (int i = 0; i < kIters; ++i) {
+                const auto id = store.allocId();
+                const std::lock_guard lock(collectMutex);
+                ids.push_back(id);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+
+    std::set<theseed::core::EntityId> distinct(ids.begin(), ids.end());
+    bool ok = ids.size() == static_cast<std::size_t>(kThreads * kIters);
+    ok = ok && distinct.size() == ids.size();  // 无重复
+    ok = ok && *distinct.begin() == 1;         // 起始 id 为 1
+    ok = ok && *distinct.rbegin() == static_cast<theseed::core::EntityId>(kThreads * kIters);
+
+    std::filesystem::remove_all(dir);
+    if (ok) PASS();
+    else FAIL("concurrent allocId produced duplicate or non-contiguous ids");
 }
 
 // Test: basic save and load round-trip
@@ -448,6 +490,7 @@ int main() {
     testSaveEmptyProperties();
     testBaseRuntimeIntegration();
     testErrorPaths();
+    testConcurrentAllocId();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;

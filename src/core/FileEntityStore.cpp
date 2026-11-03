@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <utility>
 
 namespace theseed::core {
@@ -100,6 +101,11 @@ bool FileEntityStore::remove(EntityId id) {
 }
 
 EntityId FileEntityStore::allocId() {
+    // 跨文件 I/O 的读改写必须互斥：多个并发调用者若同时读 _next_id.dat
+    // 会拿到同一个 id（P2-10）。锁覆盖读-自增-写回全程，保证每个 id 只
+    // 被分配一次。
+    const std::lock_guard lock(allocMutex_);
+
     EntityId nextId = 1;
 
     auto path = metaPath();
