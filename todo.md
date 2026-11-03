@@ -86,7 +86,7 @@
 ## 审核发现（e7323b97..HEAD，只审不改）
 
 - [x] 审核发现：TimerWheel::cancel 将条目索引回池（freeList_）后，若同一 advance 批次内另一定时器回调先 cancel 掉本批次待处理条目、再 addTimer 复用该索引，advance 循环随后再次处理被复用的索引致重复插入轮盘，周期定时器会每周期多次触发（src/foundation/TimerWheel.cpp:89）——已修复：advance 快照携带 `(index,id)`，触发前双重校验，批内复用槽不再误触发新条目；回归覆盖取消者回池并立即复用索引，验证新定时器不在同批早触发且下一批仅一次（src/foundation/TimerWheel.cpp:115；tests/foundation/TimerWheelTest.cpp:400）
-- [ ] 审核发现：OpsInspector::readProcessRssBytes 在非 Linux/读失败时返回 0，注释称"dashboard 显示为不可用而非伪值"，但 DashboardPage 对 0 显示 "0 B" 而非 n/a，伪值展示与注释意图不符（src/ops/OpsInspector.cpp:24）
-- [ ] 审核发现：DashboardPage 每 2s 轮询在 queue_backlog>1000 期间重复 pushAlarm 同一告警，告警列表被相同消息刷屏（src/ops/DashboardPage.cpp:122）
+- [x] 审核发现：OpsInspector::readProcessRssBytes 在非 Linux/读失败时返回 0，注释称"dashboard 显示为不可用而非伪值"，但 DashboardPage 对 0 显示 "0 B" 而非 n/a，伪值展示与注释意图不符（src/ops/OpsInspector.cpp:24）——已修复：dashboard 对 `process_rss_bytes` 缺失或 0 哨兵均显示 `n/a`，不再渲染伪值 `0 B`（src/ops/DashboardPage.cpp:106）
+- [x] 审核发现：DashboardPage 每 2s 轮询在 queue_backlog>1000 期间重复 pushAlarm 同一告警，告警列表被相同消息刷屏（src/ops/DashboardPage.cpp:122）——已修复：阈值告警仅在从未越限到越限的上升沿触发，持续越限轮询不重复入列（src/ops/DashboardPage.cpp:124）
 - [ ] 审核发现：test_rate_limiter_sub_ms_refill_clamped 前 5 次消耗用真实时钟、随后才切注入时钟并 +2ms；setClock 前若被抢占 ≥3ms，注入 elapsed≥5ms 会补满容量致负断言误失败，测试潜在脆弱（tests/foundation/RedisProviderTest.cpp:317）
 - [ ] 审核发现：BotClient::tickInGame 同一 tick 内 move 与 heartbeat 的 sendAction 均失败时（首次写失败已 close 连接，第二次 isConnected() 为假），scheduleRetry 被调用两次，reconnects 计数膨胀 1（tools/bots/BotClient.cpp:150）

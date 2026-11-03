@@ -104,7 +104,8 @@ async function poll(){
  txt("tick",tc>0?(td/tc).toFixed(2)+" ms":"-");
  $("tick-sub").textContent="count "+tc+" · slow "+(prom["slow_tick_count"]||0);
  const rss=prom["process_rss_bytes"];
- $("rss").textContent=(rss===undefined)?"n/a":fmtBytes(rss);
+ // 0 表示非 Linux/读失败（OpsInspector 注释契约）：显示为不可用而非伪值 "0 B"。
+ $("rss").textContent=(rss===undefined||rss===0)?"n/a":fmtBytes(rss);
  const qo=prom["queue_backlog"]||0,qi=prom["inbound_queue_depth"]||0;
  txt("qout",qo);$("qin").textContent="inbound "+qi;
  const now=performance.now();
@@ -119,7 +120,8 @@ async function poll(){
   if(dSlow>0)pushAlarm("","slow_tick_count +"+dSlow+"（tick 超时）");
   const dBP=(prom["transport_backpressure_events_total"]||0)-(prev["transport_backpressure_events_total"]||0);
   if(dBP>0)pushAlarm("","backpressure events +"+dBP);
-  if(qo>1000)pushAlarm("warn","queue_backlog = "+qo+"（>1000）");
+  // 越限告警只在上升沿触发：qo 持续 >1000 期间每 2s 轮询不得重复刷屏。
+  if(qo>1000&&(prev["queue_backlog"]||0)<=1000)pushAlarm("warn","queue_backlog = "+qo+"（>1000）");
   const dEnt=(inspect.runtime.entity_count)-(prevEnt);
   if(dEnt<=-10)pushAlarm("warn","entity_count "+dEnt+"（骤降）");
  }
