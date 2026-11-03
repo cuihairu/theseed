@@ -37,8 +37,12 @@ bool RateLimiter::tryConsume(const std::string& key,
 
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         now - state.lastTouch);
-    const double refillRatePerMs = 1.0 / static_cast<double>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(config.refillInterval).count());
+    // P2 深审：refillInterval < 1ms 时毫秒计数为 0，1.0/0 得 inf，refilled
+    // 恒为无穷→桶永远满，限流器静默失效。钳到 1ms 下限，保证 refillRate
+    // 有限且按最慢可表达粒度补充。
+    const auto refillMs = std::max<std::int64_t>(
+        1, std::chrono::duration_cast<std::chrono::milliseconds>(config.refillInterval).count());
+    const double refillRatePerMs = 1.0 / static_cast<double>(refillMs);
     const double refilled = std::max(0.0, elapsedMs.count() * refillRatePerMs);
     state.tokens = std::min(static_cast<double>(config.capacity), state.tokens + refilled);
     state.lastTouch = now;

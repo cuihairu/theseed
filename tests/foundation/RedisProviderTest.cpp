@@ -299,6 +299,27 @@ static void test_rate_limiter_refills_over_time() {
     PASS();
 }
 
+// P2 深审回归：refillInterval < 1ms（毫秒计数 0）时旧实现 1.0/0=inf，
+// 任何 elapsed≥1ms 都把桶瞬间补满——容量被反复即时耗尽，限流器静默失效。
+// 修复后钳到 1ms：短窗口内最多补 1 token，容量耗尽后不可能立即全量放行。
+static void test_rate_limiter_sub_ms_refill_clamped() {
+    TEST("test_rate_limiter_sub_ms_refill_clamped");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 5;
+    cfg.refillInterval = std::chrono::milliseconds(0);  // < 1ms
+    // 立即耗尽 5 个 token。
+    for (int i = 0; i < 5; ++i) {
+        if (!limiter.tryConsume("k", cfg)) { FAIL("capacity 5 should allow 5"); return; }
+    }
+    // 等 ≥1ms：旧实现 refillRate=inf → 5 token 立即回满并再次放行 5 个；
+    // 修复后钳到 1ms → 只补 1 token，不足以再次放行 5 个。
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    if (limiter.tryConsume("k", cfg, 5)) { FAIL("sub-ms refill must not refill full capacity instantly"); return; }
+    PASS();
+}
+
 static void test_rate_limiter_reset() {
     TEST("test_rate_limiter_reset");
     auto redis = std::make_shared<InMemoryRedisProvider>();
@@ -528,6 +549,7 @@ int main() {
     test_rate_limiter_invalid_inputs_rejected();
     test_rate_limiter_corrupt_state_resets_bucket();
     test_rate_limiter_refills_over_time();
+    test_rate_limiter_sub_ms_refill_clamped();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();
