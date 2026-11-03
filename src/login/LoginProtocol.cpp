@@ -93,6 +93,24 @@ std::vector<std::byte> LoginProtocol::encodeError(const std::string& message) {
     return frameMessage(ClientMessageType::ErrorResponse, raw);
 }
 
+// --- Encode client -> server（bot / 真实客户端的请求构造面，与下方 decode 镜像） ---
+
+std::vector<std::byte> LoginProtocol::encodeLogin(const std::string& account,
+                                                  const std::string& password) {
+    foundation::MemoryStream payload;
+    writeString(payload, account);
+    writeString(payload, password);
+    auto raw = std::span<const std::byte>(payload.data(), payload.size());
+    return frameMessage(ClientMessageType::Login, raw);
+}
+
+std::vector<std::byte> LoginProtocol::encodeSelectRealm(const std::string& realmId) {
+    foundation::MemoryStream payload;
+    writeString(payload, realmId);
+    auto raw = std::span<const std::byte>(payload.data(), payload.size());
+    return frameMessage(ClientMessageType::SelectRealm, raw);
+}
+
 // --- Decode client -> server ---
 
 static bool readStringFromSpan(std::span<const std::byte> data, std::size_t& offset,
@@ -124,6 +142,98 @@ bool LoginProtocol::decodeSelectRealm(std::span<const std::byte> payload,
                                       std::string& outRealmId) {
     std::size_t offset = 0;
     return readStringFromSpan(payload, offset, outRealmId);
+}
+
+// --- Decode server -> client（bot / 真实客户端的应答解析面，与上方 encode 镜像） ---
+
+static bool readUint8FromSpan(std::span<const std::byte> data, std::size_t& offset,
+                              std::uint8_t& out) {
+    if (offset + 1 > data.size()) return false;
+    out = static_cast<std::uint8_t>(data[offset]);
+    offset += 1;
+    return true;
+}
+
+static bool readUint16FromSpan(std::span<const std::byte> data, std::size_t& offset,
+                               std::uint16_t& out) {
+    if (offset + 2 > data.size()) return false;
+    out = static_cast<std::uint16_t>(static_cast<std::uint16_t>(data[offset])
+                                   | (static_cast<std::uint16_t>(data[offset + 1]) << 8));
+    offset += 2;
+    return true;
+}
+
+static bool readUint32FromSpan(std::span<const std::byte> data, std::size_t& offset,
+                               std::uint32_t& out) {
+    if (offset + 4 > data.size()) return false;
+    out = static_cast<std::uint32_t>(data[offset])
+        | (static_cast<std::uint32_t>(data[offset + 1]) << 8)
+        | (static_cast<std::uint32_t>(data[offset + 2]) << 16)
+        | (static_cast<std::uint32_t>(data[offset + 3]) << 24);
+    offset += 4;
+    return true;
+}
+
+bool LoginProtocol::decodeLoginResponse(std::span<const std::byte> payload,
+                                        LoginResponse& outResp) {
+    std::size_t offset = 0;
+    std::uint8_t success = 0;
+    if (!readUint8FromSpan(payload, offset, success)) return false;
+    outResp.success = success != 0;
+    if (!readStringFromSpan(payload, offset, outResp.error)) return false;
+    if (!readStringFromSpan(payload, offset, outResp.token)) return false;
+    std::uint32_t realmCount = 0;
+    if (!readUint32FromSpan(payload, offset, realmCount)) return false;
+    outResp.realms.clear();
+    outResp.realms.reserve(realmCount);
+    for (std::uint32_t i = 0; i < realmCount; ++i) {
+        RealmInfo realm;
+        if (!readStringFromSpan(payload, offset, realm.realmId)) return false;
+        if (!readStringFromSpan(payload, offset, realm.name)) return false;
+        if (!readStringFromSpan(payload, offset, realm.status)) return false;
+        if (!readStringFromSpan(payload, offset, realm.host)) return false;
+        if (!readUint16FromSpan(payload, offset, realm.port)) return false;
+        outResp.realms.push_back(std::move(realm));
+    }
+    return true;
+}
+
+bool LoginProtocol::decodeRealmList(std::span<const std::byte> payload,
+                                    std::vector<RealmInfo>& outRealms) {
+    std::size_t offset = 0;
+    std::uint32_t realmCount = 0;
+    if (!readUint32FromSpan(payload, offset, realmCount)) return false;
+    outRealms.clear();
+    outRealms.reserve(realmCount);
+    for (std::uint32_t i = 0; i < realmCount; ++i) {
+        RealmInfo realm;
+        if (!readStringFromSpan(payload, offset, realm.realmId)) return false;
+        if (!readStringFromSpan(payload, offset, realm.name)) return false;
+        if (!readStringFromSpan(payload, offset, realm.status)) return false;
+        if (!readStringFromSpan(payload, offset, realm.host)) return false;
+        if (!readUint16FromSpan(payload, offset, realm.port)) return false;
+        outRealms.push_back(std::move(realm));
+    }
+    return true;
+}
+
+bool LoginProtocol::decodeSelectRealmResponse(std::span<const std::byte> payload,
+                                              SelectRealmResponse& outResp) {
+    std::size_t offset = 0;
+    std::uint8_t success = 0;
+    if (!readUint8FromSpan(payload, offset, success)) return false;
+    outResp.success = success != 0;
+    if (!readStringFromSpan(payload, offset, outResp.error)) return false;
+    if (!readStringFromSpan(payload, offset, outResp.host)) return false;
+    if (!readUint16FromSpan(payload, offset, outResp.port)) return false;
+    if (!readStringFromSpan(payload, offset, outResp.token)) return false;
+    return true;
+}
+
+bool LoginProtocol::decodeError(std::span<const std::byte> payload,
+                                std::string& outMessage) {
+    std::size_t offset = 0;
+    return readStringFromSpan(payload, offset, outMessage);
 }
 
 }  // namespace theseed::login

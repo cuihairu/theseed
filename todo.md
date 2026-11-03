@@ -39,7 +39,7 @@
 ## 打开项
 
 - [x] Phase C 端到端集成（受限热更 / 迁移路由窗口 / BackupTopologyCoordinator / LoadProfiler）
-- [ ] 更完整的单元测试（跨平台 CI 矩阵已落地；测试覆盖仍开放）
+- [x] 更完整的单元测试（跨平台 CI 矩阵已落地）——bots 配置/回环 E2E、Login 协议客户端编解码 round-trip/truncation、CellRuntime 异常隔离（std/non-std）、Ops dashboard/RSS、控制面 64KB+ 快照帧回归与 RateLimiter 确定时钟；全量 ctest 126/126 全绿，gcc-coverage 行/函数 100%（11708/11708、1690/1690）
 
 ## 代码深审待办（2026-11-01）
 

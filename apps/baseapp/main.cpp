@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
     std::string entityDefPath = "res/entities";
     std::string storePath = "data/entities";
     std::uint16_t clientPort = 20000;
+    std::uint16_t opsPort = 0;  // 0 = 不开 ops/dashboard 面
     std::vector<PeerConfig> peers;
     std::optional<DbConfig> dbConfig;
 
@@ -45,6 +46,8 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
             clientPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+        } else if (arg == "--ops-port" && i + 1 < argc) {
+            opsPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--defs" && i + 1 < argc) {
             entityDefPath = argv[++i];
         } else if (arg == "--store" && i + 1 < argc) {
@@ -103,6 +106,11 @@ int main(int argc, char** argv) {
     config.entityDefPath = entityDefPath;
     config.componentId = kBaseAppComponentId;
     config.clientListenPort = clientPort;
+    if (opsPort != 0) {
+        config.ops.enabled = true;
+        config.ops.host = "127.0.0.1";
+        config.ops.port = opsPort;
+    }
 
     theseed::core::BaseApp app(std::move(config), hub, store);
 

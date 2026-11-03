@@ -2,6 +2,8 @@
 
 #include "theseed/runtime/RuntimeTypes.h"
 
+#include "theseed/foundation/Metrics.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -50,6 +52,9 @@ public:
 private:
     ProcessInfo info_;
     Provider provider_;
+    // 进程 RSS 仪表（dashboard 内存卡片数据源）。构造时注册，renderMetrics
+    // 每次渲染前刷新（Linux 读 /proc/self/statm；其它平台恒 0）。
+    foundation::Gauge& rssGauge_;
 };
 
 }  // namespace theseed::ops

@@ -332,6 +332,8 @@ int main() {
         CHECK(client->write(one), "write within cap accepted");
         CHECK(!client->write(twoSpan), "write over cap rejected");
         CHECK(client->maxSendBuffer() == 1, "maxSendBuffer accessor");
+        CHECK(client->sendBufferSize() <= client->maxSendBuffer(),
+              "sendBufferSize accessor bounded");
         // 关闭后 write 拒绝（未连接）。
 
         // 关闭连接后 write 拒绝（未连接）。

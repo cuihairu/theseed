@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <cstdint>
 #include <optional>
 #include <sstream>
@@ -15,13 +16,17 @@ RateLimiter::RateLimiter(std::shared_ptr<IRedisProvider> redis)
     if (!redis_) throw std::invalid_argument("RateLimiter requires a redis provider");
 }
 
+void RateLimiter::setClock(std::function<std::chrono::steady_clock::time_point()> nowFn) {
+    nowFn_ = std::move(nowFn);
+}
+
 bool RateLimiter::tryConsume(const std::string& key,
                               const Config& config,
                               std::int64_t cost) {
     if (key.empty() || cost <= 0) return false;
     if (config.capacity <= 0) return false;
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = nowFn_();
     const auto rk = redisKey(key);
 
     BucketState state;

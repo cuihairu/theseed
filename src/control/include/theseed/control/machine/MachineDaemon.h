@@ -7,6 +7,7 @@
 #include "theseed/control/machine/OtlpTraceExporter.h"
 #include "theseed/control/machine/ProfileRelay.h"
 #include "theseed/foundation/SessionStore.h"
+#include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/TcpListener.h"
 #include "theseed/runtime/TickProfiler.h"
@@ -211,6 +212,11 @@ public:
         std::string listenHost = "127.0.0.1";
         std::uint16_t listenPort = 0;  // 0 = 内核分配随机端口
         runtime::ComponentId componentId = 60;  // Machine 组件默认 id
+        // 控制面 RPC 传输的帧上限（NetworkTransport::Config::maxMessageSize）。
+        // 默认与对端（LoginApp 通知腿）同口径 kControlPlaneMaxMessageSize，
+        // 见 NetworkTransport.h 注释。
+        std::size_t transportMaxMessageSize =
+            runtime::NetworkTransport::kControlPlaneMaxMessageSize;
         std::size_t auditCapacity = 128;  // 本地审计环形容量；0 = 关闭本地环形
         ExecPolicy execPolicy;
         // 主机级非受控进程治理策略（machine.processes / machine.terminate）；

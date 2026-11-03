@@ -98,7 +98,7 @@ bool expectSameEntity(const EntityData& expected, const EntityData& actual,
 // 环在同一线程内 send/receive，无锁。
 class ScriptedDbTransport final : public IRuntimeTransport {
 public:
-    enum class Mode { Canned, StrayThenOk, Silent, Closed };
+    enum class Mode { Canned, StrayThenOk, Silent, Closed, Malformed };
 
     SendResult send(RuntimeInvocation invocation) override {
         ++sends;
@@ -113,7 +113,14 @@ public:
         // P2 深审回归：服务端必须原样回传 requestId，store 按它关联响应。
         reply.requestId = lastInvocation.requestId;
         reply.method = lastInvocation.method + ".ok";
-        reply.payload = cannedReply(lastInvocation.method);
+        if (mode == Mode::Malformed) {
+            // method 正确但 payload 为空/截断：触发各 decode*Response 的
+            // 失败臂（读不足即 false）。非 0xFF 单字节——部分解码器宽松
+            // 读 u8 success 会接受，必须用不足长度。
+            reply.payload = {};
+        } else {
+            reply.payload = cannedReply(lastInvocation.method);
+        }
 
         if (mode == Mode::StrayThenOk) {
             RuntimeInvocation stray = reply;
@@ -365,6 +372,30 @@ int main() {
         if (elapsed < 6 * kShortTimeout.count() - 10)
             FAIL("timeout budget not consumed (elapsed " +
                  std::to_string(elapsed) + "ms)");
+        PASS();
+    }
+
+    TEST("malformed ok-payload degrades each op without waiting for timeout");
+    {
+        ScriptedDbTransport transport;
+        transport.mode = ScriptedDbTransport::Mode::Malformed;
+        auto store = makeStore(transport);  // 默认 5s 预算：若误入等待会远超
+
+        const auto begin = std::chrono::steady_clock::now();
+        EntityData out;
+        // method 匹配 .ok 但 payload 畸形：request 立即返回该响应，
+        // decode*Response 失败臂（return false / 0）被覆盖——不消耗预算。
+        if (store.load(1, "Avatar", out)) FAIL("load must degrade on malformed payload");
+        if (store.save(1, sampleEntity(1))) FAIL("save must degrade on malformed payload");
+        if (store.remove(1)) FAIL("remove must degrade on malformed payload");
+        if (store.allocId() != 0) FAIL("allocId must degrade to 0 on malformed payload");
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - begin)
+                .count();
+        // 不应为每个操作各等满 5s：decode 失败即时返回。
+        if (elapsed >= 4 * 1000)
+            FAIL("malformed payload must not consume the full timeout budget");
         PASS();
     }
 

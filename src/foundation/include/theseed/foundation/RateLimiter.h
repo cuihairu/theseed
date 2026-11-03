@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +26,10 @@ public:
     };
 
     explicit RateLimiter(std::shared_ptr<IRedisProvider> redis);
+
+    // Test seam: inject a deterministic clock so refill timing can be
+    // asserted without sleeping. `nowFn` must return a monotonic instant.
+    void setClock(std::function<std::chrono::steady_clock::time_point()> nowFn);
 
     // Attempt to consume `cost` tokens for `key`. Returns true if allowed,
     // false if the bucket does not have enough capacity. The redis blob is
@@ -52,6 +57,9 @@ private:
     static std::optional<BucketState> decode(const std::string& blob);
 
     std::shared_ptr<IRedisProvider> redis_;
+    std::function<std::chrono::steady_clock::time_point()> nowFn_ = [] {
+        return std::chrono::steady_clock::now();
+    };
 };
 
 }  // namespace theseed::foundation

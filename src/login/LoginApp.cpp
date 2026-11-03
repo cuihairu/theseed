@@ -241,7 +241,11 @@ void LoginApp::attemptMachineLink() {
     } else {
         auto conn = runtime::TcpConnection::create();
         if (conn->connect(config_.machineHost, config_.machinePort)) {
-            transport = std::make_shared<runtime::NetworkTransport>(conn);
+            runtime::NetworkTransport::Config transportConfig;
+            transportConfig.maxMessageSize =
+                runtime::NetworkTransport::kControlPlaneMaxMessageSize;
+            transport = std::make_shared<runtime::NetworkTransport>(
+                conn, transportConfig);
         } else {  // LCOV_EXCL_BR_LINE Linux 非阻塞 connect 恒 EINPROGRESS，失败臂不可达（与 db 腿同理由）
             // LCOV_EXCL_START inet_pton 无 DNS：坏主机名解析为 0.0.0.0 同样 EINPROGRESS，本臂不可达
             foundation::logWarn("login.machine.link.refused", {});
@@ -729,10 +733,16 @@ void LoginApp::handleSelectRealm(ClientSession* session, const std::string& real
         resp.success = true;
         resp.host = found->host;
         resp.port = found->port;
-        resp.token = SessionToken::issue("", found->realmId);
+        // 游戏令牌必须携带账号：BaseApp 的 SessionToken::validate 拒绝空
+        // account/realm。已登录连接用绑定账号签发；未登录直接选领域的
+        // 连接拿到的令牌 account 为空——在 BaseApp EnterGame 处被拒
+        //（"invalid token"），保持"选领域以登录为准"的门控语义。
+        const auto bound = bindings_.find(session);
+        const std::string account = (bound != bindings_.end()) ? bound->second.account : "";
+        resp.token = SessionToken::issue(account, found->realmId);
         // 联动绑定补领域：只在已登录连接上更新（未登录的选领域不建绑定
         //——绑定以登录为准，防 operator[] 给陌生键开洞）。
-        const auto bound = bindings_.find(session);
+        //（bound 已在上方令牌签发处取得。）
         if (bound != bindings_.end()) {
             bound->second.realm = realmId;
             // 存储行同步领域（联动配对的关键）：踢人通知的 realm 取自

@@ -95,7 +95,21 @@ struct RawClient {
     bool connect(std::uint16_t port) {
         conn = TcpConnection::create();
         if (!conn->connect("127.0.0.1", port)) return false;
-        transport = std::make_shared<NetworkTransport>(conn);
+        // 控制面 RPC 客户端与 daemon 同口径：真实主机快照（1000+ 进程）
+        // 的 JSON 超 64KB，接收侧按 64KB 会丢弃响应。默认用
+        // kControlPlaneMaxMessageSize（与 MachineDaemon::Config 默认一致）。
+        NetworkTransport::Config config;
+        config.maxMessageSize = NetworkTransport::kControlPlaneMaxMessageSize;
+        transport = std::make_shared<NetworkTransport>(conn, config);
+        return true;
+    }
+
+    bool connect(std::uint16_t port, std::size_t maxMessageSize) {
+        conn = TcpConnection::create();
+        if (!conn->connect("127.0.0.1", port)) return false;
+        NetworkTransport::Config config;
+        config.maxMessageSize = maxMessageSize;
+        transport = std::make_shared<NetworkTransport>(conn, config);
         return true;
     }
 
@@ -121,8 +135,8 @@ struct RawClient {
         inv.payload = std::move(payload);
         if (transport->send(std::move(inv)) != SendResult::Accepted) return false;
         transport->flush();
-        for (int i = 0; i < 4000; ++i) {
-            if (++pumpCount > 20000) {
+        for (int i = 0; i < 40000; ++i) {
+            if (++pumpCount > 200000) {
                 std::cout << "FAILED: pump guard tripped" << std::endl;
                 std::exit(1);
             }
@@ -255,6 +269,35 @@ public:
         rogue.name = "rogue-worker";
         rogue.pid = 4294967295u;
         return {rogue};
+    }
+    bool terminateHostProcess(std::uint32_t /*pid*/) override { return false; }
+    void report() override {}
+    void setDraining(bool /*draining*/) override {}
+    void setProfileMetaSource(IProfileMetaSource* /*source*/) override {}
+};
+
+// 快照帧上限回归替身：生成足够多的进程条目，让 machine.snapshot 的
+// JSON 超过 NetworkTransport 旧默认 64KB 上限——未修复的 daemon 会把
+// 响应按 Oversized 丢弃，客户端收不到 machine.snapshot.ok。
+class LargeSnapshotAgent final : public IMachineAgent {
+public:
+    NodeSummary snapshot() override {
+        NodeSummary summary;
+        summary.host.hostname = "large-snapshot-host";
+        summary.processes.reserve(1600);
+        for (std::uint32_t pid = 1; pid <= 1600; ++pid) {
+            ProcessSummary process;
+            process.pid = pid;
+            process.name = "worker-" + std::to_string(pid);
+            process.healthy = true;
+            summary.processes.push_back(std::move(process));
+        }
+        return summary;
+    }
+    bool execute(const std::string& /*command*/,
+                 const std::string& /*args*/) override { return false; }
+    std::vector<ProcessSummary> enumerateHostProcesses() override {
+        return snapshot().processes;
     }
     bool terminateHostProcess(std::uint32_t /*pid*/) override { return false; }
     void report() override {}
@@ -3521,6 +3564,42 @@ int main() {
 
         httpServer.stop();
         exportDaemon.stop();
+        PASS();
+    }
+
+    TEST("snapshot frame larger than 64KB is delivered intact");
+    {
+        // 回归：大主机快照（1600 进程）的 JSON 超过 NetworkTransport 旧
+        // 默认 64KB 上限。未修复 daemon 用默认 64KB transport，send 返回
+        // Oversized、machine.snapshot.ok 静默丢失；修复后 transportMaxMessageSize
+        // 默认 4MB，响应完整送达。
+        LargeSnapshotAgent largeAgent;
+        MachineDaemon::Config largeConfig;
+        largeConfig.listenPort = 0;
+        largeConfig.roleBindings = {{kClientComponent, AccessRole::Admin}};
+        MachineDaemon largeDaemon(largeConfig, largeAgent);
+        if (!largeDaemon.start()) FAIL("large snapshot daemon start failed");
+        auto largeTick = [&largeDaemon] { largeDaemon.tick(); };
+        RawClient largeClient;
+        if (!largeClient.connect(
+                largeDaemon.localPort(),
+                NetworkTransport::kControlPlaneMaxMessageSize))
+            FAIL("large snapshot client connect failed");
+        largeClient.settle(largeTick);
+        RuntimeInvocation resp;
+        if (!largeClient.request(MachineMethod::kSnapshot, {}, largeTick, resp))
+            FAIL("no response to large snapshot");
+        if (resp.method != MachineMethod::kSnapshotOk)
+            FAIL("large snapshot wrong method: " + resp.method);
+        const auto json = payloadToString(resp);
+        if (json.find("\"pid\":1") == std::string::npos ||
+            json.find("\"pid\":1600") == std::string::npos)
+            FAIL("large snapshot must carry the full process list, got " +
+                 std::to_string(json.size()) + " bytes");
+        if (json.size() < 64 * 1024)
+            FAIL("large snapshot expected >64KB, got " +
+                 std::to_string(json.size()) + " bytes");
+        largeDaemon.stop();
         PASS();
     }
 

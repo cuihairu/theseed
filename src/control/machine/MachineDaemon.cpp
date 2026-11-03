@@ -552,7 +552,10 @@ void MachineDaemon::appendAudit(const AuditEntry& entry) {
 
 void MachineDaemon::acceptConnections() {
     while (auto conn = listener_.accept()) {
-        auto transport = std::make_shared<runtime::NetworkTransport>(conn);
+        runtime::NetworkTransport::Config transportConfig;
+        transportConfig.maxMessageSize = config_.transportMaxMessageSize;
+        auto transport = std::make_shared<runtime::NetworkTransport>(
+            conn, transportConfig);
         // 服务端模式注册：对端身份由其首条请求的 sourceComponent 自报
         // （与 DBApp 同机制），回复才能路由回对端。
         hub_->attachServerTransport(transport);

@@ -292,9 +292,11 @@ static void test_rate_limiter_refills_over_time() {
     limiter.tryConsume("k", cfg);
     limiter.tryConsume("k", cfg);
     if (limiter.tryConsume("k", cfg)) { FAIL("should be empty before refill"); return; }
-    // We cannot mock steady_clock directly; but tryConsume reads wall clock,
-    // so we sleep ~120ms to allow at least one token to refill.
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    // tryConsume uses the injected clock; advance it deterministically to
+    // guarantee at least one refill without real sleeping.
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    limiter.setClock([&now] { return now; });
+    now += std::chrono::milliseconds(120);
     if (!limiter.tryConsume("k", cfg)) { FAIL("should refill after sleep"); return; }
     PASS();
 }
@@ -313,9 +315,11 @@ static void test_rate_limiter_sub_ms_refill_clamped() {
     for (int i = 0; i < 5; ++i) {
         if (!limiter.tryConsume("k", cfg)) { FAIL("capacity 5 should allow 5"); return; }
     }
-    // 等 ≥1ms：旧实现 refillRate=inf → 5 token 立即回满并再次放行 5 个；
-    // 修复后钳到 1ms → 只补 1 token，不足以再次放行 5 个。
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    // 注入时钟推进 ≥1ms：旧实现 refillRate=inf → 5 token 立即回满并再次
+    // 放行 5 个；修复后钳到 1ms → 只补 1 token，不足以再次放行 5 个。
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    limiter.setClock([&now] { return now; });
+    now += std::chrono::milliseconds(2);
     if (limiter.tryConsume("k", cfg, 5)) { FAIL("sub-ms refill must not refill full capacity instantly"); return; }
     PASS();
 }

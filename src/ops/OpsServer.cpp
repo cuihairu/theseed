@@ -1,5 +1,6 @@
 #include "theseed/ops/OpsServer.h"
 
+#include "theseed/ops/DashboardPage.h"
 #include "theseed/runtime/TcpConnection.h"
 
 #include <algorithm>
@@ -15,6 +16,7 @@ namespace {
 
 constexpr std::string_view kContentText = "text/plain; version=0.0.4";
 constexpr std::string_view kContentJson = "application/json";
+constexpr std::string_view kContentHtml = "text/html; charset=utf-8";
 
 }  // namespace
 
@@ -127,6 +129,10 @@ void OpsServer::servicePending() {
             respond(pc, inspector_.renderInspectJson(), kContentJson.data());
         } else if (path == "/entities") {
             respond(pc, inspector_.renderEntitiesJson(), kContentJson.data());
+        } else if (path == "/" || path == "/dashboard" || path == "/index.html") {
+            // 内嵌单页 dashboard：自包含 HTML，前端 fetch 上述端点轮询。
+            const auto html = dashboardHtml();
+            respond(pc, std::string(html), kContentHtml.data());
         } else {
             std::ostringstream body;
             body << "{\"error\":\"not found\",\"path\":\"" << path << "\"}";

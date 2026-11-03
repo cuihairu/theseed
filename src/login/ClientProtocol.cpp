@@ -39,6 +39,13 @@ std::vector<std::byte> ClientProtocol::encodeEnterGameResponse(const EnterGameRe
     return LoginProtocol::frameMessage(ClientMessageType::EnterGameResponse, raw);
 }
 
+std::vector<std::byte> ClientProtocol::encodeEnterGame(const std::string& token) {
+    foundation::MemoryStream payload;
+    writeString(payload, token);
+    auto raw = std::span<const std::byte>(payload.data(), payload.size());
+    return LoginProtocol::frameMessage(ClientMessageType::EnterGame, raw);
+}
+
 std::vector<std::byte> ClientProtocol::encodeEntityEnter(const EntityEnterMsg& msg) {
     foundation::MemoryStream payload;
     payload.writeUint64(msg.entityId);

@@ -104,6 +104,7 @@ bool BaseApp::init() {
             if (runtime_) {  // LCOV_EXCL_BR_LINE init 建 inspector 前已 make_unique runtime_，空臂不可达
                 rt.entityCount = runtime_->entityCount();
             }
+            rt.sessionCount = clientSessions_.size();
             rt.entityTypes = registry_.entityTypes();
             if (transport_) {  // LCOV_EXCL_BR_LINE 构造函数拒绝空 transport，空臂不可达
                 rt.transportStats = transport_->stats();

@@ -22,6 +22,12 @@ public:
     static constexpr std::uint16_t kInvocationMessageId = 1;
     static constexpr std::uint16_t kHeartbeatMessageId = 2;
 
+    // 控制面 RPC 帧上限（MachineDaemon 与 LoginApp 通知腿共用口径）。
+    // 主机快照/进程清单 JSON 随进程数增长：64KB 在数百进程宿主上即被
+    // 89KB+ 快照击穿（send/接收双侧 Oversized，响应静默丢失）。默认
+    // 4MB 覆盖大型主机快照；控制面对控制面两端必须同口径。
+    static constexpr std::size_t kControlPlaneMaxMessageSize = 4 * 1024 * 1024;
+
     struct Config {
         ComponentId localComponent{0};
         std::size_t maxMessageSize{64 * 1024};

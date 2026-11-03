@@ -1,6 +1,7 @@
 add_library(theseed_ops
     OpsInspector.cpp
-    OpsServer.cpp)
+    OpsServer.cpp
+    DashboardPage.cpp)
 
 target_link_libraries(
     theseed_ops

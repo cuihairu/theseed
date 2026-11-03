@@ -4,6 +4,7 @@
 #include "theseed/ops/OpsServer.h"
 
 #include "theseed/runtime/TcpConnection.h"
+#include "theseed/runtime/TransportStatsCollector.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -113,6 +114,46 @@ int main() {
     {
         auto r = sendRequest(server, port, "GET /entities HTTP/1.1\r\n\r\n");
         CHECK(r.status == 200 && r.body.find("entity") != std::string::npos, "entities 200 json");
+    }
+
+    // 内嵌 dashboard：/ 与 /dashboard 与 /index.html 均回自包含 HTML。
+    {
+        auto r = sendRequest(server, port, "GET / HTTP/1.1\r\n\r\n");
+        CHECK(r.status == 200, "dashboard / 200");
+        CHECK(r.contentType.find("text/html") != std::string::npos, "dashboard content-type html");
+        CHECK(r.body.find("theseed ops dashboard") != std::string::npos, "dashboard title");
+        CHECK(r.body.find("/metrics") != std::string::npos, "dashboard fetches metrics");
+    }
+    {
+        auto r = sendRequest(server, port, "GET /dashboard HTTP/1.1\r\n\r\n");
+        CHECK(r.status == 200 && r.body.find("theseed ops dashboard") != std::string::npos,
+              "dashboard /dashboard alias");
+    }
+    {
+        auto r = sendRequest(server, port, "GET /index.html HTTP/1.1\r\n\r\n");
+        CHECK(r.status == 200 && r.body.find("theseed ops dashboard") != std::string::npos,
+              "dashboard /index.html alias");
+    }
+    // dashboard 数据一致性：/metrics 与 /inspect 同源可对账（entity_count /
+    // session_count 字段在两端点均存在）；RSS 仪表已导出。队列深度仪表由
+    // TransportStatsCollector 注册——构造一个以复现 app 内的真实指标面。
+    {
+        theseed::runtime::TransportStatsCollector statsCollector;
+        auto metrics = sendRequest(server, port, "GET /metrics HTTP/1.1\r\n\r\n");
+        auto inspect = sendRequest(server, port, "GET /inspect HTTP/1.1\r\n\r\n");
+        CHECK(metrics.body.find("process_rss_bytes") != std::string::npos,
+              "rss gauge exported in metrics");
+        CHECK(inspect.body.find("entity_count") != std::string::npos
+                  && inspect.body.find("session_count") != std::string::npos,
+              "inspect exposes entity/session counts");
+        CHECK(metrics.body.find("queue_backlog") != std::string::npos
+                  && metrics.body.find("inbound_queue_depth") != std::string::npos,
+              "queue depth gauges exported");
+        // dashboard 页面渲染的卡片字段与上述端点一一对应。
+        auto dash = sendRequest(server, port, "GET / HTTP/1.1\r\n\r\n");
+        CHECK(dash.body.find("entity_count") != std::string::npos
+                  && dash.body.find("session_count") != std::string::npos,
+              "dashboard reads entity/session fields");
     }
 
     // query 剥离：/inspect?x=1 等价 /inspect

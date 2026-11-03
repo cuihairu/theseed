@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <stdexcept>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -176,5 +177,120 @@ int main() {
 
     ghostRuntime.detach(scheduler);
     realRuntime.detach(scheduler);
+
+    // P2 深审回归：handler 抛异常不得逃逸 pumpInbound 杀死 tick 循环。
+    // 修复后坏 handler 只丢本条（计数+日志），后续合法消息照常分发。
+    {
+        EntityDef excDef("Bomb");
+        excDef.addMethod("explode", theseed::runtime::MethodSide::Cell);
+        excDef.addMethod("tick2", theseed::runtime::MethodSide::Cell);
+        auto excTransport = std::make_shared<InMemoryRuntimeTransport>();
+        auto excTopology = std::make_unique<SingleCellTopology>(3);
+        auto excSpace = std::make_unique<Space>(300, "exc_space", std::move(excTopology));
+        excSpace->initialize(SpaceConfig{.name = "exc_space"});
+        auto excSpaceRuntime = std::make_unique<SpaceRuntime>(std::move(excSpace));
+        CellRuntime excRuntime(std::move(excSpaceRuntime), excTransport, 31);
+
+        Entity bomb(2, EntitySide::Cell, excDef);
+        int ticksAfterBomb = 0;
+        if (!bomb.bindMethodHandler("explode", [](Entity&, std::span<const std::byte>) {
+                throw std::runtime_error("handler boom");
+            })) {
+            return fail("bomb_bind_explode");
+        }
+        if (!bomb.bindMethodHandler("tick2", [&](Entity&, std::span<const std::byte>) {
+                ++ticksAfterBomb;
+            })) {
+            return fail("bomb_bind_tick2");
+        }
+        excRuntime.addEntity(bomb, Vector3{0.0F, 0.0F, 0.0F});
+        bomb.activate();
+
+        RuntimeInvocation bombInv;
+        bombInv.entityId = 2;
+        bombInv.targetComponent = 31;
+        bombInv.entityType = "Bomb";
+        bombInv.method = "explode";
+        if (excTransport->send(std::move(bombInv)) != SendResult::Accepted) {
+            return fail("bomb_enqueue");
+        }
+
+        RuntimeInvocation tickInv;
+        tickInv.entityId = 2;
+        tickInv.targetComponent = 31;
+        tickInv.entityType = "Bomb";
+        tickInv.method = "tick2";
+        if (excTransport->send(std::move(tickInv)) != SendResult::Accepted) {
+            return fail("tick_enqueue");
+        }
+
+        // 修复前：explode 抛出 → 异常逃逸 pumpInbound，进程崩溃（测试无法
+        // 继续执行 tick2）。修复后：异常被隔离，tick2 照常执行。
+        excRuntime.pumpInbound();
+        if (ticksAfterBomb != 1) {
+            return fail("handler_exception_must_be_isolated");
+        }
+    }
+
+    // catch-all 分支：handler 抛非 std::exception（如 int）也要被隔离，
+    // 不得逃逸 pumpInbound。修复前该分支无回归覆盖，异常仍能杀死 tick。
+    {
+        EntityDef excDef("BombNonStd");
+        excDef.addMethod("boom", theseed::runtime::MethodSide::Cell);
+        excDef.addMethod("tick3", theseed::runtime::MethodSide::Cell);
+        auto excTransport = std::make_shared<InMemoryRuntimeTransport>();
+        auto excTopology = std::make_unique<SingleCellTopology>(3);
+        auto excSpace = std::make_unique<Space>(300, "exc_space2", std::move(excTopology));
+        excSpace->initialize(SpaceConfig{.name = "exc_space2"});
+        auto excSpaceRuntime = std::make_unique<SpaceRuntime>(std::move(excSpace));
+        CellRuntime excRuntime(std::move(excSpaceRuntime), excTransport, 32);
+
+        Entity bomb(3, EntitySide::Cell, excDef);
+        int ticksAfterBomb2 = 0;
+        if (!bomb.bindMethodHandler("boom", [](Entity&, std::span<const std::byte>) {
+                throw 42;  // 非 std::exception：须命中 catch (...)
+            })) {
+            return fail("bombns_bind_boom");
+        }
+        if (!bomb.bindMethodHandler("tick3", [&](Entity&, std::span<const std::byte>) {
+                ++ticksAfterBomb2;
+            })) {
+            return fail("bombns_bind_tick3");
+        }
+        excRuntime.addEntity(bomb, Vector3{0.0F, 0.0F, 0.0F});
+        bomb.activate();
+
+        RuntimeInvocation boomInv;
+        boomInv.entityId = 3;
+        boomInv.targetComponent = 32;
+        boomInv.entityType = "BombNonStd";
+        boomInv.method = "boom";
+        if (excTransport->send(std::move(boomInv)) != SendResult::Accepted) {
+            return fail("bombns_enqueue");
+        }
+        RuntimeInvocation tickInv2;
+        tickInv2.entityId = 3;
+        tickInv2.targetComponent = 32;
+        tickInv2.entityType = "BombNonStd";
+        tickInv2.method = "tick3";
+        if (excTransport->send(std::move(tickInv2)) != SendResult::Accepted) {
+            return fail("bombns_tick_enqueue");
+        }
+
+        excRuntime.pumpInbound();
+        if (ticksAfterBomb2 != 1) {
+            return fail("handler_nonstd_exception_must_be_isolated");
+        }
+    }
+
+    // const getter 覆盖：loadProfiler() 的 const 重载返回同一剖面实例，
+    // 调用方可经 const 引用读取（与 runtime 内非 const 访问同源）。
+    {
+        const CellRuntime& constRuntime = realRuntime;
+        if (&constRuntime.loadProfiler() != &realRuntime.loadProfiler()) {
+            return fail("const_load_profiler_must_match_nonconst");
+        }
+    }
+
     return EXIT_SUCCESS;
 }

@@ -1,3 +1,4 @@
+#include "theseed/login/ClientProtocol.h"
 #include "theseed/login/LoginProtocol.h"
 #include "theseed/login/SessionToken.h"
 
@@ -155,6 +156,156 @@ int main() {
         if (data.empty()) FAIL("empty error");
         if (static_cast<ClientMessageType>(data[4]) != ClientMessageType::ErrorResponse)
             FAIL("wrong message type");
+    }
+    PASS();
+
+    // --- client-side decoders（bot / 真实客户端应答解析面）---
+    TEST("decode login response round trip");
+    {
+        LoginResponse resp;
+        resp.success = true;
+        resp.error = "";
+        resp.token = "tok-abc";
+        RealmInfo r;
+        r.realmId = "r1";
+        r.name = "TestRealm";
+        r.status = "busy";
+        r.host = "127.0.0.1";
+        r.port = 20000;
+        resp.realms.push_back(r);
+
+        auto data = LoginProtocol::encodeLoginResponse(resp);
+        ClientMessageType type;
+        std::span<const std::byte> payload;
+        if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame failed");
+        if (type != ClientMessageType::LoginResponse) FAIL("wrong type");
+
+        LoginResponse out;
+        if (!LoginProtocol::decodeLoginResponse(payload, out)) FAIL("decode failed");
+        if (!out.success || out.token != "tok-abc") FAIL("fields mismatch");
+        if (out.realms.size() != 1 || out.realms[0].realmId != "r1"
+            || out.realms[0].status != "busy" || out.realms[0].port != 20000)
+            FAIL("realms mismatch");
+    }
+    PASS();
+
+    TEST("decode login response failure variant");
+    {
+        LoginResponse resp;
+        resp.success = false;
+        resp.error = "rate limited";
+        auto data = LoginProtocol::encodeLoginResponse(resp);
+        ClientMessageType type;
+        std::span<const std::byte> payload;
+        if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame failed");
+        LoginResponse out;
+        if (!LoginProtocol::decodeLoginResponse(payload, out)) FAIL("decode failed");
+        if (out.success || out.error != "rate limited" || !out.realms.empty())
+            FAIL("failure fields mismatch");
+    }
+    PASS();
+
+    TEST("decode select realm response round trip");
+    {
+        SelectRealmResponse resp;
+        resp.success = true;
+        resp.error = "";
+        resp.host = "10.0.1.1";
+        resp.port = 20100;
+        resp.token = "gametok";
+        auto data = LoginProtocol::encodeSelectRealmResponse(resp);
+        ClientMessageType type;
+        std::span<const std::byte> payload;
+        if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame failed");
+        if (type != ClientMessageType::SelectRealmResponse) FAIL("wrong type");
+        SelectRealmResponse out;
+        if (!LoginProtocol::decodeSelectRealmResponse(payload, out)) FAIL("decode failed");
+        if (!out.success || out.host != "10.0.1.1" || out.port != 20100
+            || out.token != "gametok")
+            FAIL("fields mismatch");
+    }
+    PASS();
+
+    TEST("decode realm list round trip");
+    {
+        std::vector<RealmInfo> realms;
+        RealmInfo a, b;
+        a.realmId = "ea"; a.name = "East"; a.status = "smooth"; a.host = "h1"; a.port = 1;
+        b.realmId = "we"; b.name = "West"; b.status = "full"; b.host = "h2"; b.port = 65535;
+        realms.push_back(a);
+        realms.push_back(b);
+        auto data = LoginProtocol::encodeRealmList(realms);
+        ClientMessageType type;
+        std::span<const std::byte> payload;
+        if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame failed");
+        if (type != ClientMessageType::QueryRealmsResponse) FAIL("wrong type");
+        std::vector<RealmInfo> out;
+        if (!LoginProtocol::decodeRealmList(payload, out)) FAIL("decode failed");
+        if (out.size() != 2 || out[1].realmId != "we" || out[1].port != 65535)
+            FAIL("realms mismatch");
+    }
+    PASS();
+
+    TEST("decode error round trip");
+    {
+        auto data = LoginProtocol::encodeError("backend down");
+        ClientMessageType type;
+        std::span<const std::byte> payload;
+        if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame failed");
+        std::string msg;
+        if (!LoginProtocol::decodeError(payload, msg)) FAIL("decode failed");
+        if (msg != "backend down") FAIL("message mismatch");
+    }
+    PASS();
+
+    TEST("client request encoders round trip with server decoders");
+    {
+        {
+            auto data = LoginProtocol::encodeLogin("acc", "pw");
+            ClientMessageType type;
+            std::span<const std::byte> payload;
+            if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame(login)");
+            if (type != ClientMessageType::Login) FAIL("wrong login type");
+            std::string a, p;
+            if (!LoginProtocol::decodeLogin(payload, a, p)) FAIL("decodeLogin");
+            if (a != "acc" || p != "pw") FAIL("login fields");
+        }
+        {
+            auto data = LoginProtocol::encodeSelectRealm("realm_east");
+            ClientMessageType type;
+            std::span<const std::byte> payload;
+            if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame(select)");
+            std::string r;
+            if (!LoginProtocol::decodeSelectRealm(payload, r)) FAIL("decodeSelectRealm");
+            if (r != "realm_east") FAIL("select fields");
+        }
+        {
+            auto data = ClientProtocol::encodeEnterGame("tok-xyz");
+            ClientMessageType type;
+            std::span<const std::byte> payload;
+            if (!LoginProtocol::parseFrame(data, type, payload)) FAIL("parseFrame(enter)");
+            if (type != ClientMessageType::EnterGame) FAIL("wrong enter type");
+            std::string tok;
+            if (!ClientProtocol::decodeEnterGame(payload, tok)) FAIL("decodeEnterGame");
+            if (tok != "tok-xyz") FAIL("enter fields");
+        }
+    }
+    PASS();
+
+    TEST("client decoders reject truncated payloads");
+    {
+        LoginResponse lr;
+        SelectRealmResponse sr;
+        std::string m;
+        std::vector<RealmInfo> rl;
+        // 2 字节载荷：短于任一消息的最小完整结构（首字段后必跟 4 字节
+        // 长度前缀），所有解码器都必须拒绝。注意不能用 4 字节零：那是
+        // 合法的"空 realm 列表 / 空 error 消息"。
+        const std::vector<std::byte> junk(2, std::byte{0});
+        if (LoginProtocol::decodeLoginResponse(junk, lr)) FAIL("login resp should fail");
+        if (LoginProtocol::decodeSelectRealmResponse(junk, sr)) FAIL("select resp should fail");
+        if (LoginProtocol::decodeRealmList(junk, rl)) FAIL("realm list should fail");
+        if (LoginProtocol::decodeError(junk, m)) FAIL("error should fail");
     }
     PASS();
 

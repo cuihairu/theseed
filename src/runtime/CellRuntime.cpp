@@ -31,6 +31,12 @@ theseed::foundation::Counter& migrationRouteExpiredDropsCounter() {
         "messages dropped after migration route window expired");
 }
 
+theseed::foundation::Counter& dispatchExceptionCounter() {
+    return theseed::foundation::MetricsRegistry::instance().counter(
+        "cell_dispatch_exceptions_total",
+        "invocations whose handler threw and was isolated");
+}
+
 std::vector<std::byte> encodeMigrationEpoch(MigrationEpoch epoch) {
     std::vector<std::byte> payload(sizeof(epoch));
     std::memcpy(payload.data(), &epoch, sizeof(epoch));
@@ -374,7 +380,18 @@ std::size_t CellRuntime::pumpInbound() {
         }
 
         for (std::size_t index = 0; index < count; ++index) {
-            static_cast<void>(dispatchInvocation(batch[index]));
+            // P2 深审：handler 可抛异常（用户方法/流回调）。无隔离时异常
+            // 逃逸 pumpInbound，杀死整个 tick 循环/进程。逐条隔离：坏 handler
+            // 只丢本条，其余消息照常分发，计数上抛给观测。
+            try {
+                static_cast<void>(dispatchInvocation(batch[index]));
+            } catch (const std::exception& e) {
+                dispatchExceptionCounter().increment();
+                foundation::logWarn("cell dispatch isolated: " + std::string(e.what()));
+            } catch (...) {
+                dispatchExceptionCounter().increment();
+                foundation::logWarn("cell dispatch isolated: unknown exception");
+            }
         }
         total += count;
     }

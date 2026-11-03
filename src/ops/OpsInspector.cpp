@@ -5,13 +5,35 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <sstream>
 #include <string_view>
 #include <utility>
 
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+
 namespace theseed::ops {
 
 namespace {
+
+constexpr const char* kRssGaugeName = "process_rss_bytes";
+
+// 当前进程驻留内存字节数。Linux 读 /proc/self/statm（第二列 × 页大小）；
+// 其它平台或读取失败返回 0（dashboard 显示为不可用而非伪值）。
+std::int64_t readProcessRssBytes() {
+#if defined(__linux__)
+    std::ifstream statm("/proc/self/statm");
+    std::uint64_t totalFields = 0;
+    std::uint64_t residentPages = 0;
+    if (statm >> totalFields >> residentPages) {
+        const auto pageSize = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
+        return static_cast<std::int64_t>(residentPages * pageSize);
+    }
+#endif
+    return 0;  // LCOV_EXCL_LINE Linux 下 /proc/self/statm 恒可读，if 条件恒真，本行（读失败/非 Linux 的兜底）不可达
+}
 
 std::string escapeJson(std::string_view s) {
     std::string out;
@@ -37,7 +59,10 @@ std::int64_t uptimeSeconds(std::chrono::system_clock::time_point start) {
 }  // namespace
 
 OpsInspector::OpsInspector(ProcessInfo info, Provider provider)
-    : info_(std::move(info)), provider_(std::move(provider)) {}
+    : info_(std::move(info)),
+      provider_(std::move(provider)),
+      rssGauge_(foundation::MetricsRegistry::instance().gauge(
+          kRssGaugeName, "resident set size of this process in bytes")) {}
 
 const ProcessInfo& OpsInspector::process() const { return info_; }
 
@@ -47,6 +72,7 @@ RuntimeInfo OpsInspector::snapshot() const {
 }
 
 std::string OpsInspector::renderMetrics() const {
+    rssGauge_.set(readProcessRssBytes());
     return foundation::MetricsRegistry::instance().renderText();
 }
 

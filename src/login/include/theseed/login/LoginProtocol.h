@@ -51,12 +51,27 @@ public:
     static std::vector<std::byte> encodeSelectRealmResponse(const SelectRealmResponse& resp);
     static std::vector<std::byte> encodeError(const std::string& message);
 
+    // 编码客户端 → 服务端（bot / 真实客户端的请求构造面，与 decode 镜像）
+    static std::vector<std::byte> encodeLogin(const std::string& account,
+                                              const std::string& password);
+    static std::vector<std::byte> encodeSelectRealm(const std::string& realmId);
+
     // 解码客户端 → 服务端
     static bool decodeLogin(std::span<const std::byte> payload,
                             std::string& outAccount,
                             std::string& outPassword);
     static bool decodeSelectRealm(std::span<const std::byte> payload,
                                   std::string& outRealmId);
+
+    // 解码服务端 → 客户端（bot / 真实客户端的应答解析面）
+    static bool decodeLoginResponse(std::span<const std::byte> payload,
+                                    LoginResponse& outResp);
+    static bool decodeRealmList(std::span<const std::byte> payload,
+                                std::vector<RealmInfo>& outRealms);
+    static bool decodeSelectRealmResponse(std::span<const std::byte> payload,
+                                          SelectRealmResponse& outResp);
+    static bool decodeError(std::span<const std::byte> payload,
+                            std::string& outMessage);
 };
 
 }  // namespace theseed::login

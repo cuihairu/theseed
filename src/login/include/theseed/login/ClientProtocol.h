@@ -61,6 +61,8 @@ struct SpaceChangeMsg {
 class ClientProtocol {
 public:
     static std::vector<std::byte> encodeEnterGameResponse(const EnterGameResponse& resp);
+    // EnterGame 请求（客户端 → BaseApp）：单字符串 token。
+    static std::vector<std::byte> encodeEnterGame(const std::string& token);
     static std::vector<std::byte> encodeEntityEnter(const EntityEnterMsg& msg);
     static std::vector<std::byte> encodeEntityLeave(const EntityLeaveMsg& msg);
     static std::vector<std::byte> encodePropertySync(const PropertySyncMsg& msg);

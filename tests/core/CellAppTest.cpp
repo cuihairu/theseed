@@ -408,6 +408,22 @@ static void testUninitializedDefensiveArms() {
     if (ok) PASS(); else FAIL("uninitialized defensive arms failed");
 }
 
+// const getter 覆盖：backupTopology()/hotUpdate() 的 const 重载返回同一
+// 成员实例，调用方可经 const 引用读取（与运行时非 const 访问同源）。
+static void testConstGetters() {
+    TEST("const getters return the same instances");
+    CellApp::Config config;
+    config.componentId = 4;
+    CellApp app(config, std::make_shared<InMemoryRuntimeTransport>());
+    const CellApp& constApp = app;
+    if (&constApp.backupTopology() != &app.backupTopology() ||
+        &constApp.hotUpdate() != &app.hotUpdate()) {
+        FAIL("const getters must alias the non-const instances");
+        return;
+    }
+    PASS();
+}
+
 int main() {
     std::cout << "CellApp tests:\n";
 
@@ -423,6 +439,7 @@ int main() {
     testEdgeBranches();
     testDestroyBeforeInit();
     testUninitializedDefensiveArms();
+    testConstGetters();
 
     std::cout << "\n  Passed: " << testsPassed << "/" << (testsPassed + testsFailed) << "\n";
     return testsFailed == 0 ? 0 : 1;
