@@ -2,12 +2,18 @@
 #include "theseed/foundation/RedisProvider.h"
 #include "theseed/foundation/SessionStore.h"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 using theseed::foundation::InMemoryRedisProvider;
 using theseed::foundation::RateLimiter;
@@ -381,6 +387,98 @@ static void test_rate_limiter_available_tokens() {
     PASS();
 }
 
+// P2 深审回归：tryConsume 的跨 Redis get→set 读改写原先无互斥，两个并发
+// 调用者都能读到同一份满桶快照并各自放行，造成并发超发。RendezvousProvider
+// 的 get 等待另一读者也进入 get 后再返回快照，把竞态窗口钉死成两读者交会：
+// 未修复实现两个线程都读到满桶 → 双双放行（超发）；修复后分布式锁串行化
+// tryConsume，后到者只能在锁释放后读到已扣减的桶，放行数恰为 1。
+class RendezvousRateLimitProvider final
+    : public theseed::foundation::IRedisProvider {
+public:
+    std::optional<std::string> get(const std::string& key) override {
+        std::string snapshot;
+        {
+            const std::lock_guard lock(mutex_);
+            auto it = kv_.find(key);
+            if (it != kv_.end()) snapshot = it->second;
+            ++readers_;
+            if (readers_ == 2) ready_.notify_all();
+        }
+        std::unique_lock lock(mutex_);
+        // 修复后持锁的读者等不到第二读者（它阻塞在分布式锁上），有限期超时
+        // 后继续推进；未修复实现两读者及时交会，双双返回同一份满桶快照。
+        ready_.wait_for(lock, std::chrono::milliseconds(200),
+                        [this] { return readers_ >= 2; });
+        if (snapshot.empty()) return std::nullopt;
+        return snapshot;
+    }
+
+    bool set(const std::string& key, const std::string& value,
+             RedisDuration) override {
+        const std::lock_guard lock(mutex_);
+        kv_[key] = value;
+        return true;
+    }
+    bool del(const std::string& key) override {
+        const std::lock_guard lock(mutex_);
+        return kv_.erase(key) > 0;
+    }
+    bool exists(const std::string& key) override {
+        const std::lock_guard lock(mutex_);
+        return kv_.count(key) > 0;
+    }
+    bool expire(const std::string&, RedisDuration) override { return true; }
+    bool zadd(const std::string&, const std::string&, double) override { return true; }
+    std::vector<std::pair<std::string, double>> zrange(const std::string&,
+                                                       std::size_t,
+                                                       std::size_t) override { return {}; }
+    std::vector<std::pair<std::string, double>> zrevrange(const std::string&,
+                                                          std::size_t,
+                                                          std::size_t) override { return {}; }
+    std::size_t zcard(const std::string&) override { return 0; }
+    bool zrem(const std::string&, const std::string&) override { return false; }
+    bool lock(const std::string& key, RedisDuration) override {
+        const std::lock_guard lock(mutex_);
+        const auto [_, inserted] = locks_.insert(key);
+        return inserted;
+    }
+    void unlock(const std::string& key) override {
+        const std::lock_guard lock(mutex_);
+        locks_.erase(key);
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    int readers_ = 0;
+    std::map<std::string, std::string> kv_;
+    std::set<std::string> locks_;
+};
+
+static void test_rate_limiter_no_concurrent_over_admit() {
+    TEST("test_rate_limiter_no_concurrent_over_admit");
+    auto redis = std::make_shared<RendezvousRateLimitProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    std::atomic<int> allowed = 0;
+    std::vector<std::thread> threads;
+    threads.reserve(2);
+    for (int i = 0; i < 2; ++i) {
+        threads.emplace_back([&] {
+            if (limiter.tryConsume("k", cfg)) allowed.fetch_add(1);
+        });
+    }
+    for (auto& thread : threads) thread.join();
+    if (allowed.load() != 1) {
+        FAIL("allowed=" + std::to_string(allowed.load()));
+        return;
+    }
+    PASS();
+}
+
 static void test_redis_zrange_score_tie_break_by_member() {
     TEST("test_redis_zrange_score_tie_break_by_member");
     InMemoryRedisProvider r;
@@ -557,6 +655,7 @@ int main() {
     test_rate_limiter_corrupt_state_resets_bucket();
     test_rate_limiter_refills_over_time();
     test_rate_limiter_sub_ms_refill_clamped();
+    test_rate_limiter_no_concurrent_over_admit();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();

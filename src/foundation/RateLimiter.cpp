@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace theseed::foundation {
@@ -26,8 +27,18 @@ bool RateLimiter::tryConsume(const std::string& key,
     if (key.empty() || cost <= 0) return false;
     if (config.capacity <= 0) return false;
 
-    const auto now = nowFn_();
     const auto rk = redisKey(key);
+    const auto lockKey = rk + ":lock";
+    const auto lockTtl = std::chrono::seconds(1);
+    while (!redis_->lock(lockKey, lockTtl)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    struct UnlockGuard {
+        IRedisProvider& redis;
+        const std::string& key;
+        ~UnlockGuard() { redis.unlock(key); }
+    } unlockGuard{*redis_, lockKey};
+    const auto now = nowFn_();
 
     BucketState state;
     if (auto blob = redis_->get(rk)) {

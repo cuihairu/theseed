@@ -58,7 +58,7 @@
 - [x] `RateLimiter::tryConsume` refillInterval<1ms 除零（限流器静默失效）—— `src/foundation/RateLimiter.cpp:41`——已修复：refill 分母钳到 1ms 下限，sub-ms 配置不再产生 inf refillRate、桶不会瞬间补满（src/foundation/RateLimiter.cpp:38-44）；回归容量 5 耗尽后等待 2ms 再试成本 5，未修复实现瞬间回满放行、修复后只补 1 token 被拒（tests/foundation/RedisProviderTest.cpp:305-328）
 - [x] `CellRuntime` 分发路径无异常隔离，抛异常 handler 逃逸 `pumpInbound` —— `src/runtime/CellRuntime.cpp:354`——已修复：逐条分发包裹 `std::exception` 与 catch-all，异常计数并记 warning，只丢弃当前 invocation，不逃逸 tick 循环；回归覆盖 std/non-std 异常后同批后续消息仍执行（src/runtime/CellRuntime.cpp:383；tests/runtime/CellRuntimeTest.cpp:181）
 - [x] `FileEntityStore::allocId` 非原子读改写，并发可拿到同一 id —— `src/core/FileEntityStore.cpp:102`——已修复：读-自增-写回全程持 `allocMutex_` 互斥，并发调用者不再拿到重复 id（src/core/FileEntityStore.cpp:107；src/core/include/theseed/core/FileEntityStore.h:31）；回归 8 线程×500 次并发分配断言 id 无重复且恰为 1..4000 连续序列，未修复实现失败、修复后通过（tests/core/FileEntityStoreTest.cpp:72）；gcc-debug 全量 ctest 127/127 全绿
-- [ ] `RateLimiter::tryConsume` 跨 Redis 往返读改写非原子，并发超发 —— `src/foundation/RateLimiter.cpp:27`
+- [x] `RateLimiter::tryConsume` 跨 Redis 往返读改写非原子，并发超发 —— `src/foundation/RateLimiter.cpp:27`——已修复：读改写全程持 `rate:<key>:lock` 分布式锁（TTL 1s、失败 1ms 退避重试），临界区内才 get→refill→set，并发调用者不再各读满桶双双放行（src/foundation/RateLimiter.cpp:31-40）；回归以两线程交会 get 的 RendezvousProvider 钉死竞态窗口，未修复实现 allowed=2 超发、修复后恰放行 1（tests/foundation/RedisProviderTest.cpp:395-458）；全量 ctest 127/127 全绿
 - [ ] `EntityDef::mergeFrom` 中途属性冲突遗留半合并定义 —— `src/runtime/EntityDef.cpp:33`
 
 ### P3（2 项）
