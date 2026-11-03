@@ -66,6 +66,17 @@ EntityData makeAvatar(theseed::core::EntityId id) {
     return data;
 }
 
+// 审核发现：P2-2/autoCreateSchema 回归用超长 username（> VARCHAR(128)）强制
+// 索引 INSERT 失败，但该失败依赖服务器严格 sql_mode——非严格模式下超长值
+// 静默截断成功，CHECK(!createAccount) 反而失败。回归必须显式把会话置于严格
+// 模式，不依赖服务器全局配置（tests/db/MySqlBranchTest.cpp:303-317 审核）。
+void enforceStrictMode(MySQLEntityStore& store) {
+    static_cast<void>(store.executeRaw(
+        "SET SESSION sql_mode = "
+        "'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,"
+        "NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'"));
+}
+
 }  // namespace
 
 int main() {
@@ -306,6 +317,7 @@ int main() {
     {
         MySQLEntityStore fresh(storeConfigFromEnv());
         CHECK(fresh.init(), "P2-2 regression init");
+        enforceStrictMode(fresh);  // 回归不依赖服务器全局 sql_mode
 
         const std::string longUser(130, 'a');  // > VARCHAR(128)
         theseed::core::EntityId id = 0;
@@ -327,6 +339,7 @@ int main() {
         cfg.autoCreateSchema = false;  // 跳过 createSchema 的 knownTables_ 播种
         MySQLEntityStore fresh(cfg);
         CHECK(fresh.init(), "autoCreateSchema=false store init");
+        enforceStrictMode(fresh);  // 回归不依赖服务器全局 sql_mode
         // 只删主表、保留 _account_index（索引表由 init 前的库已有，autoCreate
         // Schema=false 不重建）：修复前 createAccount 事务内 save()→ensureTable
         // 补发 CREATE TABLE DDL（隐式提交），随后索引 INSERT 因超长 username
