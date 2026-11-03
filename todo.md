@@ -52,7 +52,7 @@
 - [x] `createAccount` 两阶段写非原子（主表行先落库，索引行失败/崩溃遗留孤儿 Account）—— `src/db/MySQLEntityStore.cpp:324`、`src/db/PostgreSQLEntityStore.cpp:329`
 - [x] `MySQLConnection` 双重 `mysql_init` 未先 close 泄漏首句柄 —— `src/db/MySQLConnection.cpp:141`、`:164`
 - [x] `handleListIds` 对畸形 payload 静默返回不发错误响应（调用方永久等待）—— `src/db/DBApp.cpp:305`
-- [ ] `RemoteEntityStore` 按 method 字符串而非 requestId 关联响应，乱序可错配 —— `src/db/RemoteEntityStore.cpp:35`
+- [x] `RemoteEntityStore` 按 method 字符串而非 requestId 关联响应，乱序可错配 —— `src/db/RemoteEntityStore.cpp:35`——已修复：request 铸造 requestId（mintRequestId）并在响应上按 requestId+method 双键匹配，超时后迟到的同 method 旧响应不再被新请求误认领（src/db/RemoteEntityStore.cpp:19-48）；DBApp::sendResponse 原样回传 inv.requestId（src/db/DBApp.cpp:490-505）；回归注入同 method 异 requestId 陈旧响应，未修复实现误认领失败、修复后丢弃（tests/db/RemoteEntityStoreTest.cpp:294-320）
 - [ ] `MachineAgent::execute` 负数 pid 经 `from_chars` 回绕成巨大值 —— `src/control/machine/MachineAgent.cpp:74`
 - [ ] `TimerWheel::cancel` 只置 cancelled 从不删除，已取消定时器累积 —— `src/foundation/TimerWheel.cpp:86`
 - [ ] `RateLimiter::tryConsume` refillInterval<1ms 除零（限流器静默失效）—— `src/foundation/RateLimiter.cpp:41`

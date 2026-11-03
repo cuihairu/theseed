@@ -110,6 +110,8 @@ public:
         reply.sourceComponent = kDbComponent;
         reply.targetComponent = lastInvocation.sourceComponent;
         reply.entityId = lastInvocation.entityId;
+        // P2 深审回归：服务端必须原样回传 requestId，store 按它关联响应。
+        reply.requestId = lastInvocation.requestId;
         reply.method = lastInvocation.method + ".ok";
         reply.payload = cannedReply(lastInvocation.method);
 
@@ -136,6 +138,8 @@ public:
     std::size_t pendingCount() const override { return inbox_.size(); }
     void flush() override { ++flushes; }
     theseed::runtime::TransportStats stats() const override { return {}; }
+
+    void injectInbox(RuntimeInvocation inv) { inbox_.push_back(std::move(inv)); }
 
     Mode mode = Mode::Canned;
     int sends = 0;
@@ -286,6 +290,35 @@ int main() {
             FAIL("listEntityTypes round-trip mismatch");
         if (transport.lastInvocation.method != DBMethod::kListTypes)
             FAIL("listEntityTypes must send db.listTypes");
+        PASS();
+    }
+
+    // P2 深审回归：旧实现按 method（"db.load.ok"）关联响应，不校验
+    // requestId——上一轮超时后迟到的 db.load.ok 会被新请求误认领。必须
+    // 按 requestId 关联：先注入一个 method 相同但 requestId 不同的陈旧
+    // 响应，再注入真正的应答，store 应丢弃陈旧响应并消费真应答。
+    TEST("stale same-method reply with wrong requestId is discarded");
+    {
+        ScriptedDbTransport transport;
+        transport.mode = ScriptedDbTransport::Mode::Canned;
+        transport.cannedData = sampleEntity(123);
+        auto store = makeStore(transport);
+
+        // 注入陈旧响应：method 是 db.load.ok，但 requestId 与本次请求不同。
+        RuntimeInvocation stale;
+        stale.sourceComponent = kDbComponent;
+        stale.targetComponent = kLocalComponent;
+        stale.entityId = 999;
+        stale.requestId = 0xDEADBEEF;  // 任意非本次 requestId
+        stale.method = std::string(DBMethod::kLoad) + ".ok";
+        stale.payload = DBProtocol::encodeLoadResponse(true, sampleEntity(999));
+        transport.injectInbox(std::move(stale));
+
+        EntityData out;
+        if (!store.load(123, "Avatar", out))
+            FAIL("load failed when a stale same-method reply was queued first");
+        if (!expectSameEntity(transport.cannedData, out, "stale-then-real load"))
+            return 1;
         PASS();
     }
 

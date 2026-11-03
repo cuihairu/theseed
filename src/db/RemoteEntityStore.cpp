@@ -22,6 +22,10 @@ runtime::RuntimeInvocation RemoteEntityStore::request(
     inv.sourceComponent = localComponentId_;
     inv.targetComponent = dbComponentId_;
     inv.entityId = 0;
+    // P2 深审：按 requestId 而非 method 关联响应。上一轮超时后迟到的
+    // db.<method>.ok 若按 method 匹配会被新请求误认领；requestId 逐请求
+    // 唯一（发起方铸造），服务端原样回传。
+    inv.requestId = runtime::mintRequestId();
     inv.method = method;
     inv.payload = std::vector<std::byte>(payload.begin(), payload.end());
 
@@ -33,13 +37,14 @@ runtime::RuntimeInvocation RemoteEntityStore::request(
     // Pump until we get a response, bounded by requestTimeout_ so a dead
     // DBApp degrades to a failed request instead of a busy-wait hang.
     const auto deadline = runtime::Clock::now() + requestTimeout_;
+    const auto expectId = inv.requestId;
     const auto expect = std::string(method) + ".ok";
     runtime::RuntimeInvocation resp;
     while (runtime::Clock::now() < deadline) {
         if (pumpFn_) pumpFn_();
         if (transport_->receive(localComponentId_, &resp, 1) > 0) {
-            if (resp.method == expect) return resp;
-            continue;  // 杂散消息：丢弃继续等
+            if (resp.method == expect && resp.requestId == expectId) return resp;
+            continue;  // 杂散/旧响应：丢弃继续等
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

@@ -72,6 +72,7 @@ private:
     void handleCreateAccount(const runtime::RuntimeInvocation& inv);
 
     void sendResponse(runtime::ComponentId target,
+                      std::uint64_t requestId,
                       const std::string& method,
                       std::span<const std::byte> payload);
 

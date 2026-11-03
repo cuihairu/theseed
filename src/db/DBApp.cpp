@@ -248,7 +248,7 @@ void DBApp::handleLoad(const runtime::RuntimeInvocation& inv) {
     std::string entityType;
     if (!DBProtocol::decodeLoadRequest(inv.payload, id, entityType)) {
         auto resp = DBProtocol::encodeLoadResponse(false, {});
-        sendResponse(inv.sourceComponent, DBMethod::kLoadOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kLoadOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
@@ -256,7 +256,7 @@ void DBApp::handleLoad(const runtime::RuntimeInvocation& inv) {
     core::EntityData data;
     bool ok = store_->load(id, entityType, data);
     auto resp = DBProtocol::encodeLoadResponse(ok, data);
-    sendResponse(inv.sourceComponent, DBMethod::kLoadOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kLoadOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }  // LCOV_EXCL_BR_LINE ScopedTimer 析构内联副本：emitter_ 恒非空，空检查臂不可达
 
@@ -269,14 +269,14 @@ void DBApp::handleSave(const runtime::RuntimeInvocation& inv) {
     core::EntityData data;
     if (!DBProtocol::decodeSaveRequest(inv.payload, id, data)) {
         auto resp = DBProtocol::encodeSaveResponse(false);
-        sendResponse(inv.sourceComponent, DBMethod::kSaveOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kSaveOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
 
     bool ok = store_->save(id, data);
     auto resp = DBProtocol::encodeSaveResponse(ok);
-    sendResponse(inv.sourceComponent, DBMethod::kSaveOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kSaveOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
@@ -284,21 +284,21 @@ void DBApp::handleRemove(const runtime::RuntimeInvocation& inv) {
     core::EntityId id;
     if (!DBProtocol::decodeRemoveRequest(inv.payload, id)) {
         auto resp = DBProtocol::encodeRemoveResponse(false);
-        sendResponse(inv.sourceComponent, DBMethod::kRemoveOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kRemoveOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
 
     bool ok = store_->remove(id);
     auto resp = DBProtocol::encodeRemoveResponse(ok);
-    sendResponse(inv.sourceComponent, DBMethod::kRemoveOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kRemoveOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
 void DBApp::handleAllocId(const runtime::RuntimeInvocation& inv) {
     auto id = store_->allocId();
     auto resp = DBProtocol::encodeAllocIdResponse(id);
-    sendResponse(inv.sourceComponent, DBMethod::kAllocIdOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kAllocIdOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
@@ -312,7 +312,7 @@ void DBApp::handleListIds(const runtime::RuntimeInvocation& inv) {
     // 回空表（count=0，可解码）立即解除阻塞，风格同 handleLoad 畸形即回失败。
     if (payload.size() < 4) {
         auto empty = DBProtocol::encodeListIdsResponse({});
-        sendResponse(inv.sourceComponent, DBMethod::kListIdsOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kListIdsOk,
                      std::span<const std::byte>(empty.data(), empty.size()));
         return;
     }
@@ -325,7 +325,7 @@ void DBApp::handleListIds(const runtime::RuntimeInvocation& inv) {
     if (offset + len > payload.size()) {
         // 长度前缀谎报（超出帧体）：同上回空表，不按空类型查询。
         auto empty = DBProtocol::encodeListIdsResponse({});
-        sendResponse(inv.sourceComponent, DBMethod::kListIdsOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kListIdsOk,
                      std::span<const std::byte>(empty.data(), empty.size()));
         return;
     }
@@ -334,14 +334,14 @@ void DBApp::handleListIds(const runtime::RuntimeInvocation& inv) {
 
     auto ids = store_->listIdsByType(entityType);
     auto resp = DBProtocol::encodeListIdsResponse(ids);
-    sendResponse(inv.sourceComponent, DBMethod::kListIdsOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kListIdsOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
 void DBApp::handleListTypes(const runtime::RuntimeInvocation& inv) {
     auto types = store_->listEntityTypes();
     auto resp = DBProtocol::encodeListTypesResponse(types);
-    sendResponse(inv.sourceComponent, DBMethod::kListTypesOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kListTypesOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
@@ -353,7 +353,7 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
     std::string username;
     if (!DBProtocol::decodeQueryAccountRequest(inv.payload, username)) {
         auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
-        sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kQueryAccountOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
@@ -365,7 +365,7 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
         std::string password;
         bool found = accountStore_->queryAccount(username, id, password);
         auto resp = DBProtocol::encodeQueryAccountResponse(found, id, password);
-        sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kQueryAccountOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
@@ -396,7 +396,7 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
                         }
                     }
                     auto resp = DBProtocol::encodeQueryAccountResponse(true, id, password);
-                    sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+                    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kQueryAccountOk,
                                  std::span<const std::byte>(resp.data(), resp.size()));
                     return;
                 }
@@ -406,7 +406,7 @@ void DBApp::handleQueryAccount(const runtime::RuntimeInvocation& inv) {
 
     // Not found
     auto resp = DBProtocol::encodeQueryAccountResponse(false, 0, "");
-    sendResponse(inv.sourceComponent, DBMethod::kQueryAccountOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kQueryAccountOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
@@ -419,7 +419,7 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
     std::string password;
     if (!DBProtocol::decodeCreateAccountRequest(inv.payload, username, password)) {
         auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
-        sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kCreateAccountOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
@@ -430,7 +430,7 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
         core::EntityId id = 0;
         bool ok = accountStore_->createAccount(username, password, id);
         auto resp = DBProtocol::encodeCreateAccountResponse(ok, id);
-        sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+        sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kCreateAccountOk,
                      std::span<const std::byte>(resp.data(), resp.size()));
         return;
     }
@@ -449,7 +449,7 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
                     prop.rawValue.size());
                 if (storedName == username) {
                     auto resp = DBProtocol::encodeCreateAccountResponse(false, 0);
-                    sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+                    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kCreateAccountOk,
                                  std::span<const std::byte>(resp.data(), resp.size()));
                     return;
                 }
@@ -483,17 +483,21 @@ void DBApp::handleCreateAccount(const runtime::RuntimeInvocation& inv) {
 
     bool ok = store_->save(newId, data);
     auto resp = DBProtocol::encodeCreateAccountResponse(ok, newId);
-    sendResponse(inv.sourceComponent, DBMethod::kCreateAccountOk,
+    sendResponse(inv.sourceComponent, inv.requestId, DBMethod::kCreateAccountOk,
                  std::span<const std::byte>(resp.data(), resp.size()));
 }
 
 void DBApp::sendResponse(runtime::ComponentId target,
+                          std::uint64_t requestId,
                           const std::string& method,
                           std::span<const std::byte> payload) {
     runtime::RuntimeInvocation resp;
     resp.sourceComponent = config_.componentId;
     resp.targetComponent = target;
     resp.entityId = 0;
+    // 审计/关联 id 原样回传：RemoteEntityStore 按 requestId 关联响应，
+    // 乱序/迟到的旧响应不得被误配给新请求（P2 深审）。
+    resp.requestId = requestId;
     resp.method = method;
     resp.payload = std::vector<std::byte>(payload.begin(), payload.end());
     hub_->send(std::move(resp));
