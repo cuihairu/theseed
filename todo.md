@@ -82,3 +82,11 @@
 - [x] 审核发现：MySqlBranchTest P2-2 回归依赖服务器严格 sql_mode（130 字符 username 超 VARCHAR(128)）且无凭据时整体跳过；非严格模式下索引 INSERT 静默截断成功，CHECK(!createAccount) 反而失败，该用例在非严格/无凭据环境不可靠，行为级验证未在 CI 落地（tests/db/MySqlBranchTest.cpp:303-317）——已修复：回归在 P2-2 与 autoCreateSchema=false 两处显式 SET SESSION sql_mode 严格模式，不再依赖服务器全局配置（tests/db/MySqlBranchTest.cpp:66-77,308,329）；非严格全局下旧用例 4 项失败、修复后全绿
 - [x] 审核发现：RealmAppTest 新 send 写失败用例只覆盖 write()=false 分支（:92-107）；null/未连接 pipe（:79/:83）与成功返回 true 均未断言新返回值，send 返回值契约覆盖不全（tests/realm/RealmAppTest.cpp:75-107）——已修复：null pipe、未连接 pipe 两分支改为断言返回 false；新增已连接 InMemoryBytePipe 成功路径断言返回 true（tests/realm/RealmAppTest.cpp:73-105）
 - [x] 审核发现：MySqlBranchTest:320-321 注释"新实例（knownTables_ 为空…）"已过时——init()→createSchema 现已播种 knownTables_（:135），幸福路径用例的已知表状态描述与实现不符（tests/db/MySqlBranchTest.cpp:320）——已修复：注释改为反映 createSchema 预建并播种 knownTables_、事务内 ensureTable 已短路的现状（tests/db/MySqlBranchTest.cpp:365-368）
+
+## 审核发现（e7323b97..HEAD，只审不改）
+
+- [x] 审核发现：TimerWheel::cancel 将条目索引回池（freeList_）后，若同一 advance 批次内另一定时器回调先 cancel 掉本批次待处理条目、再 addTimer 复用该索引，advance 循环随后再次处理被复用的索引致重复插入轮盘，周期定时器会每周期多次触发（src/foundation/TimerWheel.cpp:89）——已修复：advance 快照携带 `(index,id)`，触发前双重校验，批内复用槽不再误触发新条目；回归覆盖取消者回池并立即复用索引，验证新定时器不在同批早触发且下一批仅一次（src/foundation/TimerWheel.cpp:115；tests/foundation/TimerWheelTest.cpp:400）
+- [ ] 审核发现：OpsInspector::readProcessRssBytes 在非 Linux/读失败时返回 0，注释称"dashboard 显示为不可用而非伪值"，但 DashboardPage 对 0 显示 "0 B" 而非 n/a，伪值展示与注释意图不符（src/ops/OpsInspector.cpp:24）
+- [ ] 审核发现：DashboardPage 每 2s 轮询在 queue_backlog>1000 期间重复 pushAlarm 同一告警，告警列表被相同消息刷屏（src/ops/DashboardPage.cpp:122）
+- [ ] 审核发现：test_rate_limiter_sub_ms_refill_clamped 前 5 次消耗用真实时钟、随后才切注入时钟并 +2ms；setClock 前若被抢占 ≥3ms，注入 elapsed≥5ms 会补满容量致负断言误失败，测试潜在脆弱（tests/foundation/RedisProviderTest.cpp:317）
+- [ ] 审核发现：BotClient::tickInGame 同一 tick 内 move 与 heartbeat 的 sendAction 均失败时（首次写失败已 close 连接，第二次 isConnected() 为假），scheduleRetry 被调用两次，reconnects 计数膨胀 1（tools/bots/BotClient.cpp:150）

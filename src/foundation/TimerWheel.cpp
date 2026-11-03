@@ -112,11 +112,19 @@ void TimerWheel::advance(Duration dt) {
         ++currentTick_;
 
         auto& slot0 = wheels_[0][currentTick_ & 0xFF];
-        auto entries0 = std::move(slot0);
+        // 快照必须携带条目 id：批内回调可能 cancel 某索引（回池）并 addTimer
+        // 复用该索引，此时快照里的索引已指向全新条目；仅按索引重触发会把
+        // 新定时器提前触发并重复插入轮盘。按 (index,id) 双重校验，复用槽
+        // 的 id 不匹配即跳过（审核发现）。
+        std::vector<std::pair<std::size_t, std::uint64_t>> entries0;
+        entries0.reserve(slot0.size());
+        for (const auto idx : slot0) {
+            entries0.emplace_back(idx, entries_[idx].id);
+        }
         slot0.clear();
 
-        for (auto idx : entries0) {
-            if (!entries_[idx].cancelled) {
+        for (const auto& [idx, id] : entries0) {
+            if (entries_[idx].id == id && !entries_[idx].cancelled) {
                 fireEntry(idx);
             }
         }
@@ -127,11 +135,16 @@ void TimerWheel::advance(Duration dt) {
 
             auto slotIdx = static_cast<int>((currentTick_ >> (8 * level)) & 0xFF);
             auto& slot = wheels_[level][slotIdx];
-            auto moved = std::move(slot);
+            // 同 level-0：快照携带 id，防止批内复用槽被再次处理。
+            std::vector<std::pair<std::size_t, std::uint64_t>> moved;
+            moved.reserve(slot.size());
+            for (const auto idx : slot) {
+                moved.emplace_back(idx, entries_[idx].id);
+            }
             slot.clear();
 
-            for (auto idx : moved) {
-                if (!entries_[idx].cancelled) {
+            for (const auto& [idx, id] : moved) {
+                if (entries_[idx].id == id && !entries_[idx].cancelled) {
                     // 级联时 fireTick 恰为 currentTick_（周期为 256 的倍数）的
                     // 条目 diff=0，insertEntry 会把它插回本 tick 已排空的
                     // level-0 槽，导致晚一轮（256 tick）才触发、周期翻倍。

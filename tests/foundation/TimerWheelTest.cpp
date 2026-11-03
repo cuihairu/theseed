@@ -394,6 +394,46 @@ static void testCancelStaleGeneration() {
     else FAIL("stale generation cancel should fail");
 }
 
+// 同一批次内回收的索引复用后不得被旧快照重复处理：先处理一个回调，它取消
+// 本批次后续待处理条目（索引回池），再新增定时器复用该索引；advance 后续
+// 遍历仍会看到该索引，若按快照重触发会把新定时器提前触发并重复插入轮盘。
+static void testCancelledSlotReusedWithinAdvanceBatch() {
+    TEST("cancelled slot reused within one advance batch is not duplicated");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+    std::vector<TimerHandle> victims;
+    int reusedFired = 0;
+    // 取消者必须排在 victims 之前，回调先于 victims 处理：cancel 将 victims
+    // 索引回池，addTimer 复用最后一个索引；该索引仍留在本批 entries0 快照。
+    wheel.addTimer(std::chrono::milliseconds{10}, [&] {
+        for (const auto handle : victims) {
+            wheel.cancel(handle);
+        }
+        wheel.addPeriodic(std::chrono::milliseconds{10},
+                          [&] { ++reusedFired; });
+    });
+    for (int i = 0; i < 4; ++i) {
+        victims.push_back(wheel.addPeriodic(std::chrono::milliseconds{10}, [] {}));
+    }
+
+    // 第一轮：新复用定时器在本批不应触发（其 fireTick 在下轮）。
+    wheel.advance(std::chrono::milliseconds{10});
+    const int earlyFires = reusedFired;
+
+    // 第二轮：本批内已重排的新定时器才应触发一次。
+    wheel.advance(std::chrono::milliseconds{10});
+
+    if (earlyFires != 0) {
+        FAIL("reused timer fired early in cancellation batch: " +
+             std::to_string(earlyFires));
+    } else if (reusedFired != 1) {
+        FAIL("reused timer should fire exactly once next batch, got " +
+             std::to_string(reusedFired));
+    } else {
+        PASS();
+    }
+}
+
 int main() {
     std::cout << "TimerWheel tests:\n";
 
@@ -414,6 +454,7 @@ int main() {
     testSubTickDelayClampedToOneTick();
     testCancelAlreadyFiredTimer();
     testCancelStaleGeneration();
+    testCancelledSlotReusedWithinAdvanceBatch();
     testCascadeWithFireTickOnBoundary();
     testVeryLongTimerInsertsAtTopLevel();
     testCancelledLongTimerSkippedDuringCascade();
