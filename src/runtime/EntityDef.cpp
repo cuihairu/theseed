@@ -33,10 +33,16 @@ const std::string& EntityDef::parentType() const {
 bool EntityDef::mergeFrom(const EntityDef& parent) {
     if (inherited_) return false;
 
+    // 先全量校验父属性名与子已有属性名冲突，再一次性追加：中途冲突返回
+    // false 时不得遗留半合并状态（前面属性已推入、storageSize_ 已增长），
+    // 否则调用方拿到一个损坏的 EntityDef。两遍扫描成本可忽略。
     for (const auto& prop : parent.properties_) {
         if (findProperty(prop.name) != nullptr) {
             return false;
         }
+    }
+
+    for (const auto& prop : parent.properties_) {
         auto descriptor = prop;
         descriptor.id = static_cast<PropertyId>(properties_.size());
         descriptor.offset = alignUp(storageSize_, alignmentOfType(prop.type));

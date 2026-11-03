@@ -457,6 +457,38 @@ static void testMergeFromIsIdempotent() {
     if (ok) PASS(); else FAIL("first=" + std::to_string(first) + " second=" + std::to_string(second));
 }
 
+// 深审回归：mergeFrom 逐条追加父属性时若中途撞到子已有属性重名，原实现
+// 返回 false 前已把前面若干父属性推入并增长 storageSize_，遗留半合并状态
+// （子定义损坏，且一次失败的合并不可重试）。修复后先全量校验冲突再追加，
+// 失败时子定义保持原样。
+static void testMergeFromConflictLeavesDefUnchanged() {
+    TEST("inheritance: mergeFrom conflict leaves child unchanged");
+
+    EntityDef parent("ParentC");
+    parent.addProperty("pa", PropertyType::Int32);   // 位于冲突属性之前
+    parent.addProperty("pb", PropertyType::Int32);
+    parent.addProperty("bhp", PropertyType::Int32);  // 与子已有属性冲突
+
+    EntityDef child("ChildC");
+    child.addProperty("bhp", PropertyType::Int32);   // 子已有
+    child.addProperty("own", PropertyType::Int32);
+    const auto beforeProps = child.propertyCount();
+    const auto beforeSize = child.storageSize();
+
+    bool merged = child.mergeFrom(parent);
+    bool ok = merged == false;
+    ok = ok && child.propertyCount() == beforeProps;
+    ok = ok && child.storageSize() == beforeSize;
+    ok = ok && child.findProperty("pa") == nullptr;
+    ok = ok && child.findProperty("pb") == nullptr;
+    ok = ok && child.findProperty("own") != nullptr;
+
+    // 失败后仍可正常添加自身属性（定义未被不可逆地污染）。
+    if (ok) ok = child.addProperty("after", PropertyType::Int32) == beforeProps;
+
+    if (ok) PASS(); else FAIL("half-merged state left after conflict");
+}
+
 // --- Error paths: loadFile 失败分支与 EntityDef 直接构造的边界 ---
 
 static void testExtendsCycle() {
@@ -580,6 +612,7 @@ int main() {
     testExtendsCycle();
     testInheritanceWithFlags();
     testMergeFromIsIdempotent();
+    testMergeFromConflictLeavesDefUnchanged();
     testLoadFileErrorPaths();
     testDirectoryAndResolveEdges();
 
