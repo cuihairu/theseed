@@ -39,6 +39,9 @@ void TimerWheel::insertEntry(std::size_t index) {
 
     auto slotIndex = static_cast<int>((fireTick >> (8 * level)) & 0xFF);
     wheels_[level][slotIndex].push_back(index);
+    // 记录条目当前槽位：cancel 时据此 O(slot) 摘除，并立即回池复用。
+    entries_[index].slotLevel = level;
+    entries_[index].slotIndex = slotIndex;
 }
 
 void TimerWheel::fireEntry(std::size_t index) {
@@ -84,9 +87,17 @@ TimerHandle TimerWheel::addPeriodic(Duration interval, Callback callback) {
 }  // LCOV_EXCL_BR_LINE 同 addTimer：函数尾汇合伪边归因本行，两臂均已覆盖
 
 bool TimerWheel::cancel(TimerHandle handle) {
-    for (auto& entry : entries_) {
-        if (entry.id == handle.id && entry.generation == handle.generation && !entry.cancelled) {
+    for (std::size_t index = 0; index < entries_.size(); ++index) {
+        auto& entry = entries_[index];
+        if (entry.id == handle.id && entry.generation == handle.generation &&
+            !entry.cancelled) {
+            // 从所在槽位摘除并立即回池：否则取消条目永远滞留 entries_，
+            // 长跑进程取消无数定时器会无界增长（P2 深审）。摘除后 advance
+            // 不再见到该索引，不会误触发复用后的新条目。
+            auto& slot = wheels_[entry.slotLevel][entry.slotIndex];
+            slot.erase(std::remove(slot.begin(), slot.end(), index), slot.end());
             entry.cancelled = true;
+            freeList_.push_back(index);
             return true;
         }
     }

@@ -34,6 +34,9 @@ public:
     void advance(Duration dt);
 
     std::size_t activeCount() const;
+    // 已分配条目总数（活跃 + 已取消未回收）。诊断/测试用：cancel 后必须
+    // 回池复用，不应随取消次数无界增长。
+    std::size_t totalEntries() const noexcept { return entries_.size(); }
     void clear();
 
 private:
@@ -47,6 +50,10 @@ private:
         std::uint64_t period = 0;
         Callback callback;
         bool cancelled = true;
+        // 审计修复：记录条目当前所在槽位，cancel 时可 O(slot) 摘除并回池，
+        // 否则取消的条目永远滞留 entries_（长跑进程无界增长）。
+        int slotLevel = 0;
+        int slotIndex = 0;
     };
 
     std::size_t allocEntry();

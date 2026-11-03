@@ -100,6 +100,38 @@ static void testPeriodicTimerExactWheelBoundary() {
     else FAIL("expected 2, got " + std::to_string(fired));
 }
 
+// P2 深审回归：cancel 只置 cancelled 不摘除/回池，取消的条目永久滞留
+// entries_，长跑进程取消无数定时器会无界增长。修复后 cancel 摘除槽位并
+// 回池复用，重复 add/cancel 不推高 entries_ 总量。
+static void testCancelReclaimsEntries() {
+    TEST("cancel reclaims entry slots (no unbounded growth)");
+
+    TimerWheel wheel(std::chrono::milliseconds{10});
+    int fired = 0;
+    const auto base = wheel.totalEntries();
+
+    // 反复添加并取消 one-shot 与 periodic：修复后 totalEntries 不随取消
+    // 次数增长（条目回池复用），旧实现每轮都会推高 entries_。
+    for (int i = 0; i < 100; ++i) {
+        auto one = wheel.addTimer(std::chrono::milliseconds{50},
+                                  [&] { ++fired; });
+        auto per = wheel.addPeriodic(std::chrono::milliseconds{80},
+                                     [&] { ++fired; });
+        wheel.cancel(one);
+        wheel.cancel(per);
+        // 推进一 tick：旧实现里被取消的槽位索引在此被跳过，但 entries_ 不回收。
+        wheel.advance(std::chrono::milliseconds{10});
+    }
+
+    const auto growth = wheel.totalEntries() - base;
+    // 修复后每个周期复用同一批索引，总量应封顶（活跃条目 + 池余量）。
+    if (growth > 4) FAIL("entries grew by " + std::to_string(growth) +
+                         " over 100 add/cancel cycles");
+    if (fired != 0) FAIL("cancelled timers must not fire");
+    if (wheel.activeCount() != 0) FAIL("no active timers expected");
+    PASS();
+}
+
 static void testCancelTimer() {
     TEST("cancel timer prevents firing");
 
@@ -370,6 +402,7 @@ int main() {
     testPeriodicTimer();
     testPeriodicTimerExactWheelBoundary();
     testCancelTimer();
+    testCancelReclaimsEntries();
     testCancelPeriodicTimer();
     testMultipleTimers();
     testActiveCount();
