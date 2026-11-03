@@ -76,13 +76,31 @@ int main() {
     {
         ClientSession nullSession(nullptr);
         const std::byte buf[] = {std::byte{0x01}};
-        nullSession.send(std::span<const std::byte>(buf, 1));  // pipe_ 为空 → 跳过
+        // 审核发现：null pipe 分支曾不断言返回值。send 契约：null/未连接必须
+        // 返回 false（不写管道）。
+        if (nullSession.send(std::span<const std::byte>(buf, 1)))
+            FAIL("send with null pipe must return false");
 
         auto lonePipe = InMemoryBytePipe::createPair().first;  // 未 connect 的管道
         ClientSession detachedSession(lonePipe);
-        detachedSession.send(std::span<const std::byte>(buf, 1));  // !isConnected → 跳过
+        if (detachedSession.send(std::span<const std::byte>(buf, 1)))
+            FAIL("send with disconnected pipe must return false");
         nullSession.close();
         detachedSession.close();
+    }
+    PASS();
+
+    // 审核发现：成功路径（pipe 已连接且 write 返回 true）必须返回 true，
+    // 不能只在写失败分支断言。用真实 InMemoryBytePipe 对验证。
+    TEST("client session send success returns true");
+    {
+        auto pair = InMemoryBytePipe::createPair();
+        ClientSession session(pair.first);
+        const std::byte buf[] = {std::byte{0x01}};
+        if (!session.send(std::span<const std::byte>(buf, 1)))
+            FAIL("send on connected pipe must return true");
+        session.close();
+        pair.second->close();
     }
     PASS();
 
