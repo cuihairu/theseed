@@ -362,8 +362,10 @@ int main() {
               "autoCreateSchema=false no orphan Account row after rollback");
     }
 
-    // 幸福路径回归：新实例（knownTables_ 为空，ensureTable 会重建 B7 删掉的
-    // 主表；init 重建 B6 删掉的索引表），确认防御场景没污染正常语义。
+    // 幸福路径回归：init() 经 createSchema 预建 tbl_Account 并同步播种
+    // knownTables_（e7323b9），createAccount 事务内 save()→ensureTable 已短路、
+    // 不再补发 DDL；前一用例删掉的索引表由 init 重建。确认防御场景没污染
+    // 正常语义。
     {
         MySQLEntityStore fresh(storeConfigFromEnv());
         CHECK(fresh.init(), "fresh store init");
