@@ -5,6 +5,7 @@
 
 #if defined(_WIN32)
 
+#include <climits>
 #include <mutex>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -16,6 +17,13 @@ using SockLen = int;
 inline constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
 inline constexpr int kSocketError = SOCKET_ERROR;
 inline constexpr int kSendFlags = 0;
+// ::send 的 length 形参是 int：超过 INT_MAX 的缓冲区若直接强转会截断成
+// 负值/溢出（UB）。单次发送上限钳到 INT_MAX，剩余字节留在 sendBuffer_
+// 由下一轮 trySendBuffered 续传。
+inline int boundedSendLength(std::size_t size) {
+    constexpr std::size_t kMax = static_cast<std::size_t>(INT_MAX);
+    return static_cast<int>(size < kMax ? size : kMax);
+}
 
 inline bool wouldBlock() { return WSAGetLastError() == WSAEWOULDBLOCK; }
 
@@ -82,6 +90,7 @@ inline void socketGlobalShutdown() {}
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <climits>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -94,6 +103,13 @@ using SocketHandle = int;
 using SockLen = socklen_t;
 inline constexpr SocketHandle kInvalidSocket = -1;
 inline constexpr int kSocketError = -1;
+// ::send 的 length 形参是 int：超过 INT_MAX 的缓冲区若直接强转会截断成
+// 负值/溢出（UB）。单次发送上限钳到 INT_MAX，剩余字节留在 sendBuffer_
+// 由下一轮 trySendBuffered 续传。
+inline int boundedSendLength(std::size_t size) {
+    constexpr std::size_t kMax = static_cast<std::size_t>(INT_MAX);
+    return static_cast<int>(size < kMax ? size : kMax);
+}
 #if defined(MSG_NOSIGNAL)
 // 阻止向已断开的连接写数据时触发 SIGPIPE 杀死进程。
 inline constexpr int kSendFlags = MSG_NOSIGNAL;

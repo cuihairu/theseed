@@ -63,7 +63,7 @@
 
 ### P3（2 项）
 
-- [ ] `trySendBuffered` `sendBuffer_.size()` 强转 `int` 传给 `send()`，>2GB 截断/UB —— `src/runtime/TcpConnection.cpp:160`
+- [x] `trySendBuffered` `sendBuffer_.size()` 强转 `int` 传给 `send()`，>2GB 截断/UB —— `src/runtime/TcpConnection.cpp:160`——已修复：`boundedSendLength(size_t)` 在 Windows/POSIX 均钳到 `INT_MAX`，`trySendBuffered` 改用该 helper，>2GB 不再截断为负值，剩余字节留给下一轮 flush（src/runtime/SocketDetail.h:24-30；src/runtime/TcpConnection.cpp:163）；回归覆盖 0/1/INT_MAX/INT_MAX+1/INT_MAX+4096（tests/runtime/TcpConnectionTest.cpp:56-69）；全量 ctest 127/127 全绿
 - [ ] 各 app `main` `std::stoi` 无 catch 解析数字参数；`volatile bool` 应用 `sig_atomic_t` —— `src/` 各入口
 
 ## 审核发现（5123ad4058ff..HEAD，只审不改）

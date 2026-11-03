@@ -170,7 +170,7 @@ bool TcpConnection::trySendBuffered() {
 
     auto n = ::send(toSocket(socket_),
                     reinterpret_cast<const char*>(sendBuffer_.data()),
-                    static_cast<int>(sendBuffer_.size()), detail::kSendFlags);
+                    detail::boundedSendLength(sendBuffer_.size()), detail::kSendFlags);
     if (n == detail::kSocketError) {
         // ENOTCONN 与 EAGAIN 同属"稍后重试"：握手未落定窗口的首发
         // 不改写连接状态，数据留在 sendBuffer_，待 pump 裁决后续传。

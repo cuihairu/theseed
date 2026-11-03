@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
+#include <climits>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -40,6 +41,23 @@ int gFailures = 0;
 
 int main() {
     TcpConnection::globalInit();
+
+    // 深审回归：::send 的 length 是 int，sendBuffer_ 超 INT_MAX 时旧实现
+    // 强转截断（UB/负值）。boundedSendLength 钳到 INT_MAX 且保留剩余字节
+    // 由后续 flush 续传；未修复实现无此函数，本测试无法编译（回归锚定）。
+    {
+        const auto max = static_cast<std::size_t>(INT_MAX);
+        CHECK(theseed::runtime::detail::boundedSendLength(0) == 0,
+              "zero length stays zero");
+        CHECK(theseed::runtime::detail::boundedSendLength(1) == 1,
+              "small length unchanged");
+        CHECK(theseed::runtime::detail::boundedSendLength(max) == INT_MAX,
+              "INT_MAX boundary unchanged");
+        CHECK(theseed::runtime::detail::boundedSendLength(max + 1) == INT_MAX,
+              "over INT_MAX capped to INT_MAX");
+        CHECK(theseed::runtime::detail::boundedSendLength(max + 4096) == INT_MAX,
+              "much larger capped to INT_MAX");
+    }
 
     // 未连接的 write 拒绝；同步拒绝路径（非 in-progress 分支）
     {
