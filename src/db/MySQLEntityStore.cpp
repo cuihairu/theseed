@@ -347,6 +347,11 @@ bool MySQLEntityStore::createAccount(const std::string& username,
         mysqlHistogram("mysql_create_account_ms", "MySQL createAccount latency").observe(ms);
     });
     if (!ensureConnected()) return false;
+    // 事务前先确保主表存在：即使 autoCreateSchema=false，ensureTable 也可能
+    // 在这里发 CREATE TABLE IF NOT EXISTS。MySQL 的 DDL 会隐式提交当前事务，
+    // 若把该调用留到 beginTransaction 之后的 save() 内，索引写失败时回滚
+    // 无法撤销已被隐式提交的主表行（审核发现：P2-2 未覆盖该配置）。
+    if (!ensureTable("Account")) return false;
 
     // 先查重：username 来自调用方，参数化绑定防注入。
     auto dup = conn_->queryParams(  // LCOV_EXCL_BR_LINE queryParams 参数构造与返回值包装的库内联边，查重判断本体在后续行且两业务向均已覆盖

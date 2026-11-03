@@ -317,6 +317,38 @@ int main() {
               "P2-2 regression no orphan Account row after rollback");
     }
 
+    // 审核发现（6e25c6b1..HEAD）：knownTables_ 播种仅在 autoCreateSchema=true
+    // 时执行；autoCreateSchema=false 时 createAccount 事务内 save()→ensureTable
+    // 仍发 CREATE TABLE IF NOT EXISTS DDL，依 MySQL DDL 隐式提交语义会先提交
+    // 主表行，索引写失败后回滚无法撤销，仍可能遗留孤儿。回归：autoCreateSchema
+    // =false 的实例在索引 INSERT 失败后主表行必须回滚。
+    {
+        auto cfg = storeConfigFromEnv();
+        cfg.autoCreateSchema = false;  // 跳过 createSchema 的 knownTables_ 播种
+        MySQLEntityStore fresh(cfg);
+        CHECK(fresh.init(), "autoCreateSchema=false store init");
+        // 只删主表、保留 _account_index（索引表由 init 前的库已有，autoCreate
+        // Schema=false 不重建）：修复前 createAccount 事务内 save()→ensureTable
+        // 补发 CREATE TABLE DDL（隐式提交），随后索引 INSERT 因超长 username
+        // 失败，rollback 无法撤销已提交的主表行→遗留孤儿。
+        static_cast<void>(fresh.executeRaw("DROP TABLE IF EXISTS `tbl_Account`"));
+        static_cast<void>(fresh.executeRaw(
+            "CREATE TABLE IF NOT EXISTS `_account_index` ("
+            "  `username` VARCHAR(128) NOT NULL PRIMARY KEY,"
+            "  `entity_id` BIGINT UNSIGNED NOT NULL,"
+            "  `password` VARBINARY(256) NOT NULL,"
+            "  INDEX `idx_entity_id` (`entity_id`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"));
+
+        const std::string longUser(130, 'b');  // > VARCHAR(128)，严格模式强制失败
+        theseed::core::EntityId id = 0;
+        CHECK(!fresh.createAccount(longUser, "pw", id),
+              "autoCreateSchema=false createAccount fails on index insert");
+        EntityData orphan;
+        CHECK(!fresh.load(id, "Account", orphan),
+              "autoCreateSchema=false no orphan Account row after rollback");
+    }
+
     // 幸福路径回归：新实例（knownTables_ 为空，ensureTable 会重建 B7 删掉的
     // 主表；init 重建 B6 删掉的索引表），确认防御场景没污染正常语义。
     {
