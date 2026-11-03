@@ -311,14 +311,17 @@ static void test_rate_limiter_sub_ms_refill_clamped() {
     RateLimiter::Config cfg;
     cfg.capacity = 5;
     cfg.refillInterval = std::chrono::milliseconds(0);  // < 1ms
+    // 注入时钟必须先于消耗：若先真实消耗再注入，真实消耗与注入 now 之间
+    // 被调度器抢占 ≥3ms 会让注入 elapsed≥5ms 补满容量，负断言误失败。
+    // 注入固定时钟后 5 次消耗共享同一 lastTouch，推进量完全确定。
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    limiter.setClock([&now] { return now; });
     // 立即耗尽 5 个 token。
     for (int i = 0; i < 5; ++i) {
         if (!limiter.tryConsume("k", cfg)) { FAIL("capacity 5 should allow 5"); return; }
     }
     // 注入时钟推进 ≥1ms：旧实现 refillRate=inf → 5 token 立即回满并再次
     // 放行 5 个；修复后钳到 1ms → 只补 1 token，不足以再次放行 5 个。
-    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-    limiter.setClock([&now] { return now; });
     now += std::chrono::milliseconds(2);
     if (limiter.tryConsume("k", cfg, 5)) { FAIL("sub-ms refill must not refill full capacity instantly"); return; }
     PASS();
