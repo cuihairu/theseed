@@ -18,6 +18,8 @@ namespace theseed::bots {
 
 using SteadyTime = std::chrono::steady_clock::time_point;
 
+class BotClientTest;
+
 // 单个 bot 的协议客户端状态机（真客户端协议栈：ClientSession +
 // ClientProtocol/LoginProtocol，非旁路 mock）。
 //
@@ -81,6 +83,8 @@ private:
                     SteadyTime now);
     void resetConnections();
 
+    friend class BotClientTest;
+
     const BotsConfig& config_;
     std::string account_;
 
@@ -106,6 +110,7 @@ private:
     float posX_ = 0, posY_ = 0, posZ_ = 0;
     float vx_ = 1.0f;            // 移动脚本：线性游走方向
     std::uint32_t heartbeatSeq_ = 0;
+    bool retryScheduled_ = false;
 
     Stats stats_;
 };

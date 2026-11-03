@@ -36,7 +36,10 @@ void BotClient::scheduleRetry(SteadyTime now, const char* reason) {
     // close/reset 连接对象——销毁正在派发回调的 ClientSession 会
     // use-after-free。只排期退避；旧连接对象由下一次 startLogin 的
     // resetConnections 统一回收（对端已死连接由 isConnected 判定）。
-    ++stats_.reconnects;
+    if (!retryScheduled_) {
+        ++stats_.reconnects;
+        retryScheduled_ = true;
+    }
     state_ = State::Backoff;
     nextAttempt_ = now + config_.reconnectDelay;
     // reason 目前仅用于将来接日志；行为上静默退避，避免大群 bot 刷屏
@@ -55,6 +58,7 @@ void BotClient::resetConnections() {
 }
 
 void BotClient::startLogin(SteadyTime now) {
+    retryScheduled_ = false;
     resetConnections();
     loginConn_ = runtime::TcpConnection::create();
     loginSession_ = std::make_unique<login::ClientSession>(loginConn_);
