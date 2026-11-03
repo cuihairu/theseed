@@ -5,23 +5,17 @@
 #include "theseed/runtime/TickScheduler.h"
 #include "theseed/runtime/TransportHub.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
-static volatile bool g_running = true;
-
-static void signalHandler(int) {
-    g_running = false;
-}
-
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     std::string entityDefPath = "res/entities";
     std::uint16_t listenPort = 20002;
@@ -31,13 +25,19 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
-            listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            listenPort = *parsed;
         } else if (arg == "--defs" && i + 1 < argc) {
             entityDefPath = argv[++i];
         } else if (arg == "--ops" && i + 1 < argc) {
-            opsEnabled = std::stoi(argv[++i]) != 0;
+            const auto parsed = theseed::app::parseInt(argv[++i]);
+            if (!parsed) return 1;
+            opsEnabled = *parsed != 0;
         } else if (arg == "--ops-port" && i + 1 < argc) {
-            opsPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            opsPort = *parsed;
         }
     }
 
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
 
     std::cout << "CellApp listening on 0.0.0.0:" << listenPort << std::endl;
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         // Accept incoming peer connections
         while (auto conn = listener.accept()) {
             // Assign a component ID based on connection order

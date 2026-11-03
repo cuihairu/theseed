@@ -13,6 +13,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(THESEED_BUILD_TESTS "Build theseed tests" ON)
 option(THESEED_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 
+# App 可执行共享头（AppMainUtil.h 等）：各 app main 直接 include。
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/apps)
+
 add_library(theseed_project_options INTERFACE)
 target_compile_features(theseed_project_options INTERFACE cxx_std_23)
 

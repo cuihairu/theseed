@@ -6,19 +6,14 @@
 #include "theseed/runtime/TickScheduler.h"
 #include "theseed/runtime/TransportHub.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
-
-static volatile bool g_running = true;
-
-static void signalHandler(int) {
-    g_running = false;
-}
 
 struct PeerConfig {
     theseed::runtime::ComponentId componentId;
@@ -32,8 +27,7 @@ struct DbConfig {
 };
 
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     std::string entityDefPath = "res/entities";
     std::string storePath = "data/entities";
@@ -45,23 +39,30 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
-            clientPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            clientPort = *parsed;
         } else if (arg == "--ops-port" && i + 1 < argc) {
-            opsPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            opsPort = *parsed;
         } else if (arg == "--defs" && i + 1 < argc) {
             entityDefPath = argv[++i];
         } else if (arg == "--store" && i + 1 < argc) {
             storePath = argv[++i];
         } else if (arg == "--peer" && i + 2 < argc) {
-            auto compId = static_cast<theseed::runtime::ComponentId>(std::stoi(argv[++i]));
+            const auto compParsed = theseed::app::parseInt(argv[++i]);
+            if (!compParsed) return 1;
+            auto compId = static_cast<theseed::runtime::ComponentId>(*compParsed);
             std::string addr = argv[++i];
             auto colon = addr.rfind(':');
             if (colon == std::string::npos) {
                 std::cerr << "Invalid peer address: " << addr << std::endl;
                 return 1;
             }
-            peers.push_back({compId, addr.substr(0, colon),
-                            static_cast<std::uint16_t>(std::stoi(addr.substr(colon + 1)))});
+            const auto portParsed = theseed::app::parsePort(addr.substr(colon + 1));
+            if (!portParsed) return 1;
+            peers.push_back({compId, addr.substr(0, colon), *portParsed});
         } else if (arg == "--db" && i + 1 < argc) {
             std::string addr = argv[++i];
             auto colon = addr.rfind(':');
@@ -69,8 +70,9 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid DB address: " << addr << std::endl;
                 return 1;
             }
-            dbConfig = DbConfig{addr.substr(0, colon),
-                                static_cast<std::uint16_t>(std::stoi(addr.substr(colon + 1)))};
+            const auto portParsed = theseed::app::parsePort(addr.substr(colon + 1));
+            if (!portParsed) return 1;
+            dbConfig = DbConfig{addr.substr(0, colon), *portParsed};
         }
     }
 
@@ -137,7 +139,7 @@ int main(int argc, char** argv) {
 
     std::cout << "BaseApp listening on 0.0.0.0:" << clientPort << std::endl;
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         hub->tick();
         app.tick();
         scheduler.runOnce();

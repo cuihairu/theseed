@@ -1,20 +1,14 @@
 #include "theseed/realm/RealmApp.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <thread>
 
-static volatile bool g_running = true;
-
-static void signalHandler(int) {
-    g_running = false;
-}
-
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     theseed::realm::RealmAppConfig config;
     config.listenHost = "0.0.0.0";
@@ -39,11 +33,17 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
-            config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.listenPort = *parsed;
         } else if (arg == "--ops" && i + 1 < argc) {
-            config.ops.enabled = std::stoi(argv[++i]) != 0;
+            const auto parsed = theseed::app::parseInt(argv[++i]);
+            if (!parsed) return 1;
+            config.ops.enabled = *parsed != 0;
         } else if (arg == "--ops-port" && i + 1 < argc) {
-            config.ops.port = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.ops.port = *parsed;
         }
     }
 
@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
     std::cout << "RealmApp listening on " << config.listenHost << ":"
               << config.listenPort << std::endl;
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         app.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

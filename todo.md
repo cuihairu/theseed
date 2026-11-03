@@ -64,7 +64,7 @@
 ### P3（2 项）
 
 - [x] `trySendBuffered` `sendBuffer_.size()` 强转 `int` 传给 `send()`，>2GB 截断/UB —— `src/runtime/TcpConnection.cpp:160`——已修复：`boundedSendLength(size_t)` 在 Windows/POSIX 均钳到 `INT_MAX`，`trySendBuffered` 改用该 helper，>2GB 不再截断为负值，剩余字节留给下一轮 flush（src/runtime/SocketDetail.h:24-30；src/runtime/TcpConnection.cpp:163）；回归覆盖 0/1/INT_MAX/INT_MAX+1/INT_MAX+4096（tests/runtime/TcpConnectionTest.cpp:56-69）；全量 ctest 127/127 全绿
-- [ ] 各 app `main` `std::stoi` 无 catch 解析数字参数；`volatile bool` 应用 `sig_atomic_t` —— `src/` 各入口
+- [x] 各 app `main` `std::stoi` 无 catch 解析数字参数；`volatile bool` 应用 `sig_atomic_t` —— `src/` 各入口——已修复：新增 `apps/AppMainUtil.h`，`volatile bool g_running` 改为 `volatile sig_atomic_t`（信号处理器可安全写入），`stoi` 经 `parseInt`/`parsePort` 捕获 `invalid_argument`/`out_of_range` 并打印诊断（apps/AppMainUtil.h:17-43）；baseapp/cellapp/dbapp/loginapp/realmapp 五个 main 全部改用该基础设施，非法数字参数不再逃逸 main 触发 terminate（apps/baseapp/main.cpp:18,41；apps/cellapp/main.cpp:18,34；apps/dbapp/main.cpp:12,26；apps/loginapp/main.cpp:16,41；apps/realmapp/main.cpp:14,26）；回归单测覆盖 parseInt/parsePort 正常与畸形/溢出/越界及 gRunning 类型（tests/apps/AppMainUtilTest.cpp）；实测未修复源码 `--port abc` 触发 std::invalid_argument→abort(exit 134)、修复后返回 exit 1；全量 ctest 128/128 全绿
 
 ## 审核发现（5123ad4058ff..HEAD，只审不改）
 

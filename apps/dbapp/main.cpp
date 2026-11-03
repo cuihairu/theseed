@@ -1,21 +1,15 @@
 #include "theseed/db/DBApp.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <sstream>
 #include <thread>
 
-static volatile bool g_running = true;
-
-static void signalHandler(int) {
-    g_running = false;
-}
-
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     theseed::db::DBApp::Config config;
     config.listenPort = 20003;
@@ -25,7 +19,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
-            config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.listenPort = *parsed;
         } else if (arg == "--store" && i + 1 < argc) {
             config.storePath = argv[++i];
         } else if (arg == "--backend" && i + 1 < argc) {
@@ -36,7 +32,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--mysql-host" && i + 1 < argc) {
             config.dbHost = argv[++i];
         } else if (arg == "--mysql-port" && i + 1 < argc) {
-            config.dbPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.dbPort = *parsed;
             dbPortSet = true;
         } else if (arg == "--mysql-user" && i + 1 < argc) {
             config.dbUser = argv[++i];
@@ -47,7 +45,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--pg-host" && i + 1 < argc) {
             config.dbHost = argv[++i];
         } else if (arg == "--pg-port" && i + 1 < argc) {
-            config.dbPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.dbPort = *parsed;
             dbPortSet = true;
         } else if (arg == "--pg-user" && i + 1 < argc) {
             config.dbUser = argv[++i];
@@ -56,9 +56,13 @@ int main(int argc, char** argv) {
         } else if (arg == "--pg-database" && i + 1 < argc) {
             config.dbDatabase = argv[++i];
         } else if (arg == "--ops" && i + 1 < argc) {
-            config.ops.enabled = std::stoi(argv[++i]) != 0;
+            const auto parsed = theseed::app::parseInt(argv[++i]);
+            if (!parsed) return 1;
+            config.ops.enabled = *parsed != 0;
         } else if (arg == "--ops-port" && i + 1 < argc) {
-            config.ops.port = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.ops.port = *parsed;
         }
     }
 
@@ -82,7 +86,7 @@ int main(int argc, char** argv) {
 
     std::cout << banner.str() << std::endl;
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         app.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

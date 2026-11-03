@@ -4,22 +4,16 @@
 #include "theseed/login/LoginApp.h"
 #include "theseed/runtime/TickScheduler.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <cstdint>
 #include <iostream>
 #include <string>
 #include <thread>
 
-static volatile bool g_running = true;
-
-static void signalHandler(int) {
-    g_running = false;
-}
-
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     theseed::login::LoginAppConfig config;
     config.listenHost = "0.0.0.0";
@@ -40,7 +34,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
-            config.listenPort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.listenPort = *parsed;
         } else if (arg == "--auth" && i + 1 < argc) {
             config.authType = argv[++i];
         } else if (arg == "--no-redis") {
@@ -51,7 +47,9 @@ int main(int argc, char** argv) {
             // 不给即不接线（缺省安全：联动是增强，不是登录前提）。
             config.machineHost = argv[++i];
         } else if (arg == "--machine-port" && i + 1 < argc) {
-            config.machinePort = static_cast<std::uint16_t>(std::stoi(argv[++i]));
+            const auto parsed = theseed::app::parsePort(argv[++i]);
+            if (!parsed) return 1;
+            config.machinePort = *parsed;
         }
     }
 
@@ -79,7 +77,7 @@ int main(int argc, char** argv) {
               << " machine-link=" << (machineLink ? "on" : "off")
               << std::endl;
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         app.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
