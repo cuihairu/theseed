@@ -55,18 +55,25 @@ public:
     // (SessionStore's secondary index uses this to retire entries.)
     virtual bool zrem(const std::string& key, const std::string& member) = 0;
 
-    // Distributed lock: returns true if acquired. Caller must call unlock().
-    virtual bool lock(const std::string& key, RedisDuration ttl) = 0;
-    virtual void unlock(const std::string& key) = 0;
-    // Renew an already-held lock's TTL. Default: assume renewal succeeded
-    // (providers without explicit renewal support must rely on a TTL long
-    // enough for their critical section). Returns false only when the caller
-    // definitively no longer holds the lock.
-    virtual bool renewLock(const std::string& key, RedisDuration ttl) {
-        (void)key;
-        (void)ttl;
-        return true;
-    }
+    // Distributed lock. Each acquisition mints a unique owner token; every
+    // subsequent renewLock/unlock on this lock must present the same token so
+    // a holder whose lock expired and was re-acquired by another party cannot
+    // accidentally renew or release the new holder's lock.
+    using LockToken = std::string;
+    // Returns an owner token when acquired, or nullopt if the lock is busy.
+    // The caller must pass the token back to renewLock/unlock.
+    virtual std::optional<LockToken> lock(const std::string& key,
+                                          RedisDuration ttl) = 0;
+    // Release the lock only if `token` still owns it. Returns true when the
+    // lock was released (or was already gone), false when the lock now belongs
+    // to a different owner and must be left untouched.
+    virtual bool unlock(const std::string& key, const LockToken& token) = 0;
+    // Extend the TTL only if `token` still owns the lock. Returns false when
+    // the caller definitively no longer holds the lock (expired, missing, or
+    // re-acquired by a different owner).
+    virtual bool renewLock(const std::string& key,
+                           const LockToken& token,
+                           RedisDuration ttl) = 0;
 };
 
 // In-memory implementation with TTL expiry. Suitable for tests and
@@ -103,9 +110,12 @@ public:
     std::size_t zcard(const std::string& key) override;
     bool zrem(const std::string& key, const std::string& member) override;
 
-    bool lock(const std::string& key, RedisDuration ttl) override;
-    void unlock(const std::string& key) override;
-    bool renewLock(const std::string& key, RedisDuration ttl) override;
+    std::optional<LockToken> lock(const std::string& key,
+                                  RedisDuration ttl) override;
+    bool unlock(const std::string& key, const LockToken& token) override;
+    bool renewLock(const std::string& key,
+                   const LockToken& token,
+                   RedisDuration ttl) override;
 
 private:
     struct StringEntry {
@@ -118,6 +128,7 @@ private:
     };
 
     struct LockEntry {
+        std::string token;
         std::chrono::steady_clock::time_point expiresAt;
     };
 
@@ -125,6 +136,7 @@ private:
 
     std::mutex mutex_;
     std::chrono::steady_clock::time_point now_;
+    std::uint64_t lockTokenSeq_ = 0;
     std::unordered_map<std::string, StringEntry> strings_;
     std::unordered_map<std::string, SortedSet> sets_;
     std::unordered_map<std::string, LockEntry> locks_;

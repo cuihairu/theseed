@@ -88,8 +88,18 @@ public:
     bool zrem(const std::string& key, const std::string& member) override {
         return zsets_[key].erase(member) > 0;
     }
-    bool lock(const std::string&, RedisDuration) override { return true; }
-    void unlock(const std::string&) override {}
+    std::optional<IRedisProvider::LockToken> lock(const std::string&,
+                                                  RedisDuration) override {
+        return IRedisProvider::LockToken{"fake-owner"};
+    }
+    bool unlock(const std::string&, const IRedisProvider::LockToken&) override {
+        return true;
+    }
+    bool renewLock(const std::string&,
+                   const IRedisProvider::LockToken&,
+                   RedisDuration) override {
+        return true;
+    }
 
     bool failSet = false;
     bool failZadd = false;

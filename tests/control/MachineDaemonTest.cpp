@@ -363,11 +363,19 @@ public:
     bool zrem(const std::string& key, const std::string& member) override {
         return inner_->zrem(key, member);
     }
-    bool lock(const std::string& key,
-              foundation::RedisDuration ttl) override {
+    std::optional<foundation::IRedisProvider::LockToken>
+    lock(const std::string& key, foundation::RedisDuration ttl) override {
         return inner_->lock(key, ttl);
     }
-    void unlock(const std::string& key) override { inner_->unlock(key); }
+    bool unlock(const std::string& key,
+                const foundation::IRedisProvider::LockToken& token) override {
+        return inner_->unlock(key, token);
+    }
+    bool renewLock(const std::string& key,
+                   const foundation::IRedisProvider::LockToken& token,
+                   foundation::RedisDuration ttl) override {
+        return inner_->renewLock(key, token, ttl);
+    }
 
 private:
     // 后缀命中即失败一次（消费掉）：模拟并发窗口里单个键的一次动作失败。

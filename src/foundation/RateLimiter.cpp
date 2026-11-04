@@ -35,18 +35,23 @@ bool RateLimiter::tryConsume(const std::string& key,
     const auto lockTtl = config.lockTtl;
     const auto lockTimeout = config.lockTimeout;
     const auto lockStart = std::chrono::steady_clock::now();
-    while (!redis_->lock(lockKey, lockTtl)) {
+    // 获取锁并持有其所有权令牌：后续 renewLock/unlock 都必须携带同一令牌，
+    // 防止锁过期被后到者重新持有后，原持有者误认领新锁并清掉它。
+    auto lockToken = redis_->lock(lockKey, lockTtl);
+    while (!lockToken.has_value()) {
         if (lockTimeout > RedisDuration::zero() &&
             std::chrono::steady_clock::now() - lockStart >= lockTimeout) {
             return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        lockToken = redis_->lock(lockKey, lockTtl);
     }
     struct UnlockGuard {
         IRedisProvider& redis;
         const std::string& key;
-        ~UnlockGuard() { redis.unlock(key); }
-    } unlockGuard{*redis_, lockKey};
+        const IRedisProvider::LockToken& token;
+        ~UnlockGuard() { redis.unlock(key, token); }
+    } unlockGuard{*redis_, lockKey, *lockToken};
     const auto now = nowFn_();
 
     BucketState state;
@@ -56,9 +61,10 @@ bool RateLimiter::tryConsume(const std::string& key,
     }
     // 续期（同步版）：临界区跨 get→refill→set 两次 Redis 往返，若执行
     // 超过 lockTtl 锁会提前过期，后到者再次获锁并发进入临界区使读改写
-    // 竞态复发。在 get 后、set 前各续期一次（若后端支持）；续期失败说明
-    // 锁已过期被并发者夺走，放弃本次消耗避免无锁保护下继续读改写。
-    if (!redis_->renewLock(lockKey, lockTtl)) {
+    // 竞态复发。在 get 后、set 前各续期一次；续期失败（含令牌不匹配，
+    // 即锁已被并发者重新持有）说明不再独占，放弃本次消耗避免无锁保护
+    // 下继续读改写。
+    if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
         return false;
     }
     if (state.tokens == 0.0 && state.lastTouch.time_since_epoch().count() == 0) {
@@ -80,10 +86,16 @@ bool RateLimiter::tryConsume(const std::string& key,
     state.lastTouch = now;
 
     if (state.tokens < static_cast<double>(cost)) {
+        if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
+            return false;
+        }
         redis_->set(rk, encode(state), RedisDuration::zero());
         return false;
     }
     state.tokens -= static_cast<double>(cost);
+    if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
+        return false;
+    }
     redis_->set(rk, encode(state), RedisDuration::zero());
     return true;
 }

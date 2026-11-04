@@ -147,29 +147,41 @@ bool InMemoryRedisProvider::zrem(const std::string& key,
     return it->second.members.erase(member) > 0;
 }
 
-bool InMemoryRedisProvider::lock(const std::string& key, RedisDuration ttl) {
+std::optional<InMemoryRedisProvider::LockToken>
+InMemoryRedisProvider::lock(const std::string& key, RedisDuration ttl) {
     const std::lock_guard lock(mutex_);
     reapExpired();
     auto it = locks_.find(key);
     if (it != locks_.end() && now_ < it->second.expiresAt) {  // LCOV_EXCL_BR_LINE 上方 reapExpired 已清除全部过期锁，未过期假臂不可达
-        return false;
+        return std::nullopt;
     }
     LockEntry entry;
+    entry.token = std::to_string(++lockTokenSeq_);
     entry.expiresAt = now_ + ttl;
     locks_[key] = entry;
+    return entry.token;
+}
+
+bool InMemoryRedisProvider::unlock(const std::string& key,
+                                   const LockToken& token) {
+    const std::lock_guard lock(mutex_);
+    auto it = locks_.find(key);
+    if (it == locks_.end()) return true;
+    if (it->second.token != token) return false;
+    locks_.erase(it);
     return true;
 }
 
-void InMemoryRedisProvider::unlock(const std::string& key) {
-    const std::lock_guard lock(mutex_);
-    locks_.erase(key);
-}
-
-bool InMemoryRedisProvider::renewLock(const std::string& key, RedisDuration ttl) {
+bool InMemoryRedisProvider::renewLock(const std::string& key,
+                                      const LockToken& token,
+                                      RedisDuration ttl) {
     const std::lock_guard lock(mutex_);
     auto it = locks_.find(key);
     // 锁已不存在或已过期：续期失败（调用方应放弃临界区，避免竞态复发）。
-    if (it == locks_.end() || now_ >= it->second.expiresAt) return false;
+    if (it == locks_.end() || now_ >= it->second.expiresAt ||
+        it->second.token != token) {
+        return false;
+    }
     it->second.expiresAt = now_ + ttl;
     return true;
 }

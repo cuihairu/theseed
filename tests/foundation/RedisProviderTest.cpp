@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <latch>
 #include <iostream>
 #include <map>
@@ -93,19 +94,39 @@ static void test_redis_zadd_zrange() {
 static void test_redis_lock_acquire_release() {
     TEST("test_redis_lock_acquire_release");
     InMemoryRedisProvider r;
-    if (!r.lock("resource", RedisDuration(5000))) { FAIL("first lock should succeed"); return; }
+    auto tok1 = r.lock("resource", RedisDuration(5000));
+    if (!tok1) { FAIL("first lock should succeed"); return; }
     if (r.lock("resource", RedisDuration(5000))) { FAIL("second lock should fail"); return; }
-    r.unlock("resource");
-    if (!r.lock("resource", RedisDuration(5000))) { FAIL("lock after unlock should succeed"); return; }
+    if (!r.unlock("resource", *tok1)) { FAIL("owner unlock should succeed"); return; }
+    auto tok2 = r.lock("resource", RedisDuration(5000));
+    if (!tok2) { FAIL("lock after unlock should succeed"); return; }
+    if (!r.unlock("resource", *tok2)) { FAIL("owner unlock 2 should succeed"); return; }
     PASS();
 }
 
 static void test_redis_lock_expires() {
     TEST("test_redis_lock_expires");
     InMemoryRedisProvider r;
-    r.lock("resource", RedisDuration(1000));
+    auto old = r.lock("resource", RedisDuration(1000));
+    if (!old) { FAIL("first lock should succeed"); return; }
     r.advanceClock(RedisDuration(1001));
-    if (!r.lock("resource", RedisDuration(1000))) { FAIL("expired lock should be re-acquirable"); return; }
+    // 过期后旧令牌不能再续期（锁已消失，原持有者失去所有权）。
+    if (r.renewLock("resource", *old, RedisDuration(1000))) {
+        FAIL("expired token must not renew a gone lock");
+        return;
+    }
+    // 锁已过期消失：旧令牌解锁是幂等 no-op（无锁可清，返回 true）。
+    if (!r.unlock("resource", *old)) {
+        FAIL("unlock of a gone lock should be a no-op success");
+        return;
+    }
+    auto fresh = r.lock("resource", RedisDuration(1000));
+    if (!fresh) { FAIL("expired lock should be re-acquirable"); return; }
+    if (!r.renewLock("resource", *fresh, RedisDuration(1000))) {
+        FAIL("fresh token should renew");
+        return;
+    }
+    if (!r.unlock("resource", *fresh)) { FAIL("fresh unlock should succeed"); return; }
     PASS();
 }
 
@@ -438,14 +459,27 @@ public:
                                                           std::size_t) override { return {}; }
     std::size_t zcard(const std::string&) override { return 0; }
     bool zrem(const std::string&, const std::string&) override { return false; }
-    bool lock(const std::string& key, RedisDuration) override {
+    std::optional<theseed::foundation::IRedisProvider::LockToken>
+    lock(const std::string& key, RedisDuration) override {
         const std::lock_guard lock(mutex_);
-        const auto [_, inserted] = locks_.insert(key);
-        return inserted;
+        if (locks_.count(key) > 0) return std::nullopt;
+        const auto token = std::to_string(++lockSeq_);
+        locks_[key] = token;
+        return token;
     }
-    void unlock(const std::string& key) override {
+    bool unlock(const std::string& key,
+                const theseed::foundation::IRedisProvider::LockToken& token)
+        override {
         const std::lock_guard lock(mutex_);
-        locks_.erase(key);
+        const auto it = locks_.find(key);
+        if (it == locks_.end() || it->second != token) return false;
+        locks_.erase(it);
+        return true;
+    }
+    bool renewLock(const std::string&,
+                   const theseed::foundation::IRedisProvider::LockToken&,
+                   RedisDuration) override {
+        return true;
     }
 
 private:
@@ -453,7 +487,99 @@ private:
     std::condition_variable ready_;
     int readers_ = 0;
     std::map<std::string, std::string> kv_;
-    std::set<std::string> locks_;
+    std::uint64_t lockSeq_ = 0;
+    std::map<std::string, std::string> locks_;
+};
+
+// 回归锚：在 RateLimiter 临界区内故意让原锁过期并由“后到者”重新持有。
+// StealBeforeFirstRenewal 对应第一次续期前丢锁；StealAfterFirstRenewal
+// 对应第一次续期成功后、写回前丢锁。旧实现按 key 而非持有者令牌操作锁，
+// 会误续期/误释放后到者；且写回前没有第二次续期，会在丢锁后继续 set。
+class LockStealingRateLimitProvider final
+    : public theseed::foundation::IRedisProvider {
+public:
+    enum class StealStage { BeforeFirstRenewal, AfterFirstRenewal };
+
+    explicit LockStealingRateLimitProvider(StealStage stage)
+        : stage_(stage) {}
+
+    bool set(const std::string& key,
+             const std::string& value,
+             RedisDuration ttl) override {
+        ++setCalls_;
+        return inner_.set(key, value, ttl);
+    }
+    std::optional<std::string> get(const std::string& key) override {
+        return inner_.get(key);
+    }
+    bool del(const std::string& key) override { return inner_.del(key); }
+    bool exists(const std::string& key) override { return inner_.exists(key); }
+    bool expire(const std::string& key, RedisDuration ttl) override {
+        return inner_.expire(key, ttl);
+    }
+    bool zadd(const std::string& key, const std::string& member,
+              double score) override {
+        return inner_.zadd(key, member, score);
+    }
+    std::vector<std::pair<std::string, double>> zrange(
+        const std::string& key, std::size_t start, std::size_t stop) override {
+        return inner_.zrange(key, start, stop);
+    }
+    std::vector<std::pair<std::string, double>> zrevrange(
+        const std::string& key, std::size_t start, std::size_t stop) override {
+        return inner_.zrevrange(key, start, stop);
+    }
+    std::size_t zcard(const std::string& key) override {
+        return inner_.zcard(key);
+    }
+    bool zrem(const std::string& key, const std::string& member) override {
+        return inner_.zrem(key, member);
+    }
+
+    std::optional<LockToken> lock(const std::string& key,
+                                  RedisDuration ttl) override {
+        auto token = inner_.lock(key, ttl);
+        if (token) lockTtl_ = ttl;
+        return token;
+    }
+
+    bool renewLock(const std::string& key,
+                   const LockToken& token,
+                   RedisDuration ttl) override {
+        ++renewCalls_;
+        if (renewCalls_ == 1 && stage_ == StealStage::BeforeFirstRenewal) {
+            stealLock(key, ttl);
+            return inner_.renewLock(key, token, ttl);
+        }
+        if (renewCalls_ == 1 && stage_ == StealStage::AfterFirstRenewal) {
+            if (!inner_.renewLock(key, token, ttl)) {
+                return false;
+            }
+            stealLock(key, ttl);
+            return true;
+        }
+        return inner_.renewLock(key, token, ttl);
+    }
+
+    bool unlock(const std::string& key, const LockToken& token) override {
+        return inner_.unlock(key, token);
+    }
+
+    int setCalls() const { return setCalls_; }
+
+private:
+    void stealLock(const std::string& key, RedisDuration ttl) {
+        inner_.advanceClock(lockTtl_);
+        inner_.del(key);
+        stolenToken_ = inner_.lock(key, ttl);
+    }
+
+    StealStage stage_;
+    InMemoryRedisProvider inner_;
+    RedisDuration lockTtl_ = RedisDuration(1);
+    std::optional<LockToken> stolenToken_;
+    int renewCalls_ = 0;
+    int setCalls_ = 0;
 };
 
 static void test_rate_limiter_no_concurrent_over_admit() {
@@ -499,7 +625,8 @@ static void test_rate_limiter_lock_timeout() {
     cfg.lockTimeout = std::chrono::milliseconds(1);
 
     // 预先占住锁：lock 成功后另一 tryConsume 只能等锁，超时后放弃。
-    if (!redis->lock("rate:k:lock", RedisDuration(60000))) {
+    auto held = redis->lock("rate:k:lock", RedisDuration(60000));
+    if (!held) {
         FAIL("pre-lock should succeed");
         return;
     }
@@ -507,7 +634,7 @@ static void test_rate_limiter_lock_timeout() {
         FAIL("lock timeout should return false, not block");
         return;
     }
-    redis->unlock("rate:k:lock");
+    redis->unlock("rate:k:lock", *held);
     if (!limiter.tryConsume("k", cfg)) {
         FAIL("after unlock consume should succeed");
         return;
@@ -529,12 +656,13 @@ static void test_rate_limiter_lock_renewal() {
 
     // 直接验证 renewLock 续期语义：占锁后推进时钟越过原 TTL，续期前锁
     // 已过期（不可再续），续期后锁 TTL 被延长。
-    if (!redis->lock("rate:k:lock", cfg.lockTtl)) {
+    auto held = redis->lock("rate:k:lock", cfg.lockTtl);
+    if (!held) {
         FAIL("lock should succeed");
         return;
     }
     redis->advanceClock(RedisDuration(3));  // 仍在 TTL 内
-    if (!redis->renewLock("rate:k:lock", cfg.lockTtl)) {
+    if (!redis->renewLock("rate:k:lock", *held, cfg.lockTtl)) {
         FAIL("renewLock within TTL should succeed");
         return;
     }
@@ -543,7 +671,116 @@ static void test_rate_limiter_lock_renewal() {
         FAIL("renewed lock should still be held");
         return;
     }
-    redis->unlock("rate:k:lock");
+    redis->unlock("rate:k:lock", *held);
+    PASS();
+}
+
+// 深审回归：锁过期被后到者重新持有后，原持有者的续期/解锁不得误认领新
+// 持有者的锁。未修复实现仅按锁存在判断，会误续期并最终在 UnlockGuard 里
+// 清掉新持有者的锁。本测试直接验证持有者令牌语义。
+static void test_rate_limiter_lock_owner_token() {
+    TEST("test_rate_limiter_lock_owner_token");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter::Config cfg;
+    cfg.lockTtl = std::chrono::milliseconds(5);
+
+    auto owner = redis->lock("rate:k:lock", cfg.lockTtl);
+    if (!owner) { FAIL("owner lock should succeed"); return; }
+    redis->advanceClock(RedisDuration(6));  // 越过 TTL，原锁过期
+    auto newcomer = redis->lock("rate:k:lock", cfg.lockTtl);
+    if (!newcomer) { FAIL("newcomer should re-acquire after expiry"); return; }
+    if (newcomer == owner) { FAIL("tokens must be distinct"); return; }
+
+    // 原持有者的旧令牌：续期与解锁都必须失败，且不得清掉新持有者的锁。
+    if (redis->renewLock("rate:k:lock", *owner, cfg.lockTtl)) {
+        FAIL("stale token must not renew newcomer's lock");
+        return;
+    }
+    if (redis->unlock("rate:k:lock", *owner)) {
+        FAIL("stale token must not release newcomer's lock");
+        return;
+    }
+    if (redis->lock("rate:k:lock", cfg.lockTtl)) {
+        FAIL("newcomer's lock must survive stale-token operations");
+        return;
+    }
+    if (!redis->renewLock("rate:k:lock", *newcomer, cfg.lockTtl)) {
+        FAIL("newcomer should renew its own lock");
+        return;
+    }
+    if (!redis->unlock("rate:k:lock", *newcomer)) {
+        FAIL("newcomer should release its own lock");
+        return;
+    }
+    PASS();
+}
+
+// 深审回归：临界区第一次续期前锁被后到者夺走，续期必须失败并放弃消耗，
+// 不得继续写回（无锁保护下 set 会把并发者的读改写覆盖掉）。
+static void test_rate_limiter_lock_stolen_before_first_renewal() {
+    TEST("test_rate_limiter_lock_stolen_before_first_renewal");
+    auto redis = std::make_shared<LockStealingRateLimitProvider>(
+        LockStealingRateLimitProvider::StealStage::BeforeFirstRenewal);
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    if (limiter.tryConsume("k", cfg)) {
+        FAIL("consume must be refused when lock is stolen before renewal");
+        return;
+    }
+    if (redis->setCalls() != 0) {
+        FAIL("no set may occur once ownership is lost");
+        return;
+    }
+    PASS();
+}
+
+// 深审回归：第一次续期成功后、写回前锁被后到者夺走，写回前必须再次续期，
+// 续期失败则放弃写回。未修复实现只在 get 后续期一次，会在丢锁后仍 set，
+// 覆盖新持有者的写回（读改写互斥失效）。
+static void test_rate_limiter_lock_stolen_after_first_renewal() {
+    TEST("test_rate_limiter_lock_stolen_after_first_renewal");
+    auto redis = std::make_shared<LockStealingRateLimitProvider>(
+        LockStealingRateLimitProvider::StealStage::AfterFirstRenewal);
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    if (limiter.tryConsume("k", cfg)) {
+        FAIL("consume must be refused when lock is stolen before write-back");
+        return;
+    }
+    if (redis->setCalls() != 0) {
+        FAIL("no set may occur once ownership is lost before write-back");
+        return;
+    }
+    PASS();
+}
+
+// 深审回归：桶不足且锁在写回前被夺走时，写回前的续期必须失败并放弃消耗
+// （不得把无锁保护的 refill 结果写回覆盖并发者的桶）。
+static void test_rate_limiter_lock_stolen_insufficient_bucket() {
+    TEST("test_rate_limiter_lock_stolen_insufficient_bucket");
+    auto redis = std::make_shared<LockStealingRateLimitProvider>(
+        LockStealingRateLimitProvider::StealStage::AfterFirstRenewal);
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    // 首次触碰桶满 1 但 cost=2 > 容量：桶不足臂。锁在第一次续期后被夺走，
+    // 写回前的第二次续期必须失败并放弃，不得 set。
+    if (limiter.tryConsume("k", cfg, 2)) {
+        FAIL("consume must be refused on insufficient bucket when lock is stolen");
+        return;
+    }
+    if (redis->setCalls() != 0) {
+        FAIL("no set may occur once ownership is lost on insufficient bucket");
+        return;
+    }
     PASS();
 }
 
@@ -582,8 +819,10 @@ static void test_redis_exists_across_kinds() {
     r.zadd("z", "m", 1.0);
     if (!r.exists("z")) { FAIL("zset key should exist"); return; }
     // lock 键：前两臂 false、第三臂 true
-    if (!r.lock("l", RedisDuration(5000))) { FAIL("lock should succeed"); return; }
+    auto lockTok = r.lock("l", RedisDuration(5000));
+    if (!lockTok) { FAIL("lock should succeed"); return; }
     if (!r.exists("l")) { FAIL("locked key should exist"); return; }
+    r.unlock("l", *lockTok);
     // 全无：三臂全 false
     if (r.exists("none")) { FAIL("missing key should not exist"); return; }
     PASS();
@@ -726,6 +965,10 @@ int main() {
     test_rate_limiter_no_concurrent_over_admit();
     test_rate_limiter_lock_timeout();
     test_rate_limiter_lock_renewal();
+    test_rate_limiter_lock_owner_token();
+    test_rate_limiter_lock_stolen_before_first_renewal();
+    test_rate_limiter_lock_stolen_after_first_renewal();
+    test_rate_limiter_lock_stolen_insufficient_bucket();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();
