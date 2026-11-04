@@ -5,19 +5,14 @@
 #include "BotsConfig.h"
 #include "BotManager.h"
 
+#include "AppMainUtil.h"
+
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <string>
 #include <thread>
 
 namespace {
-
-volatile bool g_running = true;
-
-void signalHandler(int) {
-    g_running = false;
-}
 
 void printUsage() {
     std::cout
@@ -38,8 +33,7 @@ void printUsage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    theseed::app::installSignalHandlers();
 
     std::string configPath;
     for (int i = 1; i < argc; ++i) {
@@ -77,7 +71,7 @@ int main(int argc, char** argv) {
     const auto start = std::chrono::steady_clock::now();
     auto lastPrint = start - config.statsInterval;  // 首个 tick 后立即打印一轮
 
-    while (g_running) {
+    while (theseed::app::gRunning) {
         const auto now = std::chrono::steady_clock::now();
         manager.tick(now);
 

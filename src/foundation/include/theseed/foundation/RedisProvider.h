@@ -58,6 +58,15 @@ public:
     // Distributed lock: returns true if acquired. Caller must call unlock().
     virtual bool lock(const std::string& key, RedisDuration ttl) = 0;
     virtual void unlock(const std::string& key) = 0;
+    // Renew an already-held lock's TTL. Default: assume renewal succeeded
+    // (providers without explicit renewal support must rely on a TTL long
+    // enough for their critical section). Returns false only when the caller
+    // definitively no longer holds the lock.
+    virtual bool renewLock(const std::string& key, RedisDuration ttl) {
+        (void)key;
+        (void)ttl;
+        return true;
+    }
 };
 
 // In-memory implementation with TTL expiry. Suitable for tests and
@@ -96,6 +105,7 @@ public:
 
     bool lock(const std::string& key, RedisDuration ttl) override;
     void unlock(const std::string& key) override;
+    bool renewLock(const std::string& key, RedisDuration ttl) override;
 
 private:
     struct StringEntry {

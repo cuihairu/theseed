@@ -13,6 +13,7 @@
 //     返回 1。
 
 #include <csignal>
+#include <charconv>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -31,12 +32,17 @@ inline void installSignalHandlers() {
 }
 
 inline std::optional<int> parseInt(const std::string& value) {
-    try {
-        return std::stoi(value);
-    } catch (const std::exception&) {
+    int parsed = 0;
+    const auto [ptr, ec] = std::from_chars(
+        value.data(), value.data() + value.size(), parsed);
+    // std::from_chars 不跳过前导空白、不接受 '+' / 十六进制前缀，且仅当
+    // 整个字符串被消费（ptr == end）才算合法；"42abc"→"42" 这类最长有效
+    // 前缀截断解析因此被拒绝，端口/组件号不再被静默截断。
+    if (ec != std::errc() || ptr != value.data() + value.size()) {
         std::cerr << "Invalid numeric argument: " << value << "\n";
         return std::nullopt;
     }
+    return parsed;
 }
 
 inline std::optional<std::uint16_t> parsePort(const std::string& value) {

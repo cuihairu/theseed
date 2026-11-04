@@ -23,6 +23,14 @@ public:
     struct Config final {
         std::int64_t capacity = 10;             // max tokens
         RedisDuration refillInterval = std::chrono::seconds(1);  // per token
+        // 分布式锁获取上限：超过则放弃本次消耗（返回 false），避免无界
+        // 忙等阻塞调用线程（活跃性回归）。零或负值表示不启用超时（仍等锁，
+        // 仅供测试显式控制）。
+        RedisDuration lockTimeout = std::chrono::seconds(2);
+        // 锁 TTL：临界区 get→refill→set 跨两次 Redis 往返，若持锁执行超过
+        // TTL 锁会提前过期，后到者并发进入临界区使读改写竞态复发。设置足够
+        // 大的初始 TTL，并在临界区内续期（若后端支持 renewLock）。
+        RedisDuration lockTtl = std::chrono::seconds(30);
     };
 
     explicit RateLimiter(std::shared_ptr<IRedisProvider> redis);

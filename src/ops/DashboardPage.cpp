@@ -109,6 +109,11 @@ async function poll(){
  const qo=prom["queue_backlog"]||0,qi=prom["inbound_queue_depth"]||0;
  txt("qout",qo);$("qin").textContent="inbound "+qi;
  const now=performance.now();
+ // 越限告警只在上升沿触发：qo 持续 >1000 期间每 2s 轮询不得重复刷屏。
+ // 首轮 poll（prev 为 null）队列已越限时也须告警——把 prev 缺失视为
+ // 基线 0，首次越限即视为从"未越限"上升，不吞掉首屏告警。
+ const prevQo=prev?(prev["queue_backlog"]||0):0;
+ if(qo>1000&&prevQo<=1000)pushAlarm("warn","queue_backlog = "+qo+"（>1000）");
  if(prev){
   const dt=(now-prevAt)/1000;
   const dSent=((prom["transport_messages_sent_total"]||0)-(prev["transport_messages_sent_total"]||0))/dt;
@@ -120,8 +125,6 @@ async function poll(){
   if(dSlow>0)pushAlarm("","slow_tick_count +"+dSlow+"（tick 超时）");
   const dBP=(prom["transport_backpressure_events_total"]||0)-(prev["transport_backpressure_events_total"]||0);
   if(dBP>0)pushAlarm("","backpressure events +"+dBP);
-  // 越限告警只在上升沿触发：qo 持续 >1000 期间每 2s 轮询不得重复刷屏。
-  if(qo>1000&&(prev["queue_backlog"]||0)<=1000)pushAlarm("warn","queue_backlog = "+qo+"（>1000）");
   const dEnt=(inspect.runtime.entity_count)-(prevEnt);
   if(dEnt<=-10)pushAlarm("warn","entity_count "+dEnt+"（骤降）");
  }

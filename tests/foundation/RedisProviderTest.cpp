@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <latch>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -462,20 +463,87 @@ static void test_rate_limiter_no_concurrent_over_admit() {
     RateLimiter::Config cfg;
     cfg.capacity = 1;
     cfg.refillInterval = std::chrono::seconds(60);
+    // 两读者用 latch 同时释放、同时进入 tryConsume，把"一者先完成再进入
+    // get"的概率性排除：未修复实现两读者必然交会读到同一份满桶快照而超发
+    // （确定性失败），修复后串行化保证后到者读到已扣减桶（确定性通过）。
+    std::latch start(2);
 
     std::atomic<int> allowed = 0;
     std::vector<std::thread> threads;
     threads.reserve(2);
     for (int i = 0; i < 2; ++i) {
         threads.emplace_back([&] {
+            start.wait();
             if (limiter.tryConsume("k", cfg)) allowed.fetch_add(1);
         });
     }
+    start.count_down(2);
     for (auto& thread : threads) thread.join();
     if (allowed.load() != 1) {
         FAIL("allowed=" + std::to_string(allowed.load()));
         return;
     }
+    PASS();
+}
+
+// 深审回归：tryConsume 的分布式锁获取循环原先无重试上限/超时，锁持续
+// 不可得（Redis 不可达 / 持锁者未释放且 TTL 未到）时调用线程永久忙等。
+// 修复后带 lockTimeout 上限：超时即放弃本次消耗（返回 false），不阻塞。
+static void test_rate_limiter_lock_timeout() {
+    TEST("test_rate_limiter_lock_timeout");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+    cfg.lockTimeout = std::chrono::milliseconds(1);
+
+    // 预先占住锁：lock 成功后另一 tryConsume 只能等锁，超时后放弃。
+    if (!redis->lock("rate:k:lock", RedisDuration(60000))) {
+        FAIL("pre-lock should succeed");
+        return;
+    }
+    if (limiter.tryConsume("k", cfg)) {
+        FAIL("lock timeout should return false, not block");
+        return;
+    }
+    redis->unlock("rate:k:lock");
+    if (!limiter.tryConsume("k", cfg)) {
+        FAIL("after unlock consume should succeed");
+        return;
+    }
+    PASS();
+}
+
+// 深审回归：分布式锁 TTL 固定且无续期时，临界区执行超 TTL 会提前过期，
+// 后到者再次获锁并发进入临界区使读改写竞态复发。修复后在临界区内续期，
+// 持锁者执行时长超过原 TTL 仍独占（续期成功），并发者不能进入。
+static void test_rate_limiter_lock_renewal() {
+    TEST("test_rate_limiter_lock_renewal");
+    auto redis = std::make_shared<InMemoryRedisProvider>();
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+    cfg.lockTtl = std::chrono::milliseconds(5);
+
+    // 直接验证 renewLock 续期语义：占锁后推进时钟越过原 TTL，续期前锁
+    // 已过期（不可再续），续期后锁 TTL 被延长。
+    if (!redis->lock("rate:k:lock", cfg.lockTtl)) {
+        FAIL("lock should succeed");
+        return;
+    }
+    redis->advanceClock(RedisDuration(3));  // 仍在 TTL 内
+    if (!redis->renewLock("rate:k:lock", cfg.lockTtl)) {
+        FAIL("renewLock within TTL should succeed");
+        return;
+    }
+    redis->advanceClock(RedisDuration(3));  // 续期后 TTL 重新起算，仍有效
+    if (redis->lock("rate:k:lock", cfg.lockTtl)) {
+        FAIL("renewed lock should still be held");
+        return;
+    }
+    redis->unlock("rate:k:lock");
     PASS();
 }
 
@@ -656,6 +724,8 @@ int main() {
     test_rate_limiter_refills_over_time();
     test_rate_limiter_sub_ms_refill_clamped();
     test_rate_limiter_no_concurrent_over_admit();
+    test_rate_limiter_lock_timeout();
+    test_rate_limiter_lock_renewal();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();

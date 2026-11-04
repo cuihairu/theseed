@@ -29,8 +29,17 @@ bool RateLimiter::tryConsume(const std::string& key,
 
     const auto rk = redisKey(key);
     const auto lockKey = rk + ":lock";
-    const auto lockTtl = std::chrono::seconds(1);
+    // 锁获取带超时上限：锁不可用（Redis 不可达 / 持锁者未释放且 TTL 未到）
+    // 时不再永久忙等，避免调用线程被无界阻塞（活跃性回归）。超时后放弃本次
+    // 消耗并返回 false，调用方按"被限流"处理。
+    const auto lockTtl = config.lockTtl;
+    const auto lockTimeout = config.lockTimeout;
+    const auto lockStart = std::chrono::steady_clock::now();
     while (!redis_->lock(lockKey, lockTtl)) {
+        if (lockTimeout > RedisDuration::zero() &&
+            std::chrono::steady_clock::now() - lockStart >= lockTimeout) {
+            return false;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     struct UnlockGuard {
@@ -44,6 +53,13 @@ bool RateLimiter::tryConsume(const std::string& key,
     if (auto blob = redis_->get(rk)) {
         auto decoded = decode(*blob);
         if (decoded) state = *decoded;
+    }
+    // 续期（同步版）：临界区跨 get→refill→set 两次 Redis 往返，若执行
+    // 超过 lockTtl 锁会提前过期，后到者再次获锁并发进入临界区使读改写
+    // 竞态复发。在 get 后、set 前各续期一次（若后端支持）；续期失败说明
+    // 锁已过期被并发者夺走，放弃本次消耗避免无锁保护下继续读改写。
+    if (!redis_->renewLock(lockKey, lockTtl)) {
+        return false;
     }
     if (state.tokens == 0.0 && state.lastTouch.time_since_epoch().count() == 0) {
         // First touch: start full.

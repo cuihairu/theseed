@@ -165,4 +165,13 @@ void InMemoryRedisProvider::unlock(const std::string& key) {
     locks_.erase(key);
 }
 
+bool InMemoryRedisProvider::renewLock(const std::string& key, RedisDuration ttl) {
+    const std::lock_guard lock(mutex_);
+    auto it = locks_.find(key);
+    // 锁已不存在或已过期：续期失败（调用方应放弃临界区，避免竞态复发）。
+    if (it == locks_.end() || now_ >= it->second.expiresAt) return false;
+    it->second.expiresAt = now_ + ttl;
+    return true;
+}
+
 }  // namespace theseed::foundation
