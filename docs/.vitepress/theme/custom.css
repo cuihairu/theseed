@@ -75,11 +75,12 @@ code {
   }
 }
 
-/* 表格横向滚动：滚动由主题 JS（theme/index.ts）包进的 .table-scroll 容器
-   承担；表格本体恢复 display:table——VitePress 默认对 .vp-doc table 设
-   display:block（可访问性树失去行列语义），被包裹后必须还原，屏幕阅读器
-   才能识别行列。包裹由 SSG 期 transformHtml（config.ts）完成，因此预渲染
-   HTML 与 JS 失败时表格同样已包裹，无需客户端依赖（审计发现 custom.css:90）。
+/* 表格横向滚动：包裹由 markdown-it renderer（config.ts markdown.config）在
+   渲染期把 <table> 包进 .table-scroll 容器完成，dev server、SSG build、客户端
+   路由切换共用同一 markdown 实例，三条路径一致生效；表格本体恢复
+   display:table——VitePress 默认对 .vp-doc table 设 display:block（可访问性树
+   失去行列语义），被包裹后必须还原，屏幕阅读器才能识别行列。无需客户端
+   JS/观察器（审计发现 config.ts:124、custom.css:90）。
    .table-scroll > table 仅命中已包裹表，未包裹表保持 VitePress 默认
    display:block 的横向滚动，不重复设 display:table。 */
 .vp-doc .table-scroll {
