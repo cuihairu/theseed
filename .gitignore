@@ -82,3 +82,4 @@ docs/.vitepress/cache/
 # 单元/E2E 测试在源码树根运行时残留的 file 后端存储目录
 test_dbapp_e2e_store*/
 test_login_e2e_store*/
+test_bots_e2e_defs/

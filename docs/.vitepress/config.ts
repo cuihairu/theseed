@@ -106,8 +106,22 @@ function zhSidebar() {
   return JSON.parse(JSON.stringify(rootSidebar).replace(/"link": "\/design\//g, '"link": "/zh/design/'))
 }
 
+// 表格横向滚动：VitePress 默认对 .vp-doc table 设 display:block，会把表格
+// 从可访问性树里抹掉（屏幕阅读器失去行列语义）。此前方案在客户端 JS 里把
+// 表格搬进自建滚动容器，但搬移 Vue 管理的节点引入补丁/路由不一致风险，且
+// 预渲染 HTML 在 JS 失败时表格仍是 display:block。改为构建期把每张 <table>
+// 包进 .table-scroll 容器：SSG 产物即含语义还原，客户端零 JS、零观察器、
+// 渐进增强（审计发现 index.ts:17/29、custom.css:90）。
+function wrapTablesInHtml(code: string): string {
+  return code.replace(/<table([^>]*)>([\s\S]*?)<\/table>/g, (_m, attrs, inner) => {
+    return `<div class="table-scroll"><table${attrs}>${inner}</table></div>`
+  })
+}
+
 export default withMermaid(defineConfig({
   base: '/theseed/',
+
+  transformHtml: wrapTablesInHtml,
 
   markdown: {
     html: false,

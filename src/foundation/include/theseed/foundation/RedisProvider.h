@@ -76,12 +76,16 @@ public:
                            RedisDuration ttl) = 0;
     // Atomic write-under-ownership: store `value` at `key` only if `token`
     // still owns the lock at `lockKey`, extending that lock's TTL in the same
-    // atomic step. Returns false when ownership was lost — nothing is written
-    // and the new owner's state is left untouched. This closes the race where
-    // a separate renewLock succeeded but the lock expired before a plain set
-    // landed, letting the stale holder overwrite the new holder's state. A
-    // real Redis backend implements this as one Lua script (token check + SET
-    // + PEXPIRE); the value is stored without expiry.
+    // atomic step. Returns false when ownership was lost or the write could
+    // not be completed — nothing is written and any other owner's state is
+    // left untouched. This closes the race where a separate renewLock
+    // succeeded but the lock expired before a plain set landed, letting the
+    // stale holder overwrite the new holder's state. In-memory
+    // implementations use one mutex-protected critical section; production
+    // Redis implementations must preserve the same all-or-nothing semantics
+    // (a single script or transaction), and callers must treat a `false`
+    // result as "this round is lost" — they cannot distinguish ownership
+    // loss from a backend error.
     virtual bool setIfLockOwner(const std::string& lockKey,
                                 const LockToken& token,
                                 const std::string& key,

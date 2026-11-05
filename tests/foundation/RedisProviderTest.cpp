@@ -1,4 +1,5 @@
 #include "theseed/foundation/RateLimiter.h"
+#include "theseed/foundation/Logger.h"
 #include "theseed/foundation/RedisProvider.h"
 #include "theseed/foundation/SessionStore.h"
 
@@ -18,11 +19,16 @@
 #include <vector>
 
 using theseed::foundation::InMemoryRedisProvider;
+using theseed::foundation::ILogger;
+using theseed::foundation::LogLevel;
+using theseed::foundation::LogRecord;
 using theseed::foundation::RateLimiter;
 using theseed::foundation::RedisDuration;
 using theseed::foundation::SessionStore;
 using theseed::foundation::SessionView;
 using theseed::foundation::StoredSession;
+using theseed::foundation::setGlobalLogger;
+using theseed::foundation::takeGlobalLogger;
 
 static int testsPassed = 0;
 static int testsFailed = 0;
@@ -510,9 +516,12 @@ class LockStealingRateLimitProvider final
     : public theseed::foundation::IRedisProvider {
 public:
     enum class StealStage { BeforeFirstRenewal, AfterFirstRenewal, AtWrite };
+    enum class WriteBackFailure { None, Insufficient };
 
     explicit LockStealingRateLimitProvider(StealStage stage)
         : stage_(stage) {}
+    explicit LockStealingRateLimitProvider(WriteBackFailure failure)
+        : failure_(failure) {}
 
     bool set(const std::string& key,
              const std::string& value,
@@ -588,6 +597,10 @@ public:
                         const std::string& key,
                         const std::string& value,
                         RedisDuration lockTtl) override {
+        if (failure_ == WriteBackFailure::Insufficient) {
+            ++writeBackFailureCount_;
+            return false;
+        }
         if (stage_ == StealStage::AtWrite && !stolen_) {
             stealLock(lockKey, lockTtl);
             stolen_ = true;
@@ -596,6 +609,7 @@ public:
     }
 
     int setCalls() const { return setCalls_; }
+    int writeBackFailureCount() const { return writeBackFailureCount_; }
     // 新持有者的锁在本次消耗结束后是否仍完好（未被旧持有者的写回破坏）。
     bool stolenLockStillHeld(RedisDuration ttl) {
         return stolenToken_.has_value() &&
@@ -618,7 +632,58 @@ private:
     bool stolen_ = false;
     int renewCalls_ = 0;
     int setCalls_ = 0;
+    WriteBackFailure failure_ = WriteBackFailure::None;
+    int writeBackFailureCount_ = 0;
 };
+
+// 深审回归：桶不足臂的 refill 写回失败必须留下可观测日志，而非被静默
+// 丢弃——未修复实现忽略 setIfLockOwner 返回值，写回失败无日志/计数，
+// 错误被掩盖。断言以 CapturingLogger 捕获 warn 记录为准。
+static void test_rate_limiter_insufficient_write_back_failure() {
+    TEST("test_rate_limiter_insufficient_write_back_failure");
+    class CapturingLogger final : public ILogger {
+    public:
+        void log(LogRecord record) override {
+            if (record.level == LogLevel::Warn) {
+                warns += record.message;
+                warns += '|';
+            }
+        }
+        void setLevel(LogLevel) override {}
+        LogLevel level() const override { return LogLevel::Debug; }
+        std::string warns;
+    };
+
+    auto original = takeGlobalLogger();
+    auto capture = std::make_shared<CapturingLogger>();
+    setGlobalLogger(capture);
+
+    auto redis = std::make_shared<LockStealingRateLimitProvider>(
+        LockStealingRateLimitProvider::WriteBackFailure::Insufficient);
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    if (limiter.tryConsume("k", cfg, 2)) {
+        FAIL("insufficient bucket must not be allowed");
+        setGlobalLogger(original);
+        return;
+    }
+    if (redis->writeBackFailureCount() != 1) {
+        FAIL("insufficient arm must attempt refill write-back exactly once, got " +
+             std::to_string(redis->writeBackFailureCount()));
+        setGlobalLogger(original);
+        return;
+    }
+    if (capture->warns.find("write-back failed") == std::string::npos) {
+        FAIL("insufficient write-back failure must be logged, got: " + capture->warns);
+        setGlobalLogger(original);
+        return;
+    }
+    setGlobalLogger(original);
+    PASS();
+}
 
 static void test_rate_limiter_no_concurrent_over_admit() {
     TEST("test_rate_limiter_no_concurrent_over_admit");
@@ -1087,6 +1152,7 @@ int main() {
     test_rate_limiter_lock_stolen_after_first_renewal();
     test_rate_limiter_lock_stolen_insufficient_bucket();
     test_rate_limiter_lock_stolen_between_renewal_and_write();
+    test_rate_limiter_insufficient_write_back_failure();
     test_redis_set_if_lock_owner_atomic();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();

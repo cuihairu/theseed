@@ -74,21 +74,25 @@ code {
     max-width: 960px !important;
   }
 }
-@media (min-width: 1440px) {
-  .VPDoc:not(.has-sidebar) .content {
-    max-width: 960px !important;
-  }
-}
 
 /* 表格横向滚动：滚动由主题 JS（theme/index.ts）包进的 .table-scroll 容器
    承担；表格本体恢复 display:table——VitePress 默认对 .vp-doc table 设
    display:block（可访问性树失去行列语义），被包裹后必须还原，屏幕阅读器
-   才能识别行列（审计发现 custom.css:72）。 */
+   才能识别行列。包裹由 SSG 期 transformHtml（config.ts）完成，因此预渲染
+   HTML 与 JS 失败时表格同样已包裹，无需客户端依赖（审计发现 custom.css:90）。
+   .table-scroll > table 仅命中已包裹表，未包裹表保持 VitePress 默认
+   display:block 的横向滚动，不重复设 display:table。 */
 .vp-doc .table-scroll {
   overflow-x: auto;
 }
 .vp-doc .table-scroll > table {
   display: table;
   overflow-x: visible;
+}
+
+/* 渐进增强兜底：若某表格因任何原因未被 SSG 包裹（如客户端动态插入），
+   仍让 VitePress 默认 display:block 承担横向滚动，避免布局溢出。 */
+.vp-doc table {
+  overflow-x: auto;
 }
 

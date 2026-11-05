@@ -1,5 +1,7 @@
 #include "theseed/foundation/RateLimiter.h"
 
+#include "theseed/foundation/Logger.h"
+
 #include <algorithm>
 #include <chrono>
 #include <functional>
@@ -88,15 +90,23 @@ bool RateLimiter::tryConsume(const std::string& key,
     // 写回不再走「续期 + 裸 set」两步：续期成功后锁仍可能在 set 执行前
     // 过期被并发者夺走，旧持有者的裸 set 会覆盖新持有者的桶状态造成超额
     // 放行。setIfLockOwner 把「所有权校验 → 写回 → 续期」合成一步原子操作
-    // （真实 Redis 后端用单条 Lua 脚本实现），写回本身即最后一次所有权
-    // 校验点：令牌失配即拒绝写入并放弃本次消耗。
+    //（生产 Redis 后端必须用单条脚本或事务实现同一原子性——见 IRedisProvider
+    // 契约），写回本身即最后一次所有权校验点：令牌失配即拒绝写入并放弃
+    // 本次消耗。
     if (state.tokens < static_cast<double>(cost)) {
-        // 桶不足：refill 结果仍需写回，但本次消耗不成立。
-        redis_->setIfLockOwner(lockKey, *lockToken, rk, encode(state), lockTtl);
+        // 桶不足：refill 结果仍需写回，但本次消耗不成立。与消耗臂一致，
+        // 写回失败即放弃本次结果；失败必须留下日志（含 trace 上下文），
+        // 避免真实后端因非所有权原因（网络/Lua 错误）写回失败时错误被
+        // 静默掩盖、refill 结果被无声丢弃。
+        if (!redis_->setIfLockOwner(lockKey, *lockToken, rk, encode(state), lockTtl)) {
+            logWarn("rate limiter write-back failed on insufficient bucket: " + key);
+            return false;
+        }
         return false;
     }
     state.tokens -= static_cast<double>(cost);
     if (!redis_->setIfLockOwner(lockKey, *lockToken, rk, encode(state), lockTtl)) {
+        logWarn("rate limiter write-back failed on consume: " + key);
         return false;
     }
     return true;
