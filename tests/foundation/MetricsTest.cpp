@@ -55,7 +55,7 @@ static void testCounterOnExistingGauge() {
     TEST("counter on existing gauge name rebuilds as counter");
     MetricsRegistry::instance().reset();
     auto& g = MetricsRegistry::instance().gauge("conflict_metric");
-    g.set(7.0);
+    g.set(7);
     auto& c = MetricsRegistry::instance().counter("conflict_metric", "rebuilt counter");
     bool ok = c.value() == 0.0;
     ok = ok && MetricsRegistry::instance().gauge("conflict_metric").value() == 0.0;
