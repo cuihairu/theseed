@@ -278,5 +278,10 @@ int main() {
     mgr.stop();
     baseApp.detach(scheduler);
     cellApp.detach(scheduler);
+    // 节点也要显式注销：baseNode/cellNode 声明在 scheduler 之前，反序析构时
+    // scheduler 已销毁，~NetworkNode 的 detach 会读到已释放的 tickable 向量
+    //（ASan heap-use-after-free）。
+    baseNode->detach(scheduler);
+    cellNode->detach(scheduler);
     return testsFailed == 0 ? 0 : 1;
 }
