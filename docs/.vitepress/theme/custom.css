@@ -91,7 +91,7 @@ code {
   overflow-x: visible;
 }
 
-/* 渐进增强兜底：若某表格因任何原因未被 SSG 包裹（如客户端动态插入），
+/* 渐进增强兜底：若某表格因任何原因未被 renderer 包裹（如客户端动态插入），
    仍让 VitePress 默认 display:block 承担横向滚动，避免布局溢出。 */
 .vp-doc table {
   overflow-x: auto;
