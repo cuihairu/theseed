@@ -57,19 +57,38 @@ code {
 .vp-doc div[class*='language-'] pre,
 .vp-doc div[class*='language-'] pre code {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
-.VPDoc .container > .content {
-  max-width: 960px !important;
+
+/* 内容加宽：只在 VitePress 自身设宽度上限的同档断点内覆盖，窄屏/带侧栏
+   场景保留默认响应式宽度（审计发现：无断点 !important 硬覆盖有布局风险）。
+   !important 保留是因为 VPDoc.vue 的 scoped 样式带 [data-v] 属性，特异度
+   高于普通类选择器，不用 !important 无法稳定胜出。 */
+@media (min-width: 960px) {
+  .VPDoc:not(.has-sidebar) .content {
+    max-width: 960px !important;
+  }
 }
-.VPDoc:not(.has-sidebar) .content {
-  max-width: 960px !important;
+@media (min-width: 1280px) {
+  .VPDoc.has-aside .content-container {
+    max-width: 960px !important;
+  }
 }
-.VPDoc.has-aside .content-container {
-  max-width: 960px !important;
+@media (min-width: 1440px) {
+  .VPDoc:not(.has-sidebar) .content {
+    max-width: 960px !important;
+  }
 }
-.vp-doc table {
-  display: block;
+
+/* 表格横向滚动：滚动由主题 JS（theme/index.ts）包进的 .table-scroll 容器
+   承担；表格本体恢复 display:table——VitePress 默认对 .vp-doc table 设
+   display:block（可访问性树失去行列语义），被包裹后必须还原，屏幕阅读器
+   才能识别行列（审计发现 custom.css:72）。 */
+.vp-doc .table-scroll {
   overflow-x: auto;
+}
+.vp-doc .table-scroll > table {
+  display: table;
+  overflow-x: visible;
 }
 
