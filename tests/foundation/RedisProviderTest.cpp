@@ -515,7 +515,7 @@ private:
 class LockStealingRateLimitProvider final
     : public theseed::foundation::IRedisProvider {
 public:
-    enum class StealStage { BeforeFirstRenewal, AfterFirstRenewal, AtWrite };
+    enum class StealStage { None, BeforeFirstRenewal, AfterFirstRenewal, AtWrite };
     enum class WriteBackFailure { None, Insufficient };
 
     explicit LockStealingRateLimitProvider(StealStage stage)
@@ -624,7 +624,7 @@ private:
         stolenLockKey_ = key;
     }
 
-    StealStage stage_;
+    StealStage stage_ = StealStage::None;
     InMemoryRedisProvider inner_;
     RedisDuration lockTtl_ = RedisDuration(1);
     std::optional<LockToken> stolenToken_;
