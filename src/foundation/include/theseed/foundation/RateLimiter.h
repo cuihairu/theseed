@@ -27,9 +27,10 @@ public:
         // 忙等阻塞调用线程（活跃性回归）。零或负值表示不启用超时（仍等锁，
         // 仅供测试显式控制）。
         RedisDuration lockTimeout = std::chrono::seconds(2);
-        // 锁 TTL：临界区 get→refill→set 跨两次 Redis 往返，若持锁执行超过
-        // TTL 锁会提前过期，后到者并发进入临界区使读改写竞态复发。设置足够
-        // 大的初始 TTL，并在临界区内续期（若后端支持 renewLock）。
+        // 锁 TTL：临界区 get→refill→原子写回（所有权校验+写值+续期一步完成）
+        // 跨多次 Redis 往返，若持锁执行超过 TTL 锁会提前过期，后到者并发
+        // 进入临界区使读改写竞态复发。设置足够大的初始 TTL，并在临界区内
+        // 续期（若后端支持 renewLock）。
         RedisDuration lockTtl = std::chrono::seconds(30);
     };
 

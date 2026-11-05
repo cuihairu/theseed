@@ -376,6 +376,13 @@ public:
                    foundation::RedisDuration ttl) override {
         return inner_->renewLock(key, token, ttl);
     }
+    bool setIfLockOwner(const std::string& lockKey,
+                        const foundation::IRedisProvider::LockToken& token,
+                        const std::string& key,
+                        const std::string& value,
+                        foundation::RedisDuration lockTtl) override {
+        return inner_->setIfLockOwner(lockKey, token, key, value, lockTtl);
+    }
 
 private:
     // 后缀命中即失败一次（消费掉）：模拟并发窗口里单个键的一次动作失败。

@@ -481,6 +481,17 @@ public:
                    RedisDuration) override {
         return true;
     }
+    bool setIfLockOwner(const std::string& lockKey,
+                        const theseed::foundation::IRedisProvider::LockToken& token,
+                        const std::string& key,
+                        const std::string& value,
+                        RedisDuration) override {
+        const std::lock_guard lock(mutex_);
+        const auto it = locks_.find(lockKey);
+        if (it == locks_.end() || it->second != token) return false;
+        kv_[key] = value;
+        return true;
+    }
 
 private:
     std::mutex mutex_;
@@ -498,7 +509,7 @@ private:
 class LockStealingRateLimitProvider final
     : public theseed::foundation::IRedisProvider {
 public:
-    enum class StealStage { BeforeFirstRenewal, AfterFirstRenewal };
+    enum class StealStage { BeforeFirstRenewal, AfterFirstRenewal, AtWrite };
 
     explicit LockStealingRateLimitProvider(StealStage stage)
         : stage_(stage) {}
@@ -507,6 +518,10 @@ public:
              const std::string& value,
              RedisDuration ttl) override {
         ++setCalls_;
+        if (stage_ == StealStage::AtWrite && !stolen_) {
+            stealLock(key + ":lock", lockTtl_);
+            stolen_ = true;
+        }
         return inner_.set(key, value, ttl);
     }
     std::optional<std::string> get(const std::string& key) override {
@@ -565,19 +580,42 @@ public:
         return inner_.unlock(key, token);
     }
 
+    // AtWrite：在「最后一次续期成功之后、写回落地之前」的窗口里把锁偷走，
+    // 再转发本次原子写回。旧令牌必须被 setIfLockOwner 的所有权校验拒绝；
+    // 未修复实现（裸 set）会照写不误、覆盖新持有者的桶状态。
+    bool setIfLockOwner(const std::string& lockKey,
+                        const LockToken& token,
+                        const std::string& key,
+                        const std::string& value,
+                        RedisDuration lockTtl) override {
+        if (stage_ == StealStage::AtWrite && !stolen_) {
+            stealLock(lockKey, lockTtl);
+            stolen_ = true;
+        }
+        return inner_.setIfLockOwner(lockKey, token, key, value, lockTtl);
+    }
+
     int setCalls() const { return setCalls_; }
+    // 新持有者的锁在本次消耗结束后是否仍完好（未被旧持有者的写回破坏）。
+    bool stolenLockStillHeld(RedisDuration ttl) {
+        return stolenToken_.has_value() &&
+               inner_.renewLock(stolenLockKey_, *stolenToken_, ttl);
+    }
 
 private:
     void stealLock(const std::string& key, RedisDuration ttl) {
         inner_.advanceClock(lockTtl_);
         inner_.del(key);
         stolenToken_ = inner_.lock(key, ttl);
+        stolenLockKey_ = key;
     }
 
     StealStage stage_;
     InMemoryRedisProvider inner_;
     RedisDuration lockTtl_ = RedisDuration(1);
     std::optional<LockToken> stolenToken_;
+    std::string stolenLockKey_;
+    bool stolen_ = false;
     int renewCalls_ = 0;
     int setCalls_ = 0;
 };
@@ -784,6 +822,85 @@ static void test_rate_limiter_lock_stolen_insufficient_bucket() {
     PASS();
 }
 
+// 深审回归：setIfLockOwner 原子写回语义——令牌仍属当前持有者时写入并
+// 顺带续期锁；令牌失配或锁已消失时拒绝写入且不碰任何数据。真实 Redis
+// 后端应以单条 Lua 脚本（token 校验 + SET + PEXPIRE）实现同一原子性。
+static void test_redis_set_if_lock_owner_atomic() {
+    TEST("test_redis_set_if_lock_owner_atomic");
+    InMemoryRedisProvider r;
+    const auto ttl = std::chrono::milliseconds(5);
+
+    auto owner = r.lock("rate:k:lock", ttl);
+    if (!owner) { FAIL("owner lock should succeed"); return; }
+    r.advanceClock(RedisDuration(2));  // 距原过期还剩 3ms
+    if (!r.setIfLockOwner("rate:k:lock", *owner, "rate:k", "blob", ttl)) {
+        FAIL("owner write should succeed");
+        return;
+    }
+    if (auto v = r.get("rate:k"); !v || *v != "blob") {
+        FAIL("atomic write should store the value");
+        return;
+    }
+    // 写回把锁续到 now+5（原口径 now+3 已过）：推进 4ms 后锁仍活着证明
+    // 续期生效；未续期的锁在此刻早已过期。
+    r.advanceClock(RedisDuration(4));
+    if (!r.renewLock("rate:k:lock", *owner, ttl)) {
+        FAIL("atomic write should extend the lock TTL");
+        return;
+    }
+
+    r.advanceClock(RedisDuration(6));  // 全部锁过期，后到者重新持有
+    auto newcomer = r.lock("rate:k:lock", ttl);
+    if (!newcomer) { FAIL("newcomer should re-acquire after expiry"); return; }
+    if (!r.setIfLockOwner("rate:k:lock", *newcomer, "rate:k", "fresh", ttl)) {
+        FAIL("newcomer write should succeed");
+        return;
+    }
+    // 旧令牌的原子写回必须被拒绝，且不得覆盖新持有者的数据。
+    if (r.setIfLockOwner("rate:k:lock", *owner, "rate:k", "stale", ttl)) {
+        FAIL("stale token must not write");
+        return;
+    }
+    if (auto v = r.get("rate:k"); !v || *v != "fresh") {
+        FAIL("rejected write must not touch stored state");
+        return;
+    }
+    // 锁完全消失（已过期回收/从未持有）时同样拒绝。
+    if (r.setIfLockOwner("rate:none:lock", "ghost", "rate:none", "x", ttl)) {
+        FAIL("missing lock must refuse the write");
+        return;
+    }
+    PASS();
+}
+
+// 深审回归：最后一次续期成功后、写回执行前锁过期被后到者夺走——
+// 「续期 + 裸 set」两步写回在该窗口会把新持有者的桶状态覆盖掉（超额放行
+// 复发）。修复后写回用 setIfLockOwner 原子完成，写回本身即所有权校验点：
+// 旧令牌的写回被拒绝，本次消耗放弃，新持有者的锁与数据完好。
+static void test_rate_limiter_lock_stolen_between_renewal_and_write() {
+    TEST("test_rate_limiter_lock_stolen_between_renewal_and_write");
+    auto redis = std::make_shared<LockStealingRateLimitProvider>(
+        LockStealingRateLimitProvider::StealStage::AtWrite);
+    RateLimiter limiter(redis);
+    RateLimiter::Config cfg;
+    cfg.capacity = 1;
+    cfg.refillInterval = std::chrono::seconds(60);
+
+    if (limiter.tryConsume("k", cfg)) {
+        FAIL("consume must be refused when lock is stolen before write-back");
+        return;
+    }
+    if (redis->setCalls() != 0) {
+        FAIL("no plain set may occur once ownership is lost");
+        return;
+    }
+    if (!redis->stolenLockStillHeld(std::chrono::milliseconds(5))) {
+        FAIL("new owner's lock must survive the rejected write");
+        return;
+    }
+    PASS();
+}
+
 static void test_redis_zrange_score_tie_break_by_member() {
     TEST("test_redis_zrange_score_tie_break_by_member");
     InMemoryRedisProvider r;
@@ -969,6 +1086,8 @@ int main() {
     test_rate_limiter_lock_stolen_before_first_renewal();
     test_rate_limiter_lock_stolen_after_first_renewal();
     test_rate_limiter_lock_stolen_insufficient_bucket();
+    test_rate_limiter_lock_stolen_between_renewal_and_write();
+    test_redis_set_if_lock_owner_atomic();
     test_rate_limiter_reset();
     test_rate_limiter_independent_keys();
     test_rate_limiter_available_tokens();

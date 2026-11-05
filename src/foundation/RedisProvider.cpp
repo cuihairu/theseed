@@ -186,4 +186,25 @@ bool InMemoryRedisProvider::renewLock(const std::string& key,
     return true;
 }
 
+bool InMemoryRedisProvider::setIfLockOwner(const std::string& lockKey,
+                                           const LockToken& token,
+                                           const std::string& key,
+                                           const std::string& value,
+                                           RedisDuration lockTtl) {
+    // 单把互斥锁内完成「所有权校验 → 写值 → 续期」，等价于真实 Redis 的
+    // 单条 Lua 脚本：调用方拿到的成功即代表写入时仍持有锁，不存在
+    // 校验与写入之间被并发者夺锁的窗口。
+    const std::lock_guard lock(mutex_);
+    reapExpired();
+    auto it = locks_.find(lockKey);
+    if (it == locks_.end() || it->second.token != token) {
+        return false;
+    }
+    StringEntry e;
+    e.value = value;
+    strings_[key] = std::move(e);
+    it->second.expiresAt = now_ + lockTtl;
+    return true;
+}
+
 }  // namespace theseed::foundation

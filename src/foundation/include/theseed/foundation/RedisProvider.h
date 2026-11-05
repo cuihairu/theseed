@@ -74,6 +74,19 @@ public:
     virtual bool renewLock(const std::string& key,
                            const LockToken& token,
                            RedisDuration ttl) = 0;
+    // Atomic write-under-ownership: store `value` at `key` only if `token`
+    // still owns the lock at `lockKey`, extending that lock's TTL in the same
+    // atomic step. Returns false when ownership was lost — nothing is written
+    // and the new owner's state is left untouched. This closes the race where
+    // a separate renewLock succeeded but the lock expired before a plain set
+    // landed, letting the stale holder overwrite the new holder's state. A
+    // real Redis backend implements this as one Lua script (token check + SET
+    // + PEXPIRE); the value is stored without expiry.
+    virtual bool setIfLockOwner(const std::string& lockKey,
+                                const LockToken& token,
+                                const std::string& key,
+                                const std::string& value,
+                                RedisDuration lockTtl) = 0;
 };
 
 // In-memory implementation with TTL expiry. Suitable for tests and
@@ -116,6 +129,11 @@ public:
     bool renewLock(const std::string& key,
                    const LockToken& token,
                    RedisDuration ttl) override;
+    bool setIfLockOwner(const std::string& lockKey,
+                        const LockToken& token,
+                        const std::string& key,
+                        const std::string& value,
+                        RedisDuration lockTtl) override;
 
 private:
     struct StringEntry {

@@ -100,6 +100,13 @@ public:
                    RedisDuration) override {
         return true;
     }
+    bool setIfLockOwner(const std::string&,
+                        const IRedisProvider::LockToken&,
+                        const std::string&,
+                        const std::string&,
+                        RedisDuration) override {
+        return true;
+    }
 
     bool failSet = false;
     bool failZadd = false;

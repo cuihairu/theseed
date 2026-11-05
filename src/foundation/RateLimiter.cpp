@@ -59,11 +59,11 @@ bool RateLimiter::tryConsume(const std::string& key,
         auto decoded = decode(*blob);
         if (decoded) state = *decoded;
     }
-    // 续期（同步版）：临界区跨 get→refill→set 两次 Redis 往返，若执行
+    // 续期（同步版）：临界区跨 get→refill→写回多次 Redis 往返，若执行
     // 超过 lockTtl 锁会提前过期，后到者再次获锁并发进入临界区使读改写
-    // 竞态复发。在 get 后、set 前各续期一次；续期失败（含令牌不匹配，
-    // 即锁已被并发者重新持有）说明不再独占，放弃本次消耗避免无锁保护
-    // 下继续读改写。
+    // 竞态复发。get 后续期一次维持锁活跃；续期失败（含令牌不匹配，即锁
+    // 已被并发者重新持有）说明不再独占，放弃本次消耗避免无锁保护下继续
+    // 读改写。写回本身由 setIfLockOwner 原子完成（见下）。
     if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
         return false;
     }
@@ -85,18 +85,20 @@ bool RateLimiter::tryConsume(const std::string& key,
     state.tokens = std::min(static_cast<double>(config.capacity), state.tokens + refilled);
     state.lastTouch = now;
 
+    // 写回不再走「续期 + 裸 set」两步：续期成功后锁仍可能在 set 执行前
+    // 过期被并发者夺走，旧持有者的裸 set 会覆盖新持有者的桶状态造成超额
+    // 放行。setIfLockOwner 把「所有权校验 → 写回 → 续期」合成一步原子操作
+    // （真实 Redis 后端用单条 Lua 脚本实现），写回本身即最后一次所有权
+    // 校验点：令牌失配即拒绝写入并放弃本次消耗。
     if (state.tokens < static_cast<double>(cost)) {
-        if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
-            return false;
-        }
-        redis_->set(rk, encode(state), RedisDuration::zero());
+        // 桶不足：refill 结果仍需写回，但本次消耗不成立。
+        redis_->setIfLockOwner(lockKey, *lockToken, rk, encode(state), lockTtl);
         return false;
     }
     state.tokens -= static_cast<double>(cost);
-    if (!redis_->renewLock(lockKey, *lockToken, lockTtl)) {
+    if (!redis_->setIfLockOwner(lockKey, *lockToken, rk, encode(state), lockTtl)) {
         return false;
     }
-    redis_->set(rk, encode(state), RedisDuration::zero());
     return true;
 }
 
