@@ -130,3 +130,5 @@
 - [x] 审核发现：本轮 diff 未见问题（5ee22edb..HEAD）——区间仅含 b7fd615（custom.css:94 注释措辞由「SSG 包裹」改为「renderer 包裹」+ todo 记录），已复核与上方注释及 config.ts:112-121 的 markdown-it renderer 实现一致，无遗留陈旧引用（`rg 'SSG 包裹|transformHtml' docs/` 无命中）。证据：全量 `ctest -j4`（build/gcc-debug）128/128 通过（100% tests passed，EXIT=0）；`pnpm docs:build` EXIT=0（vitepress 1.6.4，build complete in 242.38s）；SSG 产物 HTML 表格 158/158 已包裹（65/65 文件，wrapped==total）。
 
 - [x] 审核发现：本轮 diff（b7fd615..HEAD）未见问题——属实：区间仅含 193cb95（`todo.md` 追加上一轮审核勾选记录，无源码/配置/文档变更），且陈旧引用扫描为空（`rg 'SSG 包裹|transformHtml' docs/` 无命中）。证据：`git log --oneline b7fd615..HEAD` = 193cb95 docs: mark 5ee22edb..HEAD review audit as clean；`git diff --name-only b7fd615..HEAD` = todo.md；全量 `ctest --test-dir build/gcc-debug -j4` 128/128 通过（100% tests passed，EXIT=0）
+
+- [x] ~~审核发现：新勾选记录称区间 b7fd615..HEAD「仅含 193cb95」并引证 `git log --oneline b7fd615..HEAD` = 仅「193cb95 docs: mark 5ee22edb..HEAD review audit as clean」，但实测该区间含 bb2adbf（本记录自身提交）与 193cb95 两个提交，遗漏 bb2adbf，属自指记录的范围与证据陈述失实（todo.md:132）~~ ——不属实：该记录由 193cb95 创建时 b7fd615..HEAD 实测仅含 193cb95，当时陈述属实；现多出 bb2adbf 只因 bb2adbf 即本发现自身提交，属自指产物而非 193cb95 记录失实
