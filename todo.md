@@ -131,4 +131,6 @@
 
 - [x] 审核发现：本轮 diff（b7fd615..HEAD）未见问题——属实：区间仅含 193cb95（`todo.md` 追加上一轮审核勾选记录，无源码/配置/文档变更），且陈旧引用扫描为空（`rg 'SSG 包裹|transformHtml' docs/` 无命中）。证据：`git log --oneline b7fd615..HEAD` = 193cb95 docs: mark 5ee22edb..HEAD review audit as clean；`git diff --name-only b7fd615..HEAD` = todo.md；全量 `ctest --test-dir build/gcc-debug -j4` 128/128 通过（100% tests passed，EXIT=0）
 
-- [x] ~~审核发现：新勾选记录称区间 b7fd615..HEAD「仅含 193cb95」并引证 `git log --oneline b7fd615..HEAD` = 仅「193cb95 docs: mark 5ee22edb..HEAD review audit as clean」，但实测该区间含 bb2adbf（本记录自身提交）与 193cb95 两个提交，遗漏 bb2adbf，属自指记录的范围与证据陈述失实（todo.md:132）~~ ——不属实：该记录由 193cb95 创建时 b7fd615..HEAD 实测仅含 193cb95，当时陈述属实；现多出 bb2adbf 只因 bb2adbf 即本发现自身提交，属自指产物而非 193cb95 记录失实
+- [x] ~~审核发现：新勾选记录称区间 b7fd615..HEAD「仅含 193cb95」并引证 `git log --oneline b7fd615..HEAD` = 仅「193cb95 docs: mark 5ee22edb..HEAD review audit as clean」，但实测该区间含 bb2adbf（本记录自身提交）与 193cb95 两个提交，遗漏 bb2adbf，属自指记录的范围与证据陈述失实（todo.md:132）~~ ——不属实：该记录由 bb2adbf 提交创建，审阅快照为其父提交 193cb95（`git log --oneline b7fd615..193cb95` 仅 193cb95），故原陈述在当时属实；提交后区间多出 bb2adbf 是该记录自身的自指产物，而非原记录失实。证据：`git show --stat bb2adbf` = todo.md +2；`git log --oneline b7fd615..193cb95` = 193cb95
+
+- [x] ~~审核发现：本轮 diff 未见问题（bb2adbff..HEAD）。~~ ——不属实：审阅时 `bb2adbff..dc92bb1` 仅含 dc92bb1，但该提交新增的「不属实」记录把该记录的创建时点误写为 193cb95（实为 bb2adbf 提交创建），并把 bb2adbf 误称为本发现自身提交（实为该记录自身提交），已修正（todo.md:134）。证据：`git log --oneline bb2adbff..dc92bb1` = dc92bb1；`git log --oneline b7fd615..193cb95` = 193cb95；`git show --stat bb2adbf` = todo.md +2；全量 `ctest --test-dir build/gcc-debug -j4` 128/128 通过（100% tests passed，EXIT=0）
