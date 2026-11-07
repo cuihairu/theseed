@@ -108,3 +108,95 @@ each module has unit/integration tests, with 100% coverage across the three metr
    temporarily disabled via `THESEED_WARNINGS_AS_ERRORS=OFF`, enabled by default);
 6. Each module has unit tests that keep passing; a full green ctest before commit is a hard gate;
    a coverage miss must either be covered by adding tests or carry an exemption marker with experimental justification.
+
+## 7. Abstract Source Layers
+
+The abstract layers below are responsibility boundaries found in the sources; the concrete directory appears only as evidence.
+
+| Layer | Responsibility | Representative file |
+| --- | --- | --- |
+| LAY-001 Process Assembly | Parse process input, assemble transport/store/app, and drive init → tick → stop. | `apps/baseapp/main.cpp:117` |
+| LAY-002 Foundation | Own cross-cutting serialization, routing, timers, logs, metrics, tracing, Redis-shaped state, and rate limits. | `src/foundation/include/theseed/foundation/ChannelRouter.h:13` |
+| LAY-003 Runtime Transport & Scheduling | Frame and route `RuntimeInvocation`, manage TCP/in-memory peers, and execute six tick phases. | `src/runtime/include/theseed/runtime/TickScheduler.h:16` |
+| LAY-004 Entity & Space Runtime | Own entity property/AOI/witness/ghost/migration state plus load and backup topology. | `src/runtime/include/theseed/runtime/CellRuntime.h:26` |
+| LAY-005 Application Services | Compose protocols, sessions, defs, entity runtime, storage, and observability into Base/Cell/Login/Realm/DB use cases. | `src/core/include/theseed/core/BaseApp.h:26` |
+| LAY-006 Persistence | Normalize file, MySQL, PostgreSQL, and remote-DB access behind `IEntityStore`/`IAccountStore`. | `src/db/include/theseed/db/RemoteEntityStore.h:17` |
+| LAY-007 Observability & Control | Expose read-only HTTP inspection, host RPC, aggregation, policy/audit, and OTLP export away from the game tick. | `src/ops/include/theseed/ops/OpsServer.h:24` |
+| LAY-008 Tooling & Verification | Use XML definitions and client protocols externally for code generation and protocol load tests. | `tools/codegen/main.cpp:3` |
+
+### 7.1 LAY-001: Process Assembly
+
+- **Implementation:** `apps/baseapp/main.cpp`, `apps/cellapp/main.cpp`, `apps/dbapp/main.cpp`, `apps/loginapp/main.cpp`, `apps/machine/main.cpp`, and `apps/realmapp/main.cpp`; shared signal/number parsing is in `apps/AppMainUtil.h:23`.
+- **Configuration schema:** main-local structs such as `PeerConfig` and `DbConfig` (`apps/baseapp/main.cpp:18`) fill each service's config struct; no external config-file schema exists for these processes.
+- **Protocol files:** none; assembly only invokes service APIs.
+- **User-facing copy:** startup/stderr messages in each `main.cpp`; shared parser diagnostics in `apps/AppMainUtil.h:42`.
+- **Lifecycle:** install signals → construct config/dependencies → `init()`/`attach()` → signal-driven `tick()` loop → `detach()`/`stop()` (representative: `apps/baseapp/main.cpp:117`, `apps/baseapp/main.cpp:142`).
+
+### 7.2 LAY-002: Foundation
+
+- **Implementation:** `src/foundation/*.cpp`, including `ChannelRouter`, `RedisProvider`, `SessionStore`, `RateLimiter`, `TimerWheel`, `MetricsRegistry`, `Logger`, and `Tracing`.
+- **Configuration schema:** `Channel::Watermark` (`src/foundation/include/theseed/foundation/Channel.h:20`), `RateLimiter::Config` (`src/foundation/include/theseed/foundation/RateLimiter.h:23`), and type-level state model contracts in `RedisProvider.h`.
+- **Protocol files:** `MessageHeader` and `Bundle` define the reusable message framing primitives; `src/foundation/include/theseed/foundation/Tracing.h:73` defines W3C-style carrier injection rather than a standalone network protocol.
+- **User-facing copy:** log event names/attributes produced by `Logger` and metric descriptions held by `MetricsRegistry`.
+- **Lifecycle:** objects are constructed by owners; `TimerWheel` advances through owner ticks, and `MetricsRegistry` is a process-wide singleton (`src/foundation/include/theseed/foundation/Metrics.h:75`).
+
+### 7.3 LAY-003: Runtime Transport & Scheduling
+
+- **Implementation:** `src/runtime/NetworkTransport.cpp`, `TcpConnection.cpp`, `TcpListener.cpp`, `TransportHub.cpp`, `InvocationCodec.cpp`, `RuntimeLoop.cpp`, and `TickScheduler.cpp`.
+- **Configuration schema:** `NetworkTransport::Config` (`src/runtime/include/theseed/runtime/NetworkTransport.h:31`), `NetworkNode::Config`, `RuntimeLoop` scheduler settings, and `TickScheduler` interval construction (`src/runtime/include/theseed/runtime/TickScheduler.h:52`).
+- **Protocol files:** `RuntimeInvocation` and `InvocationCodec` are the dedicated wire contract (`src/runtime/include/theseed/runtime/InvocationCodec.h:11`); client frames remain in the access layer.
+- **User-facing copy:** transport stats names and scheduler diagnostics; no direct UI copy.
+- **Lifecycle:** callers construct transports, connect/attach peers, and call `tick()`/`flush()`; `TickScheduler::run()`/`runOnce()` owns phase order and stop (`src/runtime/include/theseed/runtime/TickScheduler.h:77`).
+
+### 7.4 LAY-004: Entity & Space Runtime
+
+- **Implementation:** `Entity.cpp`, `PropertyBlock.cpp`, `PropertyReplication.cpp`, `AOI.cpp`, `Witness.cpp`, `GhostManager.cpp`, `EntityMigration.cpp`, `Space.cpp`, `SpaceRuntime.cpp`, `CellRuntime.cpp`, `LoadProfiler.cpp`, and `BackupTopologyCoordinator.cpp`.
+- **Configuration schema:** `SpaceConfig` (`src/runtime/include/theseed/runtime/Space.h:50`), `LoadProfiler::Config` (`src/runtime/include/theseed/runtime/LoadProfiler.h:45`), and `CellRuntime` constructor parameters such as migration TTL (`src/runtime/include/theseed/runtime/CellRuntime.h:30`).
+- **Protocol files:** `EntityCall`, `InvocationCodec`, and property-replication encoding provide the runtime-facing method/state payloads.
+- **User-facing copy:** AOI/entity events carry semantic event names; this layer has no locale/UI copy.
+- **Lifecycle:** CellRuntime attaches/detaches phase-specific tickables; Spaces initialize/shutdown; entities activate/destroy through runtime calls (`src/runtime/include/theseed/runtime/CellRuntime.h:41`).
+
+### 7.5 LAY-005: Application Services
+
+- **Implementation:** `src/core/BaseApp.cpp` and `src/core/CellApp.cpp`, `src/login/LoginApp.cpp`, `src/realm/RealmApp.cpp`, and `src/db/DBApp.cpp`, with shared clients/sessions and protocol modules.
+- **Configuration schema:** `BaseApp::Config` (`src/core/include/theseed/core/BaseApp.h:35`), `CellApp::Config` (`src/core/include/theseed/core/CellApp.h:31`), `LoginAppConfig` (`src/login/include/theseed/login/LoginApp.h:36`), `RealmAppConfig` (`src/realm/include/theseed/realm/RealmApp.h:29`), and `DBApp::Config` (`src/db/include/theseed/db/DBApp.h:29`).
+- **Protocol files:** `ClientProtocol`/`LoginProtocol` for clients, `DBProtocol` for DB RPC, and machine constants for the control notification leg.
+- **User-facing copy:** protocol field/text encoders plus dashboard/ops copy selected by each service; startup banners remain at assembly.
+- **Lifecycle:** each service implements `init`/`tick`/`stop`; Base/Cell additionally attach/detach tickables and bind/unbind callbacks (`src/core/BaseApp.cpp:126`, `src/login/LoginApp.cpp:95`, `src/db/DBApp.cpp:197`).
+
+### 7.6 LAY-006: Persistence
+
+- **Implementation:** `FileEntityStore.cpp`, `MySQLConnection.cpp`/`MySQLEntityStore.cpp`, `PostgreSQLConnection.cpp`/`PostgreSQLEntityStore.cpp`, and `RemoteEntityStore.cpp`.
+- **Configuration schema:** `DBApp::Config` selects backend and shared DB settings (`src/db/include/theseed/db/DBApp.h:29`); backend-specific forms are `MySQLConnectionConfig`, `PostgreSQLConnectionConfig`, and their store configs.
+- **Protocol files:** `DBProtocol` defines the remote persistence RPC; SQL DDL lives in store implementations rather than a schema file.
+- **User-facing copy:** DB error strings and DBApp startup banner; no dashboard copy in the store.
+- **Lifecycle:** DBApp `init` builds/initializes the selected store and rejects unknown backends, `tick` services RPCs, and `stop` closes the listener/hub (`src/db/DBApp.cpp:123`, `src/db/DBApp.cpp:172`, `src/db/DBApp.cpp:197`).
+
+### 7.7 LAY-007: Observability & Control
+
+- **Implementation:** `src/ops/OpsServer.cpp`/`OpsInspector.cpp`/`DashboardPage.cpp`, `src/control/machine/*`, `src/control/ops/OpsControlCenter.cpp`, and OTLP exporters.
+- **Configuration schema:** `OpsServer::Config` (`src/ops/include/theseed/ops/OpsServer.h:26`), `MachineDaemon::Config` and policy structs (`src/control/include/theseed/control/machine/MachineDaemon.h:211`), `OpsControlCenter::Config` (`src/control/include/theseed/control/ops/OpsControlCenter.h:49`), and OTLP exporter configs.
+- **Protocol files:** `RuntimeInvocation` reused with machine method constants (`src/control/include/theseed/control/machine/MachineDaemon.h:127`); dashboard markup is embedded by `DashboardPage.cpp`.
+- **User-facing copy:** health/inspect JSON, dashboard HTML, machine JSON snapshots, audit fields, and OTLP payload naming.
+- **Lifecycle:** OpsServer starts/ticks/stops with its app; MachineDaemon registers on start, reports/ticks, deregisters on graceful stop, and uninstalls exporters (`src/control/machine/MachineDaemon.cpp:348`, `src/control/machine/MachineDaemon.cpp:392`); the center prunes stale nodes (`src/control/ops/OpsControlCenter.cpp:186`).
+
+### 7.8 LAY-008: Tooling & Verification
+
+- **Implementation:** `tools/codegen/main.cpp`/`CSharpEmitter.cpp` and `tools/bots/main.cpp`/`BotsConfig.cpp`/`BotClient.cpp`/`BotManager.cpp`.
+- **Configuration schema:** CLI `--defs`, `--output-unity`, and `--namespace` (`tools/codegen/main.cpp:35`); `BotsConfig` defines the key/value bot config contract (`tools/bots/BotsConfig.h:13`).
+- **Protocol files:** C# emitter consumes EntityDef; bots reuse Login/Client protocol encoders.
+- **User-facing copy:** CLI usage/errors, generated C# header text, and bot stats output.
+- **Lifecycle:** short-lived CLIs parse config, load definitions/connect bots, tick to completion/runtime limit, then flush outputs and stop (`tools/codegen/main.cpp:80`, `tools/bots/main.cpp:57`).
+
+### 7.9 Splitting Rationale
+
+1. **Keep assembly disposable.** Main files only parse input and wire dependencies, then call service lifecycle APIs, so process policy can change without changing protocols (`apps/baseapp/main.cpp:117`).
+2. **Make transport generic before game semantics.** `RuntimeInvocation` is a component-framed envelope used by both DB and machine traffic, allowing one hub and delivery model (`src/runtime/include/theseed/runtime/RuntimeTransport.h:15`).
+3. **Separate phased scheduling from work.** Tick phase names and the scheduler contract are independent of entities; owners register work, preserving deterministic network/timer/entity/sync/flush order (`src/runtime/include/theseed/runtime/TickScheduler.h:16`).
+4. **Isolate mutable world state.** Entity/PropertyBlock/AOI/Witness state is distinct from invocation transport and service orchestration, avoiding cross-layer ownership of entities (`src/runtime/include/theseed/runtime/PropertyBlock.h:21`).
+5. **Keep process use cases extensible without changing transport.** BaseApp/CellApp/LoginApp/RealmApp/DBApp each compose runtime plus their own protocol/config while assembly remains a consumer (`src/core/include/theseed/core/BaseApp.h:35`).
+6. **Store by interface, select backend late.** `IEntityStore` normalizes persistence, while DBApp chooses file/MySQL/PostgreSQL during init and can fall back when a client library is absent (`src/db/DBApp.cpp:123`).
+7. **Do not let observation block the tick.** Ops HTTP uses a separate TCP surface and non-blocking tick; metrics render on demand (`src/ops/include/theseed/ops/OpsServer.h:14`).
+8. **Keep control authorization explicit and fail closed.** MachineDaemon combines method allowlists with monotonic roles and requires explicit bindings; unbound callers are denied (`src/control/include/theseed/control/machine/AccessControl.h:14`).
+9. **Retain telemetry as an opt-in side channel.** OTLP export is disabled by default and installed/uninstalled with daemon lifecycle, so telemetry cannot silently become a startup dependency (`src/control/include/theseed/control/machine/OtlpTraceExporter.h:40`).
+10. **Treat definitions and protocols as external tool inputs.** Codegen and bots consume the same XML/client contracts, validating them without linking game service internals (`tools/codegen/main.cpp:68`).

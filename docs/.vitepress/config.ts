@@ -97,6 +97,7 @@ const rootSidebar = [
     collapsed: false,
     items: [
       { text: 'Source Attribution', link: '/design/8-reference/source-attribution' },
+      { text: 'Source Glossary', link: '/design/8-reference/glossary' },
       { text: 'Coverage Report', link: '/design/8-reference/coverage-report' },
     ],
   },

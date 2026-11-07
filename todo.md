@@ -136,3 +136,24 @@
 - [x] ~~审核发现：本轮 diff 未见问题（bb2adbff..HEAD）。~~ ——不属实：审阅时 `bb2adbff..dc92bb1` 仅含 dc92bb1，但该提交新增的「不属实」记录把该记录的创建时点误写为 193cb95（实为 bb2adbf 提交创建），并把 bb2adbf 误称为本发现自身提交（实为该记录自身提交），已修正（todo.md:134）。证据：`git log --oneline bb2adbff..dc92bb1` = dc92bb1；`git log --oneline b7fd615..193cb95` = 193cb95；`git show --stat bb2adbf` = todo.md +2；全量 `ctest --test-dir build/gcc-debug -j4` 128/128 通过（100% tests passed，EXIT=0）
 
 - [x] 审核发现：本轮 diff（dc92bb14..HEAD）未见问题——属实：区间仅含 e52fa37（docs: correct self-referential audit attribution，仅改 todo.md，修正 line 134 记录把创建时点误写为 193cb95 实为 bb2adbf 之误），且该修正经复核无误（bb2adbf 父提交 = 193cb95；`git log --oneline b7fd615..193cb95` = 仅 193cb95；`git show --stat bb2adbf` = todo.md +2）；陈旧引用扫描为空（`rg 'SSG 包裹|transformHtml' docs/` 无命中）。证据：`git log --oneline dc92bb14..HEAD` = e52fa37 docs: correct self-referential audit attribution；`git diff --name-only dc92bb14..HEAD` = todo.md；全量 `ctest --test-dir build/gcc-debug -j4` 128/128 通过（100% tests passed，EXIT=0）
+
+## 源码分层分析 2026-11-07
+
+- 抽象层清单：
+  - LAY-001 进程启动/装配层：只解析进程输入、组装 transport/store/app 并推进 init→tick→stop，不承载业务协议（apps/baseapp/main.cpp:117）。
+  - LAY-002 横向基础设施层：提供序列化、路由、定时器、日志、指标、Redis 形状态与限流原语（src/foundation/include/theseed/foundation/ChannelRouter.h:13）。
+  - LAY-003 运行时传输与调度层：承载 Invocation 帧、peer 路由、TCP/内存通道与六阶段 tick（src/runtime/include/theseed/runtime/TickScheduler.h:16）。
+  - LAY-004 实体与空间运行时层：维护实体、属性、AOI、迁移、Ghost、负载与备份拓扑等游戏世界状态（src/runtime/include/theseed/runtime/CellRuntime.h:26）。
+  - LAY-005 应用服务层：装配 EntityDef/Base/Cell/登录/Realm/DB 的用例和进程会话（src/core/include/theseed/core/BaseApp.h:26）。
+  - LAY-006 持久化层：以 IEntityStore/IAccountStore 统一 file、MySQL、PostgreSQL 与 Remote 适配（src/db/include/theseed/db/RemoteEntityStore.h:17）。
+  - LAY-007 运维观测与控制层：HTTP 只读面、Machine 控制协议、聚合中心、遥测与主机探测分离运行时主路径（src/ops/include/theseed/ops/OpsServer.h:24）。
+  - LAY-008 工具与验证面：代码生成器与协议机器人以外部工具身份消费同一 XML/客户端协议（tools/codegen/main.cpp:1）。
+
+- 超大文件候选：
+  - [ ] LAY-001 [P1] 拆分 src/control/machine/MachineDaemon.cpp（1861 行）——同一实现串起 TCP 分发、五族策略门、会话/进程/诊断/审计/上报/OTLP 导出（src/control/machine/MachineDaemon.cpp:348）。
+  - [ ] LAY-002 [P1] 拆分 src/runtime/CellRuntime.cpp（1194 行）——实体名册、Space 管理、协议分发、Ghost 迁移、事件广播和 Witness 复制共用一个大类（src/runtime/CellRuntime.cpp:1141）。
+
+- 目录/分类不合理处：
+  - [ ] LAY-003 [P1] `src/core` 同时包含文件存储、EntityDef 解析和 Base/Cell 进程骨架，且以 `theseed_core` 公开依赖 `theseed_login`（src/core/CMakeLists.txt:12），反向造成 `theseed_login` 又能链接 `theseed_core` 的存储面（src/login/CMakeLists.txt:12）；证据：core 同时实现文件存储（src/core/include/theseed/core/FileEntityStore.h:12）和应用骨架（src/core/include/theseed/core/BaseApp.h:26）。
+  - [ ] LAY-004 [P1] `apps/cellapp/main.cpp` 在入口内手工 accept、按连接顺序分配 component ID，并自注释“生产环境应使用握手协议”（apps/cellapp/main.cpp:74）；同类身份注册已有 TransportHub 首请求自报机制（src/runtime/TransportHub.cpp:65），入口与运行时身份面重复。
+  - [ ] LAY-005 [P1] `apps/machine` 目前只构造一次性 MachineAgent 打印 bootstrap 快照，不启动 `MachineDaemon`，而后者才是实际 RPC/遥测生命周期载体（apps/machine/main.cpp:52）；入口名与文档/测试中的 daemon 语义不一致，且 `MachineDaemon::start/stop/tick` 当前只由测试驱动（src/control/machine/MachineDaemon.cpp:348）。
