@@ -151,7 +151,7 @@
 
 - 超大文件候选：
   - [x] LAY-001 [P1] 拆分 src/control/machine/MachineDaemon.cpp（1861 行）——同一实现串起 TCP 分发、五族策略门、会话/进程/诊断/审计/上报/OTLP 导出（src/control/machine/MachineDaemon.cpp:348）。证据：commit 62fedfa，拆为 core（MachineDaemon.cpp，TCP 分发+审计+上报+OTLP 接线）+ Process/Session/Diagnostic/Config 四族处理器 TU + MachineDaemonDetail.h/.cpp（策略门/解析/脱敏/指标常量），全部逐字搬移零逻辑改动，构建 -Werror 绿；全量测试 128/128 绿（本机 5.6 万进程导致真实宿主快照 4.46MB 超过 4MB 传输上限，需 `sudo unshare --pid --fork --mount-proc` PID 命名空间内运行，原版代码同环境同失败，拆分前后行为一致）。
-  - [ ] LAY-002 [P1] 拆分 src/runtime/CellRuntime.cpp（1194 行）——实体名册、Space 管理、协议分发、Ghost 迁移、事件广播和 Witness 复制共用一个大类（src/runtime/CellRuntime.cpp:1141）。
+  - [x] LAY-002 [P1] 拆分 src/runtime/CellRuntime.cpp（1194 行）——实体名册、Space 管理、协议分发、Ghost 迁移、事件广播和 Witness 复制共用一个大类（src/runtime/CellRuntime.cpp:1141）。证据：commit 30ef79d，拆为 core（CellRuntime.cpp 281 行：pump/生命周期/分发表/tick 编排/定时器面）+ Entity（名册/查询/工厂/spawn 请求）+ Space（空间管理/传送）+ Migration（迁移路由/transfer/commit）+ Ghost（幽灵绑定/同步）+ Handlers（入站协议处理器）+ Replication（出站同步/AoI/客户端事件/Witness/广播）七族 TU + CellRuntimeDetail.h/.cpp（cellReady 载荷编解码），全部逐字搬移零逻辑改动，构建 -Werror 绿；全量测试 128/128 绿（PID 命名空间内运行，见 LAY-001 环境说明）。
 
 - 目录/分类不合理处：
   - [ ] LAY-003 [P1] `src/core` 同时包含文件存储、EntityDef 解析和 Base/Cell 进程骨架，且以 `theseed_core` 公开依赖 `theseed_login`（src/core/CMakeLists.txt:12），反向造成 `theseed_login` 又能链接 `theseed_core` 的存储面（src/login/CMakeLists.txt:12）；证据：core 同时实现文件存储（src/core/include/theseed/core/FileEntityStore.h:12）和应用骨架（src/core/include/theseed/core/BaseApp.h:26）。
