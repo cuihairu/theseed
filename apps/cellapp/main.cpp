@@ -72,13 +72,13 @@ int main(int argc, char** argv) {
     while (theseed::app::gRunning) {
         // Accept incoming peer connections
         while (auto conn = listener.accept()) {
-            // Assign a component ID based on connection order
-            // In production, this would use a handshake protocol
-            static theseed::runtime::ComponentId nextPeer{1};
-            auto peerId = nextPeer++;
+            // 服务端身份自注册：对端身份由其首条入站消息的 sourceComponent
+            // 自报（TransportHub::receive 自学习），回复按 target=sourceComponent
+            // 路由回去。不再按连接顺序手工分配 component ID——旧法以本地顺序
+            // 号冒充对端身份，与对端自报不一致时回复被 hub 静默丢弃。
             auto transport = std::make_shared<theseed::runtime::NetworkTransport>(conn);
-            hub->connectPeer(peerId, transport);
-            std::cout << "Peer " << peerId << " connected" << std::endl;
+            hub->attachServerTransport(transport);
+            std::cout << "Peer connected (identity self-reported)" << std::endl;
         }
 
         hub->tick();
