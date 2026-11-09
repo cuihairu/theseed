@@ -8,7 +8,7 @@
 
 #include "theseed/core/BaseApp.h"
 #include "theseed/core/CellApp.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/login/LoginApp.h"
 #include "theseed/login/LoginTypes.h"
 #include "theseed/runtime/NetworkNode.h"

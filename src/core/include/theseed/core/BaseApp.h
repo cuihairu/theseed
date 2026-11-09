@@ -1,7 +1,7 @@
 #pragma once
 
 #include "theseed/core/BaseRuntime.h"
-#include "theseed/core/EntityDefRegistry.h"
+#include "theseed/db/EntityDefRegistry.h"
 #include "theseed/login/ClientProtocol.h"
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"

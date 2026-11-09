@@ -1,7 +1,7 @@
 #pragma once
 
-#include "theseed/core/EntityData.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/EntityData.h"
+#include "theseed/db/IEntityStore.h"
 
 #include <compare>
 #include <cstddef>

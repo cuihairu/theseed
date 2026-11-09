@@ -1,5 +1,5 @@
 #include "theseed/core/BaseApp.h"
-#include "theseed/core/FileEntityStore.h"
+#include "theseed/db/FileEntityStore.h"
 #include "theseed/db/RemoteEntityStore.h"
 #include "theseed/runtime/NetworkTransport.h"
 #include "theseed/runtime/TcpConnection.h"

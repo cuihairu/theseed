@@ -2,7 +2,7 @@
 // RemoteEntityStore / 裸协议请求，覆盖 init/tick/accept/全部 db.* 方法分发、
 // 账号线性扫描回退、畸形载荷错误分支、OpsServer HTTP 端点与监听冲突。
 // mysql/postgresql 后端场景按环境变量门控（与 store 集成测试同一套变量）。
-#include "theseed/core/EntityData.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/db/DBApp.h"
 #include "theseed/db/DBProtocol.h"
 #include "theseed/db/RemoteEntityStore.h"

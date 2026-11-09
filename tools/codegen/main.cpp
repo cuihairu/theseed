@@ -9,7 +9,7 @@
 //   - 基础序列化（BinaryWriter / BinaryReader）
 
 #include "theseed/codegen/CSharpEmitter.h"
-#include "theseed/core/EntityDefLoader.h"
+#include "theseed/db/EntityDefLoader.h"
 
 #include <filesystem>
 #include <fstream>

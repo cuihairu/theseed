@@ -1,4 +1,4 @@
-#include "theseed/core/EntityDefRegistry.h"
+#include "theseed/db/EntityDefRegistry.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 

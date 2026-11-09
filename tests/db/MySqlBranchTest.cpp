@@ -3,7 +3,7 @@
 // DDL 失败/DROP 后缓存命中失败族/allocId 与账号连锁失败。与
 // MySQLConnectionTest / MySqlEntityStoreTest 互补——那边收功能回环，这边专收
 // 防御与失败分支。需要 THESEED_MYSQL_HOST 等环境变量，未设置时整体跳过。
-#include "theseed/core/EntityData.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/db/MySQLConnection.h"
 #include "theseed/db/MySQLEntityStore.h"
 

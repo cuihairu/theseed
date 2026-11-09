@@ -2,8 +2,8 @@
 // listIdsByType / listEntityTypes 对混合目录内容（子目录、非 .dat 文件、
 // 非数字文件名、下划线前缀目录）的跳过臂。与 FileEntityStoreTest 互补——
 // 那边收功能回环，这边专收目录遍历与文件打开的防御分支。
-#include "theseed/core/EntityData.h"
-#include "theseed/core/FileEntityStore.h"
+#include "theseed/db/EntityData.h"
+#include "theseed/db/FileEntityStore.h"
 
 #include <cstddef>
 #include <cstdint>

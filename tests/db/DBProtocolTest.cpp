@@ -5,7 +5,7 @@
 // 格前缀都必须返回 false，锁死「截断不半解码」的边界口径），以及失败/未命
 // 中响应的短路与哨兵臂（success=false 不携带载荷、not-found 置零）。
 #include "theseed/db/DBProtocol.h"
-#include "theseed/core/EntityData.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/foundation/MemoryStream.h"
 
 #include <cstddef>

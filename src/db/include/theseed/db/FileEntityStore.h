@@ -1,6 +1,6 @@
 #pragma once
 
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 
 #include <cstdint>
 #include <filesystem>

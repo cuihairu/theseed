@@ -4,7 +4,7 @@
 // Avatar 的 EnterGame 空快照路径。与 BaseAppTest 互补——那边是完整功能
 // 回环，这边专收各防御/早退分支。
 #include "theseed/core/BaseApp.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/foundation/MemoryStream.h"
 #include "theseed/login/ClientProtocol.h"
 #include "theseed/login/ClientSession.h"

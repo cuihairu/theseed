@@ -1,6 +1,6 @@
 #include "theseed/core/BaseApp.h"
 #include "theseed/core/CellApp.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/login/ClientProtocol.h"
 #include "theseed/login/ClientSession.h"
 #include "theseed/login/LoginProtocol.h"

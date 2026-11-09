@@ -1,5 +1,5 @@
-#include "theseed/core/EntityDefRegistry.h"
-#include "theseed/core/EntityDefLoader.h"
+#include "theseed/db/EntityDefRegistry.h"
+#include "theseed/db/EntityDefLoader.h"
 
 #include <cstddef>
 #include <filesystem>

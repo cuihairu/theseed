@@ -4,7 +4,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #pragma warning(disable:4456)
 #endif
-#include "theseed/core/EntityData.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/db/PostgreSQLEntityStore.h"
 
 #include <cstddef>

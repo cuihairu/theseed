@@ -4,7 +4,7 @@
 #include "theseed/runtime/RuntimeTransport.h"
 #include "theseed/runtime/SpaceRuntime.h"
 #include "theseed/core/BaseRuntime.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 
 #include <cstdint>
 #include <iostream>

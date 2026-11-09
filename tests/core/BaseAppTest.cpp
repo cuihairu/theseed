@@ -1,5 +1,5 @@
 #include "theseed/core/BaseApp.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/foundation/MemoryStream.h"
 #include "theseed/login/ClientProtocol.h"
 #include "theseed/login/LoginProtocol.h"

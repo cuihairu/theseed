@@ -1,6 +1,6 @@
 #pragma once
 
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/foundation/TimerWheel.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/GroupManager.h"

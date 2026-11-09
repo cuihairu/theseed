@@ -1,6 +1,6 @@
 #pragma once
 
-#include "theseed/core/EntityDefRegistry.h"
+#include "theseed/db/EntityDefRegistry.h"
 #include "theseed/ops/OpsInspector.h"
 #include "theseed/ops/OpsServer.h"
 #include "theseed/runtime/BackupTopologyCoordinator.h"

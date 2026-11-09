@@ -2,7 +2,7 @@
 // <=> 全结果矩阵（含 NaN unordered）、Bool/String 结果边、of(bool,false)。
 // 与 EntityQueryTest 互补——那边是查询功能断言，这边专收 compareSameType
 // 的类型矩阵边界与比较结果选择边。
-#include "theseed/core/EntityQuery.h"
+#include "theseed/db/EntityQuery.h"
 
 #include <cmath>
 #include <compare>

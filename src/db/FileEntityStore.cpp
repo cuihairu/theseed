@@ -1,5 +1,5 @@
-#include "theseed/core/FileEntityStore.h"
-#include "theseed/core/EntityData.h"
+#include "theseed/db/FileEntityStore.h"
+#include "theseed/db/EntityData.h"
 
 #include <algorithm>
 #include <cstddef>

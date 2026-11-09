@@ -1,7 +1,7 @@
-#include "theseed/core/FileEntityStore.h"
-#include "theseed/core/EntityData.h"
+#include "theseed/db/FileEntityStore.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/core/BaseApp.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/runtime/PipedTransport.h"
 
 #include <cmath>

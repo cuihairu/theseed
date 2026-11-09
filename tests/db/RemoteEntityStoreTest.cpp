@@ -5,7 +5,7 @@
 // 中、静默超时降级（不挂死）、发送拒绝立即降级、pumpFn 在等待循环中被驱动。
 #include "theseed/db/RemoteEntityStore.h"
 #include "theseed/db/DBProtocol.h"
-#include "theseed/core/EntityData.h"
+#include "theseed/db/EntityData.h"
 #include "theseed/foundation/MemoryStream.h"
 #include "theseed/runtime/RuntimeTransport.h"
 

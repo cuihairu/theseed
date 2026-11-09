@@ -9,7 +9,6 @@ add_library(
 target_link_libraries(
     theseed_login
     PUBLIC theseed_project_options
-    PUBLIC theseed_core
     PUBLIC theseed_runtime
     PUBLIC theseed_db
     PUBLIC theseed_foundation

@@ -1,5 +1,5 @@
 #include "theseed/core/BaseRuntime.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/RuntimeTransport.h"

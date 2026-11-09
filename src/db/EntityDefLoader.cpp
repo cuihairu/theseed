@@ -1,4 +1,4 @@
-#include "theseed/core/EntityDefLoader.h"
+#include "theseed/db/EntityDefLoader.h"
 #include "theseed/runtime/EntityDef.h"
 
 #include <cstddef>

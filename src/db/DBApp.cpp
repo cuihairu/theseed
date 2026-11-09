@@ -1,5 +1,5 @@
 #include "theseed/db/DBApp.h"
-#include "theseed/core/FileEntityStore.h"
+#include "theseed/db/FileEntityStore.h"
 #include "theseed/db/DBProtocol.h"
 #if THESEED_HAS_MYSQL
 #include "theseed/db/MySQLEntityStore.h"

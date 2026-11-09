@@ -2,8 +2,8 @@
 // send 失败臂、timer 正向链路与 sync 时序编排。
 // 与 BaseRuntimeTest 互补——那边是功能路径，这边专收防御与边界分支。
 #include "theseed/core/BaseRuntime.h"
-#include "theseed/core/EntityData.h"
-#include "theseed/core/IEntityStore.h"
+#include "theseed/db/EntityData.h"
+#include "theseed/db/IEntityStore.h"
 #include "theseed/runtime/Entity.h"
 #include "theseed/runtime/EntityDef.h"
 #include "theseed/runtime/PropertyReplication.h"

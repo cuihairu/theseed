@@ -1,7 +1,7 @@
 // EntityDefLoader 手写 XML 解析器的分支覆盖测试：畸形输入矩阵与写法变体。
 // 与 EntityDefLoaderTest 互补——那边是正常 XML 的功能断言，这边专收
 // 解析器的边界与畸形输入分支（截断、变体引号、空白、外来子节点）。
-#include "theseed/core/EntityDefLoader.h"
+#include "theseed/db/EntityDefLoader.h"
 #include "theseed/runtime/EntityDef.h"
 
 #include <cstddef>
