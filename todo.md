@@ -150,7 +150,7 @@
   - LAY-008 工具与验证面：代码生成器与协议机器人以外部工具身份消费同一 XML/客户端协议（tools/codegen/main.cpp:1）。
 
 - 超大文件候选：
-  - [ ] LAY-001 [P1] 拆分 src/control/machine/MachineDaemon.cpp（1861 行）——同一实现串起 TCP 分发、五族策略门、会话/进程/诊断/审计/上报/OTLP 导出（src/control/machine/MachineDaemon.cpp:348）。
+  - [x] LAY-001 [P1] 拆分 src/control/machine/MachineDaemon.cpp（1861 行）——同一实现串起 TCP 分发、五族策略门、会话/进程/诊断/审计/上报/OTLP 导出（src/control/machine/MachineDaemon.cpp:348）。证据：commit 62fedfa，拆为 core（MachineDaemon.cpp，TCP 分发+审计+上报+OTLP 接线）+ Process/Session/Diagnostic/Config 四族处理器 TU + MachineDaemonDetail.h/.cpp（策略门/解析/脱敏/指标常量），全部逐字搬移零逻辑改动，构建 -Werror 绿；全量测试 128/128 绿（本机 5.6 万进程导致真实宿主快照 4.46MB 超过 4MB 传输上限，需 `sudo unshare --pid --fork --mount-proc` PID 命名空间内运行，原版代码同环境同失败，拆分前后行为一致）。
   - [ ] LAY-002 [P1] 拆分 src/runtime/CellRuntime.cpp（1194 行）——实体名册、Space 管理、协议分发、Ghost 迁移、事件广播和 Witness 复制共用一个大类（src/runtime/CellRuntime.cpp:1141）。
 
 - 目录/分类不合理处：
