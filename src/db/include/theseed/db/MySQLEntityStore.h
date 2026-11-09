@@ -23,7 +23,7 @@ namespace theseed::db {
 //   - 全局 ID 分配走 _entity_ids 表的原子 UPDATE
 //
 // 为什么不用 JSON 列 / EXPAND 展开：当前 EntityData 是二进制格式（见
-// src/core/EntityData.cpp 的 encodeEntityData），引入 JSON 列需要额外的
+// src/db/EntityData.cpp 的 encodeEntityData），引入 JSON 列需要额外的
 // 序列化路径与 schema 迁移，留给 Phase 2 的数据工具链。
 class MySQLEntityStore final : public core::IEntityStore, public IAccountStore {
 public:

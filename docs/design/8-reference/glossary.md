@@ -14,7 +14,7 @@ This glossary records the abstract layers found by reading the current sources, 
 | 调度器 | Tick Scheduler | The ordered six-phase game loop that snapshots tickables, executes queued tasks, reports duration, and exposes stop control. | src/runtime/include/theseed/runtime/TickScheduler.h:16 |
 | 实体 | Entity | The runtime game object with identity/type/side, state, properties, timers, controllers, events, and base/cell relations. | src/runtime/include/theseed/runtime/Entity.h:34 |
 | 实体定义 | EntityDef | The parsed XML contract for an entity: properties, exposed methods, events, inheritance, and defaults. | src/runtime/include/theseed/runtime/EntityDef.h:19 |
-| 实体定义注册表 | EntityDef Registry | The load/inheritance/factory boundary that turns XML files into executable entity factories. | src/core/include/theseed/core/EntityDefRegistry.h:15 |
+| 实体定义注册表 | EntityDef Registry | The load/inheritance/factory boundary that turns XML files into executable entity factories. | src/db/include/theseed/db/EntityDefRegistry.h:15 |
 | 属性块 | PropertyBlock | Contiguous per-entity storage laid out from an EntityDef, with typed accessors, defaults, and serialization. | src/runtime/include/theseed/runtime/PropertyBlock.h:21 |
 | AOI | Area of Interest | Cross-linked X/Z coordinate indexes and range triggers that derive entity visibility and enter/leave events. | src/runtime/include/theseed/runtime/AOI.h:71 |
 | 观察者视图 | Witness | Per-observer distance bands and staged property/position deltas that turn AOI state into client updates. | src/runtime/include/theseed/runtime/Witness.h:41 |
@@ -26,8 +26,8 @@ This glossary records the abstract layers found by reading the current sources, 
 | 客户端会话 | Client Session | The framed client connection state and parser/sender; it does not interpret business results. | src/login/include/theseed/login/ClientSession.h:13 |
 | 登录协议 | Login Protocol | The compact length/type/payload protocol and encoders for login, realm selection, and errors. | src/login/include/theseed/login/LoginProtocol.h:36 |
 | 会话令牌 | Session Token | The stateless token format that carries and validates account/realm identity across access hops. | src/login/include/theseed/login/SessionToken.h:7 |
-| 实体存储 | Entity Store | The persistence abstraction for load/save/remove/id allocation/listing, implemented by memory, file, MySQL, PostgreSQL, and a remote DB adapter. | src/core/include/theseed/core/IEntityStore.h:16 |
-| 文件存储 | File Store | The filesystem-backed entity format under a root directory, with mutex-guarded ID allocation. | src/core/include/theseed/core/FileEntityStore.h:12 |
+| 实体存储 | Entity Store | The persistence abstraction for load/save/remove/id allocation/listing, implemented by memory, file, MySQL, PostgreSQL, and a remote DB adapter. | src/db/include/theseed/db/IEntityStore.h:16 |
+| 文件存储 | File Store | The filesystem-backed entity format under a root directory, with mutex-guarded ID allocation. | src/db/include/theseed/db/FileEntityStore.h:12 |
 | SQL 存储后端 | SQL Store Backend | The MySQL/PostgreSQL store family sharing one binary entity payload plus SQL-specific ID/account indexes and schema creation. | src/db/include/theseed/db/MySQLEntityStore.h:28 |
 | 远程存储适配器 | Remote Store Adapter | The BaseEntity-side client that hides DBApp request/response calls behind IEntityStore with timeout handling. | src/db/include/theseed/db/RemoteEntityStore.h:17 |
 | Redis 形状态 | Redis-Shaped State | The provider seam for strings, sorted sets, locks, and atomic owned writes; current production wiring uses the in-memory implementation. | src/foundation/include/theseed/foundation/RedisProvider.h:28 |

@@ -348,7 +348,7 @@ Design requirements:
 
 > Status: design goal, not yet implemented. There is no XSD file, no editor integration and no
 > `defcheck` tool in the repo. The only runtime-side validation today is the property-type whitelist
-> in `EntityDefLoader` (`src/core/EntityDefLoader.cpp:166-182`, unknown type throws), not an
+> in `EntityDefLoader` (`src/db/EntityDefLoader.cpp:166-182`, unknown type throws), not an
 > editor-time XSD workflow. The rules below are the intended editor-time checks.
 
 ```

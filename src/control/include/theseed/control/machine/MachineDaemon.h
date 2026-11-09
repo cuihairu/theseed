@@ -292,6 +292,11 @@ public:
 
     bool isListening() const;
     std::uint16_t localPort() const;
+    // §6.1 受控停机（machine.shutdown）是否已受理：应答出站、本 tick 收尾
+    // 优雅停机后保持 true（再无 tick 副作用）。宿主常驻循环须把它与自身
+    // 信号旗标并列作退出条件——RPC 停机后 tick() 静默空转，宿主若不看
+    // 此位，进程将永不退出。
+    bool shutdownRequested() const;
 
     // 本地审计视图（时间升序）；machine.audit 的 JSON 与此同源。
     const std::vector<AuditEntry>& auditLog() const;

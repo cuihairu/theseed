@@ -348,7 +348,7 @@ Level 3: 平台和运维增强
 
 > 状态：设计目标，尚未实现。仓内无 XSD 文件、无编辑器接入、无 `defcheck` 工具。
 > 目前唯一的运行期校验是 `EntityDefLoader` 的属性类型白名单
-> （`src/core/EntityDefLoader.cpp:166-182`，未知类型抛异常），并非编辑器保存时的 XSD 流程。
+> （`src/db/EntityDefLoader.cpp:166-182`，未知类型抛异常），并非编辑器保存时的 XSD 流程。
 > 以下规则为预期的编辑器期检查项。
 
 ```

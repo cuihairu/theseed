@@ -52,11 +52,17 @@ int main(int argc, char** argv) {
             useJson = true;
             continue;
         }
-        if (current == "--host" && index + 1 < THESEED_ARGC) {
-            listenHost = THESEED_ARGV[++index];
-            continue;
-        }
-        if (current == "--port" && index + 1 < THESEED_ARGC) {
+        if (current == "--host" || current == "--port") {
+            // 缺值显式报错退出：选项名不得落回 command 分支被当命令执行
+            //（否则 daemon 意图被静默误判为一次性模式）。
+            if (index + 1 >= THESEED_ARGC) {
+                std::cerr << "missing value for " << current << "\n";
+                return 1;
+            }
+            if (current == "--host") {
+                listenHost = THESEED_ARGV[++index];
+                continue;
+            }
             const auto parsed = theseed::app::parsePort(THESEED_ARGV[++index]);
             if (!parsed) return 1;
             listenPort = *parsed;
@@ -92,11 +98,16 @@ int main(int argc, char** argv) {
 
     // daemon 模式：打印 bootstrap 快照横幅后启动 MachineDaemon 并驱动
     // tick 循环（策略/角色/OTLP 全缺省安全值：空策略 = 一律拒绝）。
+    // stdout 只承载快照——--json 时即纯 JSON 流（与旧版裸 --json 行为
+    // 对齐，可脚本解析）；标题与生命周期行走 stderr，不混入 stdout。
+    // 退出条件 = 信号停机（gRunning 清零）或 RPC 受控停机（machine.shutdown
+    // 已受理）。
     const auto banner = agent.snapshot();
-    std::cout << "theseed_machine bootstrap\n";
     if (useJson) {
+        std::cerr << "theseed_machine bootstrap\n";
         std::cout << formatSnapshotJson(banner) << "\n";
     } else {
+        std::cout << "theseed_machine bootstrap\n";
         std::cout << formatSnapshotText(banner);
     }
 
@@ -109,14 +120,14 @@ int main(int argc, char** argv) {
         std::cerr << "machine.daemon start failed on " << listenHost << ":" << listenPort << "\n";
         return 1;
     }
-    std::cout << "machine.daemon listening on " << listenHost << ":" << daemon.localPort() << "\n";
+    std::cerr << "machine.daemon listening on " << listenHost << ":" << daemon.localPort() << "\n";
 
-    while (theseed::app::gRunning) {
+    while (theseed::app::gRunning && !daemon.shutdownRequested()) {
         daemon.tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     daemon.stop();
-    std::cout << "machine.daemon stopped.\n";
+    std::cerr << "machine.daemon stopped.\n";
     return 0;
 }

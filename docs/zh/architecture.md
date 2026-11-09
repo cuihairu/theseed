@@ -95,7 +95,7 @@ C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默
   BackupTopologyCoordinator、LoadProfiler。
 - 进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine（`apps/`）。
 - 代码地图：`src/foundation`（基础设施）/ `src/runtime`（运行时核心）/
-  `src/core`（应用骨架与 EntityDef）/ `src/db` / `src/login` / `src/realm` /
+  `src/core`（应用骨架）/ `src/db`（实体存储与 EntityDef）/ `src/login` / `src/realm` /
   `src/ops` / `src/control` / `src/scripting`。
 
 ## 6. 质量红线（本仓执行标准）

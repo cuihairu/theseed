@@ -235,6 +235,10 @@ std::uint16_t MachineDaemon::localPort() const {
     return listener_.localPort();
 }
 
+bool MachineDaemon::shutdownRequested() const {
+    return shutdownRequested_;
+}
+
 const std::vector<AuditEntry>& MachineDaemon::auditLog() const {
     return auditLog_;
 }

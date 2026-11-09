@@ -2692,6 +2692,10 @@ int main() {
         nodeTick();  // 收尾：本 tick 末优雅停机
         if (nodeDaemon.isListening())
             FAIL("daemon must stop listening after controlled shutdown");
+        // 受控停机须对宿主可见：shutdownRequested 保持置位，常驻主循环
+        // （gRunning 之外）据此退出，RPC 停机后进程不再空转。
+        if (!nodeDaemon.shutdownRequested())
+            FAIL("controlled shutdown must keep shutdown-requested set");
         if (nodeCenter.nodeCount() != 0)
             FAIL("controlled shutdown must deregister from the center");
         nodeTick();

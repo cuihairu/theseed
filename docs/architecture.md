@@ -95,7 +95,7 @@ each module has unit/integration tests, with 100% coverage across the three metr
   BackupTopologyCoordinator, LoadProfiler.
 - Process targets: loginapp / realmapp / baseapp / cellapp / dbapp / machine (`apps/`).
 - Code map: `src/foundation` (infrastructure) / `src/runtime` (runtime core) /
-  `src/core` (application skeleton and EntityDef) / `src/db` / `src/login` / `src/realm` /
+  `src/core` (application skeleton) / `src/db` (entity storage and EntityDef) / `src/login` / `src/realm` /
   `src/ops` / `src/control` / `src/scripting`.
 
 ## 6. Quality Red Lines (standards enforced in this repo)

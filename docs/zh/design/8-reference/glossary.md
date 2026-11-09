@@ -14,7 +14,7 @@
 | 调度器 | Tick Scheduler | 按六阶段排序的游戏循环：快照 tickable、执行任务、上报耗时并暴露停止控制。 | src/runtime/include/theseed/runtime/TickScheduler.h:16 |
 | 实体 | Entity | 拥有 id/type/side、状态、属性、定时器、控制器、事件与 Base/Cell 关系的运行时游戏对象。 | src/runtime/include/theseed/runtime/Entity.h:34 |
 | 实体定义 | EntityDef | 解析后的 XML 实体契约：属性、暴露方法、事件、继承与默认值。 | src/runtime/include/theseed/runtime/EntityDef.h:19 |
-| 实体定义注册表 | EntityDef Registry | 将 XML 文件解析、继承合并并转成实体工厂的加载边界。 | src/core/include/theseed/core/EntityDefRegistry.h:15 |
+| 实体定义注册表 | EntityDef Registry | 将 XML 文件解析、继承合并并转成实体工厂的加载边界。 | src/db/include/theseed/db/EntityDefRegistry.h:15 |
 | 属性块 | PropertyBlock | 按 EntityDef 布局的连续实体属性存储，含类型化访问、默认值与序列化。 | src/runtime/include/theseed/runtime/PropertyBlock.h:21 |
 | AOI | Area of Interest | X/Z 十字链表坐标索引与范围触发器，用于推导实体可见性与进出事件。 | src/runtime/include/theseed/runtime/AOI.h:71 |
 | 观察者视图 | Witness | 每观察者的距离分层与暂存属性/位置增量，把 AOI 状态转成客户端更新。 | src/runtime/include/theseed/runtime/Witness.h:41 |
@@ -26,8 +26,8 @@
 | 客户端会话 | Client Session | 客户端连接的帧状态与解析/发送器；不解释业务结果。 | src/login/include/theseed/login/ClientSession.h:13 |
 | 登录协议 | Login Protocol | 紧凑 length/type/payload 协议，以及登录、选区、错误消息的编解码器。 | src/login/include/theseed/login/LoginProtocol.h:36 |
 | 会话令牌 | Session Token | 跨接入跳携带并校验 account/realm 身份的无状态令牌格式。 | src/login/include/theseed/login/SessionToken.h:7 |
-| 实体存储 | Entity Store | load/save/remove/ID 分配/列表的持久化抽象，由 memory、file、MySQL、PostgreSQL 与远程 DB 适配实现。 | src/core/include/theseed/core/IEntityStore.h:16 |
-| 文件存储 | File Store | 以根目录组织的文件实体格式，ID 分配由互斥锁保护。 | src/core/include/theseed/core/FileEntityStore.h:12 |
+| 实体存储 | Entity Store | load/save/remove/ID 分配/列表的持久化抽象，由 memory、file、MySQL、PostgreSQL 与远程 DB 适配实现。 | src/db/include/theseed/db/IEntityStore.h:16 |
+| 文件存储 | File Store | 以根目录组织的文件实体格式，ID 分配由互斥锁保护。 | src/db/include/theseed/db/FileEntityStore.h:12 |
 | SQL 存储后端 | SQL Store Backend | 共享同一二进制实体载荷的 MySQL/PostgreSQL 后端族，另有 SQL 方言差异的 ID/账号索引与建表逻辑。 | src/db/include/theseed/db/MySQLEntityStore.h:28 |
 | 远程存储适配器 | Remote Store Adapter | BaseEntity 侧客户端，把 DBApp 请求/应答隐藏在 IEntityStore 后，并处理超时。 | src/db/include/theseed/db/RemoteEntityStore.h:17 |
 | Redis 形状态 | Redis-Shaped State | 字符串、有序集合、锁和所有权原子写的 provider 接缝；当前生产装配使用内存实现。 | src/foundation/include/theseed/foundation/RedisProvider.h:28 |

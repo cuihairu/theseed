@@ -67,7 +67,7 @@
 </g>
 <g><rect x="40" y="960" width="760" height="80" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="58" y="994" class="name" text-anchor="start">res/entities/*.xml</text>
-<text x="58" y="1024" class="body" text-anchor="start">EntityDefRegistry (src/core) · loaded at startup → baseapp / cellapp</text>
+<text x="58" y="1024" class="body" text-anchor="start">EntityDefRegistry (src/db) · loaded at startup → baseapp / cellapp</text>
 </g>
 <g><rect x="880" y="420" width="360" height="200" rx="14" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5"/>
 <text x="898" y="454" class="name" text-anchor="start">machine</text>
