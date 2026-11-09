@@ -38,6 +38,8 @@ using theseed::control::machine::formatSnapshotText;
 // 调用保持旧 CLI 契约（执行后打印快照退出）；无 command 则作为 daemon
 // 常驻，由 SignalHandler 驱动优雅停机。
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     theseed::app::installSignalHandlers();
 
     bool useJson = false;
