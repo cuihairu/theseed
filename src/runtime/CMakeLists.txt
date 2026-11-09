@@ -4,6 +4,13 @@ add_library(
     BackupTopologyCoordinator.cpp
     BehaviorTree.cpp
     CellRuntime.cpp
+    CellRuntimeDetail.cpp
+    CellRuntimeEntity.cpp
+    CellRuntimeGhost.cpp
+    CellRuntimeHandlers.cpp
+    CellRuntimeMigration.cpp
+    CellRuntimeReplication.cpp
+    CellRuntimeSpace.cpp
     Controller.cpp
     DirtyMask.cpp
     Entity.cpp
