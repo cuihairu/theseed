@@ -3,6 +3,11 @@ add_library(
     machine/HostProbe.cpp
     machine/MachineAgent.cpp
     machine/MachineDaemon.cpp
+    machine/MachineDaemonConfig.cpp
+    machine/MachineDaemonDetail.cpp
+    machine/MachineDaemonDiagnostic.cpp
+    machine/MachineDaemonProcess.cpp
+    machine/MachineDaemonSession.cpp
     machine/MachineSnapshotCodec.cpp
     machine/OtlpMetricsExporter.cpp
     machine/OtlpTraceExporter.cpp
