@@ -24,6 +24,13 @@
 | Test scale | 115 tests in the gcc-coverage tree (including the MySQL/PG integration section); clang18 / gcc13 trees have 103 each (no libmysql, DBApp falls back to the file backend) |
 | Tooling | gcovr 8.6, `--filter src/`, `--txt` report |
 
+> [2026-11-14 G2 audit note] The table above is the 2026-09-25 sprint snapshot. The source has grown
+> since (the 2026-10/11 test and fix batches): the latest recorded gate run is line 11846/11846 and
+> function 1703/1703 at 100% (see the audit rounds in `todo.md`), and the gcc-coverage tree now registers
+> 125 tests (MySQL/PG gated off, the same CI denominator basis as `.github/workflows/build.yml`).
+> The narrative numbers in the sections below are historical values from their own dates; the current
+> gate figures live in `todo.md`, not in this report.
+
 ### 1.1 Metric Basis: gcovr 8.6's `--txt` Is Actually an "Entry-Level" Determination (settled 2026-09-25)
 
 gcovr may record multiple count entries for the same line (multiple ABI variants of the same symbol, template instances per (TU, parameter combination),
@@ -91,7 +98,8 @@ when investigating a single-line suspicion, cross-verify with all three outputs.
 > taking the denominator 10440 → 10451, coverage remaining 100.0%. During batches five/six, product evolution such as the dbRequest bounded-wait rework
 > and the autoFlush strategy, plus new template instance lines, took the denominator 10451 → 10555 (functions
 > 1588 → 1606), coverage remaining double 100.0%. The 10440/10441 appearing elsewhere in this document are
-> historical numbers from the time they were achieved; this table is the current basis.
+> historical numbers from the time they were achieved; this table is the basis as measured on 2026-09-25
+> (gate figures have moved with the source since — see the G2 note under §1).
 
 The technique by which the `31cc3ed` batch eliminated 31 entries: the callCellWith/callBaseWith/callDefMethod/
 onPropertyChanged templates in Entity.h are counted per (line, TU instance); locate them per TU with gcov (gcc≥9 gcno files carry

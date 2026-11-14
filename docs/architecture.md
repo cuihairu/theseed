@@ -3,7 +3,7 @@
 > **English** | 中文
 
 > This document answers three questions: what theseed borrowed from BigWorld and KBEngine respectively, what it changed, and why.
-> Detailed arguments per system area are in the eight-layer design documents under `docs/design/` (0-foundation through 8-reference),
+> Detailed arguments per system area are in the nine-layer design documents under `docs/design/` (0-foundation through 8-reference),
 > and item-by-item source tracing is in `docs/design/8-reference/source-attribution.md`.
 
 ## 1. Positioning
@@ -70,8 +70,8 @@ BigWorld only supports MySQL (+XML); KBEngine takes MySQL as its main path. The 
 
 monorepo + vcpkg manifest + CMake presets (five trees: gcc/clang/msvc/coverage/sanitize);
 C++23; `-Wall -Wextra -Wpedantic -Werror` (`THESEED_WARNINGS_AS_ERRORS=ON` enabled by default);
-each module has unit/integration tests, with 100% coverage across the three metrics of line/branch/function (exemptions require experimental justification, see
-`docs/design/8-reference/coverage-report.md`).
+each module has unit/integration tests, with line/function coverage hard-gated at 100% and branch coverage tracked informationally (unreachable arms are ledgered in
+`docs/KNOWN_UNCOVERABLE_ARMS.md`; exemptions require experimental justification, see `docs/design/8-reference/coverage-report.md`).
 
 ## 4. Avoiding BigWorld's Legacy Issues
 
@@ -79,11 +79,11 @@ each module has unit/integration tests, with 100% coverage across the three metr
 | --- | --- | --- |
 | Heavy coupling between the core and scripting/platform | Pure C++23 core library layering (foundation→runtime→core/db/login/...), with the scripting layer going only through restricted interfaces | `src/` layering and dependency direction |
 | Platform lock-in (Windows server toolchain, custom builds) | CMake ≥3.28 + vcpkg manifest, a three-compiler matrix of gcc/clang/msvc + coverage/sanitize trees | `CMakePresets.json` |
-| Missing tests, regression done manually | 128 tests passing green as the commit gate; a 100% red line across the three coverage metrics; a test written but not registered is caught by `-Wunused-function` | `tests/`, CI, `-Werror` |
+| Missing tests, regression done manually | 128 tests passing green as the commit gate; a 100% hard gate on line/function coverage with branch coverage tracked informationally; a test written but not registered is caught by `-Wunused-function` | `tests/`, CI, `-Werror` |
 | Observation/control/data planes permeating each other | Separation of the three planes; the Ops read-only plane on a separate HTTP port; control commands separated from metrics display | `src/ops/`, architecture baseline documents |
 | The database layer only supports MySQL | The `IEntityStore` abstraction + the file / MySQL / PostgreSQL / remote backends (in-memory for tests), with the SQL integration section gated by environment variables for reproducible verification | `src/db/` |
 
-## 5. Current Implementation Status (as of 2026-09)
+## 5. Current Implementation Status (as of 2026-11)
 
 - **Phase A (complete)**: TickScheduler, Entity/Base-Cell dual bodies, PropertyBlock,
   Base↔Cell EntityCall, SingleCell Space, Witness synchronization, FileEntityStore, minimal login.

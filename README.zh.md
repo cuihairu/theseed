@@ -8,7 +8,7 @@
 
 以 BigWorld 为源头、KBEngine 为参考实现之一，面向现代 MMO 的分布式游戏服务器引擎。
 
-设计文档见 `docs/design/`（按引擎系统面分 0-foundation ~ 8-reference 八层组织）。实现基线见 `docs/design/0-foundation/01-mvp-architecture-baseline.md`。
+设计文档见 `docs/design/`（按引擎系统面分 0-foundation ~ 8-reference 九层组织）。实现基线见 `docs/design/0-foundation/01-mvp-architecture-baseline.md`。
 
 ## 仓库结构
 

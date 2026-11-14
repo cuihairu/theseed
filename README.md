@@ -8,7 +8,7 @@
 
 A distributed game server engine for modern MMOs, with BigWorld as its origin and KBEngine as one of its reference implementations.
 
-Design documents live in `docs/design/` (organized into eight layers, 0-foundation ~ 8-reference, by engine system area). The implementation baseline is `docs/design/0-foundation/01-mvp-architecture-baseline.md`.
+Design documents live in `docs/design/` (organized into nine layers, 0-foundation ~ 8-reference, by engine system area). The implementation baseline is `docs/design/0-foundation/01-mvp-architecture-baseline.md`.
 
 ## Repository Layout
 

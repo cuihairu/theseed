@@ -3,7 +3,7 @@
 > English | **中文**
 
 > 本文回答三个问题：theseed 从 BigWorld 与 KBEngine 分别借鉴了什么、改了什么、为什么改。
-> 逐系统面的详细论证见 `docs/design/` 八层设计文档（0-foundation ~ 8-reference），
+> 逐系统面的详细论证见 `docs/design/` 九层设计文档（0-foundation ~ 8-reference），
 > 来源逐项追溯见 `docs/design/8-reference/source-attribution.md`。
 
 ## 1. 定位
@@ -70,8 +70,8 @@ BigWorld 只支持 MySQL(+XML)；KBEngine 以 MySQL 为主路径。存储模型�
 
 monorepo + vcpkg manifest + CMake presets（gcc/clang/msvc/coverage/sanitize 五树）；
 C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默认开）；
-每个模块配单元/集成测试，行/分支/函数三口径覆盖率 100%（豁免需实验论证，见
-`docs/design/8-reference/coverage-report.md`）。
+每个模块配单元/集成测试，行/函数覆盖率 100% 硬门、分支覆盖率信息性跟踪（不可达臂登记于
+`docs/KNOWN_UNCOVERABLE_ARMS.md`；豁免需实验论证，见 `docs/design/8-reference/coverage-report.md`）。
 
 ## 4. 对照 BigWorld 历史遗留问题的规避
 
@@ -79,11 +79,11 @@ C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默
 | --- | --- | --- |
 | 核心与脚本/平台耦合重 | 纯 C++23 核心库分层（foundation→runtime→core/db/login/...），脚本层只经受限接口 | `src/` 分层与依赖方向 |
 | 平台绑定（Windows 服务器工具链、专用构建） | CMake ≥3.28 + vcpkg manifest，gcc/clang/msvc 三编译器矩阵 + coverage/sanitize 树 | `CMakePresets.json` |
-| 测试缺失、回归靠人工 | 128 个测试全绿为提交门槛；覆盖率三口径 100% 红线；写而未注册的测试会被 `-Wunused-function` 拦下 | `tests/`、CI、`-Werror` |
+| 测试缺失、回归靠人工 | 128 个测试全绿为提交门槛；行/函数覆盖率 100% 硬门、分支信息性跟踪；写而未注册的测试会被 `-Wunused-function` 拦下 | `tests/`、CI、`-Werror` |
 | 观测/控制/数据面互相渗透 | 三平面分离；Ops 只读面独立 HTTP 端口；控制命令与 metrics 展示分开 | `src/ops/`、架构基线文档 |
 | 数据库层只支持 MySQL | `IEntityStore` 抽象 + 文件 / MySQL / PostgreSQL / 远程 DB 后端（测试用内存实现），SQL 集成段环境变量门控可重复验证 | `src/db/` |
 
-## 5. 当前实现状态（截至 2026-09）
+## 5. 当前实现状态（截至 2026-11）
 
 - **Phase A（完成）**：TickScheduler、Entity/Base-Cell 双体、PropertyBlock、
   Base↔Cell EntityCall、SingleCell Space、Witness 同步、FileEntityStore、极简登录。
