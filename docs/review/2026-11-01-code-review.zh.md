@@ -29,12 +29,12 @@
 |---|---|---|---|---|
 | 1 | 分配炸弹：不可信长度前缀先分配后界检查（`readString`） | `src/foundation/MemoryStream.cpp` | `52e40a4` | `MemoryStreamTest::testReadStringLiedLength` |
 | 2 | 分配炸弹：invocation payload 长度先分配后界检查 | `src/runtime/InvocationCodec.cpp:48` | `2305061` | `InvocationCodecTest::testDecodeRejectsLiedPayloadLength` |
-| 3 | 分配炸弹：实体属性 size 先分配后界检查 | `src/core/EntityData.cpp` | `a70fdbe` | `EntityDataTest`（既有 `testDecodeTruncatedProperty`） |
+| 3 | 分配炸弹：实体属性 size 先分配后界检查 | `src/db/EntityData.cpp`（本次评审时为 `src/core/`，由 `68e53ac` 迁至 `src/db/`） | `a70fdbe` | `EntityDataTest`（既有 `testDecodeTruncatedProperty`） |
 | 4 | 堆越界读：变长 value 之后 delta header 读取越过 payload 末尾 | `src/runtime/PropertyReplication.cpp:92` | `2be9c00` | `PropertyReplicationTest::decode_truncated_header_after_value` |
 | 5 | Use-after-free：`createEntity` 移动 `unique_ptr` 后 `emplace` 失败仍返回裸指针 | `src/core/CellApp.cpp:118` | `ef21891` | `CellAppTest::testCreateEntityDuplicateId` |
 | 6 | 空指针解引用：对同名既有 gauge 调 `counter()` | `src/foundation/MetricsRegistry.cpp:85` | `a5f4496` | `MetricsTest::testCounterOnExistingGauge` |
 | 7 | 周期定时器在级联时刻晚一整个轮周期（256 tick 边界）触发 | `src/foundation/TimerWheel.cpp` | `f7560fc` | `TimerWheelTest::testPeriodicTimerExactWheelBoundary` |
-| 8 | 无符号数值边界解析 `stoi`/`stoll` 溢出 | `src/core/EntityDefLoader.cpp` | `3c6b806` | `EntityDefLoaderTest`（u32/u64 maxValue 属性） |
+| 8 | 无符号数值边界解析 `stoi`/`stoll` 溢出 | `src/db/EntityDefLoader.cpp`（本次评审时为 `src/core/`，由 `68e53ac` 迁至 `src/db/`） | `3c6b806` | `EntityDefLoaderTest`（u32/u64 maxValue 属性） |
 | 9 | 全部套接字缺 `FD_CLOEXEC`（fd 泄漏进 fork/exec 子进程 → 端口滞留） | `src/runtime/SocketDetail.h`、`TcpConnection.cpp`、`TcpListener.cpp`、`ProcessPortScanner.cpp` | `2a760e8` | 套接字测试 |
 | 10 | 阻塞式 `waitpid` 在忽略 SIGTERM 的子进程上冻结控制面 tick 线程 | `src/control/machine/ProcessSupervisor.cpp:546` | `ae451a2` | `ProcessSupervisorTest::test_stop_escalates_to_sigkill` |
 | 11 | decode 异常未捕获，整个 runtime 进程崩溃 | `src/runtime/NetworkTransport.cpp:215` | `d2fdd56` | `NetworkTransportTest::testMalformedInvocationFrameDisconnects` |
@@ -53,7 +53,7 @@
 | 7 | `TimerWheel::cancel` 只置 `cancelled` 从不删除条目 → 已取消定时器持续累积 | `src/foundation/TimerWheel.cpp:86` | 循环内 `entry.cancelled = true`；无 erase |
 | 8 | `RateLimiter::tryConsume` 按毫秒除以 `refillInterval`；`< 1 ms` → count 0 → 除零（限流器静默失效） | `src/foundation/RateLimiter.cpp:41` | `1.0 / duration_cast<ms>(refillInterval).count()` |
 | 9 | `CellRuntime` 分发路径无异常隔离；抛异常的 handler 逃逸 `pumpInbound` | `src/runtime/CellRuntime.cpp:354` | 无界循环内 `dispatchInvocation(batch[index])`，无 try/catch |
-| 10 | `FileEntityStore::allocId` 跨文件 I/O 的非原子读改写；并发调用可拿到同一 id | `src/core/FileEntityStore.cpp:102` | 读 `nextId`、`++`、写回 —— 无锁 |
+| 10 | `FileEntityStore::allocId` 跨文件 I/O 的非原子读改写；并发调用可拿到同一 id | `src/db/FileEntityStore.cpp`（`allocId`），本次评审时为 `src/core/`，由 `68e53ac` 迁至 `src/db/`；现已修复 | 读 `nextId`、`++`、写回 —— 无锁 |
 | 11 | `RateLimiter::tryConsume` 跨 Redis 往返的读改写非原子；并发请求超发 | `src/foundation/RateLimiter.cpp:27` | `redis_->get` / `redis_->set` 无 WATCH/MULTI |
 | 12 | `EntityDef::mergeFrom` 增量改动 `properties_`/`methods_`，中途属性冲突即返回 false，遗留半合并定义 | `src/runtime/EntityDef.cpp:33` | 先 push 属性、冲突处 `return false`；`inherited_` 保持 false |
 

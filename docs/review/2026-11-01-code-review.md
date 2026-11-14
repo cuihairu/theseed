@@ -30,12 +30,12 @@ unpatched code.
 |---|---|---|---|---|
 | 1 | Allocation bomb: untrusted length prefix allocated before bounds check (`readString`) | `src/foundation/MemoryStream.cpp` | `52e40a4` | `MemoryStreamTest::testReadStringLiedLength` |
 | 2 | Allocation bomb: invocation payload length allocated before bounds check | `src/runtime/InvocationCodec.cpp:48` | `2305061` | `InvocationCodecTest::testDecodeRejectsLiedPayloadLength` |
-| 3 | Allocation bomb: entity property size allocated before bounds check | `src/core/EntityData.cpp` | `a70fdbe` | `EntityDataTest` (existing `testDecodeTruncatedProperty`) |
+| 3 | Allocation bomb: entity property size allocated before bounds check | `src/db/EntityData.cpp` (located in `src/core/` as of this review; moved to `src/db/` by `68e53ac`) | `a70fdbe` | `EntityDataTest` (existing `testDecodeTruncatedProperty`) |
 | 4 | Heap over-read: delta header read past payload after a variable-size value | `src/runtime/PropertyReplication.cpp:92` | `2be9c00` | `PropertyReplicationTest::decode_truncated_header_after_value` |
 | 5 | Use-after-free: `createEntity` moved `unique_ptr` then returned raw pointer after failed `emplace` | `src/core/CellApp.cpp:118` | `ef21891` | `CellAppTest::testCreateEntityDuplicateId` |
 | 6 | Null deref: `counter()` on an existing gauge name | `src/foundation/MetricsRegistry.cpp:85` | `a5f4496` | `MetricsTest::testCounterOnExistingGauge` |
 | 7 | Periodic timer fired a wheel-cycle late at cascade (256-tick boundary) | `src/foundation/TimerWheel.cpp` | `f7560fc` | `TimerWheelTest::testPeriodicTimerExactWheelBoundary` |
-| 8 | `stoi`/`stoll` overflow parsing unsigned numeric bounds | `src/core/EntityDefLoader.cpp` | `3c6b806` | `EntityDefLoaderTest` (u32/u64 max-value properties) |
+| 8 | `stoi`/`stoll` overflow parsing unsigned numeric bounds | `src/db/EntityDefLoader.cpp` (located in `src/core/` as of this review; moved to `src/db/` by `68e53ac`) | `3c6b806` | `EntityDefLoaderTest` (u32/u64 max-value properties) |
 | 9 | Missing `FD_CLOEXEC` on all sockets (fd leak into fork/exec children → port retention) | `src/runtime/SocketDetail.h`, `TcpConnection.cpp`, `TcpListener.cpp`, `ProcessPortScanner.cpp` | `2a760e8` | socket tests |
 | 10 | Blocking `waitpid` froze the control-plane tick thread on a SIGTERM-ignoring child | `src/control/machine/ProcessSupervisor.cpp:546` | `ae451a2` | `ProcessSupervisorTest::test_stop_escalates_to_sigkill` |
 | 11 | Uncaught decode exception crashed the whole runtime process | `src/runtime/NetworkTransport.cpp:215` | `d2fdd56` | `NetworkTransportTest::testMalformedInvocationFrameDisconnects` |
@@ -54,7 +54,7 @@ unpatched code.
 | 7 | `TimerWheel::cancel` marks `cancelled` but never erases the entry → cancelled timers accumulate | `src/foundation/TimerWheel.cpp:86` | loop sets `entry.cancelled = true`; no erase |
 | 8 | `RateLimiter::tryConsume` divides by `refillInterval` in ms; `< 1 ms` → count 0 → division by zero (limiter silently disabled) | `src/foundation/RateLimiter.cpp:41` | `1.0 / duration_cast<ms>(refillInterval).count()` |
 | 9 | `CellRuntime` dispatch path has no exception containment; a throwing handler escapes `pumpInbound` | `src/runtime/CellRuntime.cpp:354` | `dispatchInvocation(batch[index])` inside unbounded loop, no try/catch |
-| 10 | `FileEntityStore::allocId` is a non-atomic read-modify-write across file I/O; concurrent callers can receive the same id | `src/core/FileEntityStore.cpp:102` | read `nextId`, `++`, write back — no lock |
+| 10 | `FileEntityStore::allocId` is a non-atomic read-modify-write across file I/O; concurrent callers can receive the same id | `src/db/FileEntityStore.cpp` (`allocId`), located in `src/core/` as of this review and moved to `src/db/` by `68e53ac`; since fixed | read `nextId`, `++`, write back — no lock |
 | 11 | `RateLimiter::tryConsume` read-modify-write across a Redis round-trip is not atomic; concurrent requests over-admit | `src/foundation/RateLimiter.cpp:27` | `redis_->get` / `redis_->set` without WATCH/MULTI |
 | 12 | `EntityDef::mergeFrom` mutates `properties_`/`methods_` incrementally and returns false on a mid-merge property collision, leaving a half-merged definition | `src/runtime/EntityDef.cpp:33` | pushes properties, then `return false` on collision; `inherited_` stays false |
 
