@@ -42,4 +42,4 @@ features:
 
 ![theseed · distributed MMO game server engine](/images/architecture-en.svg)
 
-> Three-plane separation: runtime data plane (baseapp / cellapp, single-threaded tick) · control plane (machine process supervision, read-only ops HTTP) · cross-realm async plane (Redis); persistence via the three `IEntityStore` backends. Process targets: loginapp / realmapp / baseapp / cellapp / dbapp / machine.
+> Three-plane separation: runtime data plane (baseapp / cellapp, single-threaded tick) · control plane (machine process supervision, read-only ops HTTP) · cross-realm async plane (Redis); persistence via the `IEntityStore` family (in-memory / file / MySQL / PostgreSQL / remote DB). Process targets: loginapp / realmapp / baseapp / cellapp / dbapp / machine.

@@ -46,6 +46,14 @@ exception is thrown inside the statement, untestable unless the test injects an 
 ## control
 
 ### MachineDaemon.cpp
+
+> [2026-11-14 G2 audit note] The 2026-11-09 split (commit 62fedfa) redistributed this file's
+> original 1861 lines into MachineDaemon.cpp (core lifecycle/dispatch) plus the
+> MachineDaemonProcess / Session / Diagnostic / Config family TUs (verbatim move, zero logic
+> change). The line numbers below are **pre-split coordinates** — the 74-arc set now spans
+> those five TUs. Re-harvest on the two-run union basis is pending (see todo.md G2-B); the
+> qualitative classification (structural exception-unwind landing pads) carries over.
+
 - 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
   1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
   1743/1799/1842 [variant-noise / inline-noise]: log attr lines and ternary/

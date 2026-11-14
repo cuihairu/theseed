@@ -46,6 +46,13 @@ TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
 ## control
 
 ### MachineDaemon.cpp
+
+> [2026-11-14 G2 审计注] 2026-11-09 的拆分（commit 62fedfa）把本文件原有 1861 行
+> 重分布为 MachineDaemon.cpp（核心生命周期/分发）+ MachineDaemonProcess / Session /
+> Diagnostic / Config 四族 TU（逐字搬移，零逻辑改动）。下方行号为**拆分前坐标**——
+> 这 74 条 arc 现跨这五个 TU。按两轮并集基线重采归位待定（见 todo.md G2-B）；
+> 定性分类（结构性异常解栈 landing pad）继续适用。
+
 - 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
   1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
   1743/1799/1842 [variant-noise / inline-noise]：log attr 行与三目/

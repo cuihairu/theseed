@@ -20,14 +20,15 @@ src/       Reusable libraries (one static library per directory)
              runtime     Entity / EntityDef / PropertyBlock / Space / AOI / Witness /
                           Ghost / Controller / TickScheduler / TcpConnection / TcpListener /
                           BackupTopology / LoadProfiler / BehaviorTree / StateMachine
-             core        BaseRuntime / BaseApp / CellApp / EntityDefRegistry / EntityDefLoader /
-                          FileEntityStore / EntityQuery
-             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection /
+             core        BaseRuntime / BaseApp / CellApp
+             db          DBApp / DBProtocol / IEntityStore / IAccountStore / EntityData /
+                          EntityDefRegistry / EntityDefLoader / EntityQuery / FileEntityStore /
+                          RemoteEntityStore / MySQLEntityStore / MySQLConnection /
                           PostgreSQLEntityStore / PostgreSQLConnection
              login       LoginApp / ClientSession / LoginProtocol / SessionToken
              realm       RealmApp
              ops         OpsInspector / OpsServer (read-only inspect + /metrics + /health)
-             control     MachineAgent / HostProbe / ProcessSupervisor
+             control     MachineAgent / MachineDaemon / HostProbe / ProcessSupervisor
              scripting   HotUpdate (restricted L1/L2 hot-update prototype)
 tests/     Unit/integration tests (organized by module)
 tools/     codegen (C# client code generation)
@@ -41,7 +42,7 @@ C++23 + CMake ≥ 3.28 + vcpkg manifest mode.
 
 ```bash
 # Configure (pick one preset)
-cmake --preset gcc-debug        # or clang-debug / mcp msvc-debug (Windows)
+cmake --preset gcc-debug        # or clang-debug / gcc-coverage / gcc-sanitize / msvc-debug (Windows)
 
 # Build
 cmake --build build/gcc-debug

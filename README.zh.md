@@ -20,14 +20,15 @@ src/       可复用库（每目录一个静态库）
              runtime     Entity / EntityDef / PropertyBlock / Space / AOI / Witness /
                           Ghost / Controller / TickScheduler / TcpConnection / TcpListener /
                           BackupTopology / LoadProfiler / BehaviorTree / StateMachine
-             core        BaseRuntime / BaseApp / CellApp / EntityDefRegistry / EntityDefLoader /
-                          FileEntityStore / EntityQuery
-             db          DBApp / DBProtocol / RemoteEntityStore / MySQLEntityStore / MySQLConnection /
+             core        BaseRuntime / BaseApp / CellApp
+             db          DBApp / DBProtocol / IEntityStore / IAccountStore / EntityData /
+                          EntityDefRegistry / EntityDefLoader / EntityQuery / FileEntityStore /
+                          RemoteEntityStore / MySQLEntityStore / MySQLConnection /
                           PostgreSQLEntityStore / PostgreSQLConnection
              login       LoginApp / ClientSession / LoginProtocol / SessionToken
              realm       RealmApp
              ops         OpsInspector / OpsServer（只读 inspect + /metrics + /health）
-             control     MachineAgent / HostProbe / ProcessSupervisor
+             control     MachineAgent / MachineDaemon / HostProbe / ProcessSupervisor
              scripting   HotUpdate（受限 L1/L2 热更原型）
 tests/     单元/集成测试（按模块组织）
 tools/     codegen（C# 客户端代码生成）
@@ -41,7 +42,7 @@ C++23 + CMake ≥ 3.28 + vcpkg manifest mode。
 
 ```bash
 # 配置（任选一个 preset）
-cmake --preset gcc-debug        # 或 clang-debug / mcp msvc-debug(Windows)
+cmake --preset gcc-debug        # 或 clang-debug / gcc-coverage / gcc-sanitize / msvc-debug（Windows）
 
 # 编译
 cmake --build build/gcc-debug

@@ -79,9 +79,9 @@ each module has unit/integration tests, with 100% coverage across the three metr
 | --- | --- | --- |
 | Heavy coupling between the core and scripting/platform | Pure C++23 core library layering (foundation→runtime→core/db/login/...), with the scripting layer going only through restricted interfaces | `src/` layering and dependency direction |
 | Platform lock-in (Windows server toolchain, custom builds) | CMake ≥3.28 + vcpkg manifest, a three-compiler matrix of gcc/clang/msvc + coverage/sanitize trees | `CMakePresets.json` |
-| Missing tests, regression done manually | 120 tests passing green as the commit gate; a 100% red line across the three coverage metrics; a test written but not registered is caught by `-Wunused-function` | `tests/`, CI, `-Werror` |
+| Missing tests, regression done manually | 128 tests passing green as the commit gate; a 100% red line across the three coverage metrics; a test written but not registered is caught by `-Wunused-function` | `tests/`, CI, `-Werror` |
 | Observation/control/data planes permeating each other | Separation of the three planes; the Ops read-only plane on a separate HTTP port; control commands separated from metrics display | `src/ops/`, architecture baseline documents |
-| The database layer only supports MySQL | The `IEntityStore` abstraction + three backends, with the SQL integration section gated by environment variables for reproducible verification | `src/db/` |
+| The database layer only supports MySQL | The `IEntityStore` abstraction + the file / MySQL / PostgreSQL / remote backends (in-memory for tests), with the SQL integration section gated by environment variables for reproducible verification | `src/db/` |
 
 ## 5. Current Implementation Status (as of 2026-09)
 
@@ -91,8 +91,8 @@ each module has unit/integration tests, with 100% coverage across the three metr
   MySQL/PostgreSQL persistence backends ✅ (verified against real instances), Redis session/rate limiting ✅,
   C# code generation ✅, Metrics/Logger/Tracing ✅, read-only Ops inspect ✅,
   Channel/Bundle state statistics ✅.
-- **Phase C (started, pending end-to-end integration)**: restricted hot update (L1/L2), migration routing window,
-  BackupTopologyCoordinator, LoadProfiler.
+- **Phase C (complete)**: restricted hot update (L1/L2) ✅, migration routing window ✅,
+  BackupTopologyCoordinator ✅, LoadProfiler ✅.
 - Process targets: loginapp / realmapp / baseapp / cellapp / dbapp / machine (`apps/`).
 - Code map: `src/foundation` (infrastructure) / `src/runtime` (runtime core) /
   `src/core` (application skeleton) / `src/db` (entity storage and EntityDef) / `src/login` / `src/realm` /
@@ -178,7 +178,7 @@ The abstract layers below are responsibility boundaries found in the sources; th
 - **Configuration schema:** `OpsServer::Config` (`src/ops/include/theseed/ops/OpsServer.h:26`), `MachineDaemon::Config` and policy structs (`src/control/include/theseed/control/machine/MachineDaemon.h:211`), `OpsControlCenter::Config` (`src/control/include/theseed/control/ops/OpsControlCenter.h:49`), and OTLP exporter configs.
 - **Protocol files:** `RuntimeInvocation` reused with machine method constants (`src/control/include/theseed/control/machine/MachineDaemon.h:127`); dashboard markup is embedded by `DashboardPage.cpp`.
 - **User-facing copy:** health/inspect JSON, dashboard HTML, machine JSON snapshots, audit fields, and OTLP payload naming.
-- **Lifecycle:** OpsServer starts/ticks/stops with its app; MachineDaemon registers on start, reports/ticks, deregisters on graceful stop, and uninstalls exporters (`src/control/machine/MachineDaemon.cpp:348`, `src/control/machine/MachineDaemon.cpp:392`); the center prunes stale nodes (`src/control/ops/OpsControlCenter.cpp:186`).
+- **Lifecycle:** OpsServer starts/ticks/stops with its app; MachineDaemon registers on start, reports/ticks, deregisters on graceful stop, and uninstalls exporters (`src/control/machine/MachineDaemon.cpp:65`, `src/control/machine/MachineDaemon.cpp:109`); the center prunes stale nodes (`src/control/ops/OpsControlCenter.cpp:186`).
 
 ### 7.8 LAY-008: Tooling & Verification
 

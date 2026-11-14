@@ -43,4 +43,4 @@ features:
 
 ![theseed · 分布式 MMO 游戏服务器引擎](/images/architecture-zh.svg)
 
-> 三平面分离：运行时数据面（baseapp / cellapp，单线程 tick）· 控制面（machine 进程监管、ops 只读 HTTP）· 跨服异步面（Redis）；持久化走 IEntityStore 三后端。进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine。
+> 三平面分离：运行时数据面（baseapp / cellapp，单线程 tick）· 控制面（machine 进程监管、ops 只读 HTTP）· 跨服异步面（Redis）；持久化走 IEntityStore 存储族（内存 / 文件 / MySQL / PostgreSQL / 远程 DB）。进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine。

@@ -79,9 +79,9 @@ C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默
 | --- | --- | --- |
 | 核心与脚本/平台耦合重 | 纯 C++23 核心库分层（foundation→runtime→core/db/login/...），脚本层只经受限接口 | `src/` 分层与依赖方向 |
 | 平台绑定（Windows 服务器工具链、专用构建） | CMake ≥3.28 + vcpkg manifest，gcc/clang/msvc 三编译器矩阵 + coverage/sanitize 树 | `CMakePresets.json` |
-| 测试缺失、回归靠人工 | 120 个测试全绿为提交门槛；覆盖率三口径 100% 红线；写而未注册的测试会被 `-Wunused-function` 拦下 | `tests/`、CI、`-Werror` |
+| 测试缺失、回归靠人工 | 128 个测试全绿为提交门槛；覆盖率三口径 100% 红线；写而未注册的测试会被 `-Wunused-function` 拦下 | `tests/`、CI、`-Werror` |
 | 观测/控制/数据面互相渗透 | 三平面分离；Ops 只读面独立 HTTP 端口；控制命令与 metrics 展示分开 | `src/ops/`、架构基线文档 |
-| 数据库层只支持 MySQL | `IEntityStore` 抽象 + 三后端，SQL 集成段环境变量门控可重复验证 | `src/db/` |
+| 数据库层只支持 MySQL | `IEntityStore` 抽象 + 文件 / MySQL / PostgreSQL / 远程 DB 后端（测试用内存实现），SQL 集成段环境变量门控可重复验证 | `src/db/` |
 
 ## 5. 当前实现状态（截至 2026-09）
 
@@ -91,8 +91,8 @@ C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默
   MySQL/PostgreSQL 持久化后端 ✅（真实实例验证）、Redis 会话/限流 ✅、
   C# 代码生成 ✅、Metrics/Logger/Tracing ✅、只读 Ops inspect ✅、
   Channel/Bundle 状态统计 ✅。
-- **Phase C（已启动，待端到端集成）**：受限热更（L1/L2）、迁移路由窗口、
-  BackupTopologyCoordinator、LoadProfiler。
+- **Phase C（完成）**：受限热更（L1/L2）✅、迁移路由窗口 ✅、
+  BackupTopologyCoordinator ✅、LoadProfiler ✅。
 - 进程目标：loginapp / realmapp / baseapp / cellapp / dbapp / machine（`apps/`）。
 - 代码地图：`src/foundation`（基础设施）/ `src/runtime`（运行时核心）/
   `src/core`（应用骨架）/ `src/db`（实体存储与 EntityDef）/ `src/login` / `src/realm` /
@@ -178,7 +178,7 @@ C++23；`-Wall -Wextra -Wpedantic -Werror`（`THESEED_WARNINGS_AS_ERRORS=ON` 默
 - **配置 schema：** `OpsServer::Config`（`src/ops/include/theseed/ops/OpsServer.h:26`）、`MachineDaemon::Config` 与策略结构（`src/control/include/theseed/control/machine/MachineDaemon.h:211`）、`OpsControlCenter::Config`（`src/control/include/theseed/control/ops/OpsControlCenter.h:49`），以及 OTLP exporter 配置。
 - **专属协议文件：** 复用 `RuntimeInvocation` 加 machine 方法常量（`src/control/include/theseed/control/machine/MachineDaemon.h:127`）；dashboard 标记内嵌在 `DashboardPage.cpp`。
 - **文案挂载：** health/inspect JSON、dashboard HTML、machine JSON 快照、审计字段和 OTLP payload 命名。
-- **生命周期：** OpsServer 随应用 start/tick/stop；MachineDaemon 在 start 注册、tick 上报、优雅 stop 注销并卸载 exporter（`src/control/machine/MachineDaemon.cpp:348`、`src/control/machine/MachineDaemon.cpp:392`）；中心通过 TTL 剪枝（`src/control/ops/OpsControlCenter.cpp:186`）。
+- **生命周期：** OpsServer 随应用 start/tick/stop；MachineDaemon 在 start 注册、tick 上报、优雅 stop 注销并卸载 exporter（`src/control/machine/MachineDaemon.cpp:65`、`src/control/machine/MachineDaemon.cpp:109`）；中心通过 TTL 剪枝（`src/control/ops/OpsControlCenter.cpp:186`）。
 
 ### 7.8 LAY-008：工具与验证面
 
