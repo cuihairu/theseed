@@ -45,60 +45,52 @@ exception is thrown inside the statement, untestable unless the test injects an 
 
 ## control
 
-### MachineDaemon.cpp
+### MachineDaemon family (MachineDaemon.cpp + Process/Session/Diagnostic/Config/Detail)
 
-> [2026-11-14 G2 audit note] The 2026-11-09 split (commit 62fedfa) redistributed this file's
-> original 1861 lines into MachineDaemon.cpp (core lifecycle/dispatch) plus the
-> MachineDaemonProcess / Session / Diagnostic / Config family TUs (verbatim move, zero logic
-> change). The line numbers below are **pre-split coordinates** — the 74-arc set now spans
-> those five TUs. Re-harvest on the two-run union basis is pending (see todo.md G2-B); the
-> qualitative classification (structural exception-unwind landing pads) carries over.
+> [2026-11-15 G2-B re-harvest] The 2026-11-09 split (commit 62fedfa) redistributed the former
+> single 1861-line MachineDaemon.cpp verbatim (zero logic change) into six TUs under
+> `src/control/machine/`. The 74-arc set was re-harvested on the ledger basis: gcda swept,
+> then two consecutive full ctest runs (125/125 green, PID namespace) with a gcovr snapshot
+> after each — the zero-arc sets are identical across both rounds (no first-round pseudo
+> gaps this time). Conservation is exact: 74 arcs on 35 lines before and after the split.
+> Gate basis after this round: 12501 lines / 1721 functions, double 100% (GATE_EXIT=0),
+> branches 9119/9347 informational.
+> The signature spot-check on the union set repeats the legacy shape: every gap line
+> executed (minimum 1, among the machine.config.applied lines), all zero arcs paired never
+> blocks (2/2 attr+call pattern; 4/4 on ternary/concatenation lines), zero throw-flagged
+> arcs, all semantic arms taken in both rounds (Process:127 ternary non-zero arcs
+> 11/4/4/4/11; Session:442 nested ternary 4/2/3/1/4/4/2/4/2; Config:53 concatenation
+> 10/1/10/10/1/1/10/10/1; Diagnostic:171 ternary 6/4/6/4/4/6). The 2026-10-01
+> classification (structural exception-unwind landing pads; objdump endorsement of the
+> pre-split 171/373 dead blocks — endbr64 + construction-complete flag test/je +
+> conditional ~basic_string) carries over unchanged: same lines, same codegen mechanism,
+> only the coordinates moved.
 
-- 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
-  1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
-  1743/1799/1842 [variant-noise / inline-noise]: log attr lines and ternary/
-  string-concatenation merge arcs. [2026-09-30 renumbering] After the asynchronous batch wiring, the source file's line numbers
-  shifted down as a whole (same values from 171, 362-363→373-374 and 385→396 are +11, and 457 onward
-  +16), with the classification unchanged. [2026-10-01 re-check] The remaining 35 lines all satisfy the noise signature
-  (the line is executed + a 0-arc exists); 396 is the logInfo("machine.daemon.stopped")
-  line, whose 0-arc pair is the construction arc of an unused attr variant alternative (a string argument always takes
-  the string alternative), while the stop() guard itself is at 395 and the sink×identity four quadrants are all tested.
-   [2026-10-01 follow-up round instruction-level endorsement] gcov-14 -b -c per-arm taken basis, all 35 lines
-   (74 arcs) screened item by item: all surviving non-throw arms have taken >0 (no semantic true arm with taken 0
-   — no reversal candidate, so no cases are fabricated), and all zero arcs are never-executed
-   dead blocks. Split and classified by dead-block origin: variant-noise 60 arcs — LogAttribute single-value
-   construction lines (171/172/191/192/373/473/731/1290/1291/1371/1442/1561/1675:
-   branches 6/7 + call 8 dead blocks, i.e. unused variant alternative construction) and log call
-   lines (173/193/374/396/478/733/819/1010/1089/1292/1372/1443/1562/
-   1676/1743/1799/1842: calls 14/15 + branches 16/17 + call 18 dead blocks,
-   1712 is a ternary continuation line with a slightly different form but belongs to the same dead blocks); inline-noise 14 arcs — ternary/
-   string-concatenation lines (949/1167 have 2 arcs each as the to_string-side SSO/heap copy dead blocks,
-   with the ternary true/false semantic arms 22/8 and 12/8 all taken; 1241's four arcs are the key+"="+value concatenation
-   double dead blocks, with the ternary 20/2 all taken; 1711's four arcs + 1712's two arcs are the draining nested ternary,
-   with parsed 8/4 and draining 6/2 all taken). The lowest line execution count is 2 (1290/
-   1291), all the rest ≥6.
-   [2026-10-01 follow-up round re-check: 74-arc mechanism reversed, variant-noise/inline-noise →
-   structural] The per-arm taken count facts in the preceding entry are unchanged (all semantic arms >0, all zero arcs
-   never), but the "unused variant alternative/SSO copy" mechanism attribution does not hold — objdump
-   instruction-level evidence shows all 74 arcs are exception-unwind landing pads (EH landing pad cleanup dispatch):
-   the attr-line variant conversion construction is an out-of-line call (170→20b7a8, 171→
-   20e78c), the library body is not attributed to this line, and the conversion construction is fixed at compile time with no code generated for unused alternatives;
-   the log call line has no variant construction on the line itself, and the content of the dead blocks calls 14/15/18 is
-   ~vector/~LogAttribute/~basic_string conditional destruction, located in the endbr64 pad
-   entry region; the ternary/concatenation lines have no variant, and if the SSO/copy predicate were on the normal flow it would necessarily produce
-   taken 0 arc pairs, whereas the measured in-line zero arcs are all paired never with not a single non-throw
-   taken 0 (nothing a guard could block). 171 (1e5683) and 373 (1e88cd) dead blocks are instruction-level
-   isomorphic = endbr64 + r12b construction-complete flag test/je + conditional ~basic_string,
-   executed only when a bad_alloc-level exception is thrown inside the statement and stack unwinding cleans up an already-constructed temporary,
-   which tests cannot inject. The 74-arc registry is unchanged, and the category is re-judged as structural exception path;
-   variant-noise lines with the same signature (TickDiagnostics 39 etc.) are suspected of the same mechanism, left for
-   the next round of file-by-file re-review.
-[2026-10-01 reversal] The original three structural arms were closed out by added tests and removed: 25 the toBytes empty-string defensive arm
-(empty-payload profile download — EmptyPayloadProfiler true + empty string drives memcpy to skip,
-with a legitimate zero-byte response), 545 the auditSink publish empty-identity skip arm (empty hostname fake
-agent + dual sinks, publish skipped and the center ring stays empty), 1011 the `ok ? 0x01 : 0x00`
-false arm (a fake agent's disposition always fails — a deterministic stand-in for ESRCH race semantics, with the 0x00 response
-reachable; the claim "the race can never be stably injected" does not hold).
+Post-split coordinates, per TU [structural]:
+
+- `MachineDaemon.cpp` 43/44/45 (logExecuteRejected attrs + "machine.execute.rejected" warn),
+  90/91 (start "machine.daemon.started"), 113 (stop "machine.daemon.stopped"), 190/195
+  (relayArtifacts "machine.profile.relayed"), 456/458 (execute audit "machine.execute"),
+  544 ("machine.unknown_method" warn) — 22 arcs / 11 lines.
+- `MachineDaemonProcess.cpp` 127 (terminate args ternary
+  `parsed.ok ? std::to_string(...) : ""`), 188 ("machine.terminate" call) — 4 arcs / 2 lines.
+- `MachineDaemonSession.cpp` 102/103 (kick-session), 173/174 (list-sessions), 292/293
+  (kick-sessions), 406/407 (extend-sessions) attr+call pairs, 442/443 (draining nested
+  ternary), 474 ("machine.set-draining" call), 530 ("machine.shutdown" call),
+  573 ("machine.session.notify.dropped" warn) — 28 arcs / 13 lines.
+- `MachineDaemonDiagnostic.cpp` 93 ("machine.profile.trigger" call), 171 (profile-download
+  args ternary) — 4 arcs / 2 lines.
+- `MachineDaemonConfig.cpp` 53 (config.apply args concatenation
+  `parsed.key + "=" + parsed.value`), 102/103/104 ("machine.config.applied" attrs + call)
+  — 10 arcs / 4 lines.
+- `MachineDaemonDetail.cpp` 67/68/69 (rejectControlAction attrs + call) — 6 arcs / 3 lines.
+
+History: [2026-09-30 harvest] 77 arcs registered; [2026-10-01 reversal round] three structural
+arms closed out by added tests and removed (toBytes empty-string defensive arm; auditSink
+publish empty-identity skip arm; the `ok ? 0x01 : 0x00` false arm — ESRCH race semantics with a
+deterministic stand-in), 77→74; the same day the mechanism attribution was reversed from
+variant-noise/inline-noise to structural EH landing pads (instruction-level evidence), which
+this re-harvest re-confirms at the new coordinates.
 
 ### OtlpTraceExporter.cpp
 [2026-09-30 fifth batch of branch harvesting] Of the 21 registered gaps, 3 true arms were closed out by added tests:
@@ -129,6 +121,15 @@ directly testing postViaTcp added) — after re-sweeping the remainder, it is re
 - 96 the mid-iteration error arm [structural]: process disappearance/permission race cannot be stably injected
   (LCOV_EXCL region). [2026-10-01 follow-up round instruction-level endorsement] Across 3,768,066 iterations
   the error arm evaluated taken 0.
+- 105/106 the fd-close race arm (`if (linkError)` true arm and its `continue`)
+  [2026-11-15 G2-B round addition, structural platform window]: read_symlink fails only when the scanned
+  process closes an fd mid-scan — not stably injectable; under the PID-namespace sandbox /proc is quiet
+  and the true arm evaluated taken 0 across three full local rounds (4,151-8,836 iterations each), while
+  CI's real-host runner observes the race at least once per run (line gate 12502/12502, run 43626120187).
+  The `continue;` line carries an inline LCOV_EXCL_LINE since this round (same treatment as the 96
+  iteration-error arm, line gate only; inline so the 105/106 coordinates stay stable); the 105 true arm
+  remains a live registered branch gap. A local gate reading 12501/12502 = 99.9% before this round was
+  this arm, not a regression — do not pad tests.
 - 111 the `native.back() != ']'` true arm [structural]: /proc fd links are always well-formed
   (socket:[inode]), a malformed-form defense. [2026-10-01 follow-up round instruction-level endorsement]
   Across 3,487,977 reads the true arm's 2 arcs evaluated taken 0.

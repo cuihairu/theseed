@@ -102,8 +102,8 @@ std::uint16_t lookupPidPort(
 
         std::error_code linkError;
         const auto target = std::filesystem::read_symlink(entry.path(), linkError);
-        if (linkError) {  // fd 关闭竞态：跳过该 fd
-            continue;
+        if (linkError) {  // fd 关闭竞态：跳过该 fd（真臂登记台账 105/106）
+            continue;  // LCOV_EXCL_LINE 竞态窗口臂：沙箱 /proc 三轮并集恒 0，CI 真机命中
         }
 
         // 链接目标形如 "socket:[12345]"：前缀 8 字符、末尾 ']' 1 字符

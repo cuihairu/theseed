@@ -45,59 +45,52 @@ TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
 
 ## control
 
-### MachineDaemon.cpp
+### MachineDaemon 族（MachineDaemon.cpp + Process/Session/Diagnostic/Config/Detail）
 
-> [2026-11-14 G2 审计注] 2026-11-09 的拆分（commit 62fedfa）把本文件原有 1861 行
-> 重分布为 MachineDaemon.cpp（核心生命周期/分发）+ MachineDaemonProcess / Session /
-> Diagnostic / Config 四族 TU（逐字搬移，零逻辑改动）。下方行号为**拆分前坐标**——
-> 这 74 条 arc 现跨这五个 TU。按两轮并集基线重采归位待定（见 todo.md G2-B）；
-> 定性分类（结构性异常解栈 landing pad）继续适用。
+> [2026-11-15 G2-B 重采] 2026-11-09 的拆分（commit 62fedfa）把原单文件 1861 行
+> MachineDaemon.cpp 逐字搬移（零逻辑改动）为 `src/control/machine/` 下六个 TU。
+> 本轮按台账基线重采 74 弧：清扫 gcda 后连续两轮全量 ctest（125/125 全绿，
+> PID namespace），每轮后各留一份 gcovr 快照——两轮零弧集合完全一致（本轮无
+> 首轮伪缺口）。守恒精确：拆分前后均为 74 弧 / 35 行。本轮后门基准：
+> 12501 行 / 1721 函数双 100%（GATE_EXIT=0）、分支 9119/9347 信息性。
+> 并集集签名抽查与旧形态一致：全部缺口行已执行（最低 1 次，位于
+> machine.config.applied 行）、
+> 零弧全为成对 never 死块（attr+call 行 2/2 形、三目/拼接行 4/4 形）、无
+> throw 旗标零弧、语义臂两轮全走（Process:127 三目非零弧 11/4/4/4/11；
+> Session:442 嵌套三目 4/2/3/1/4/4/2/4/2；Config:53 拼接 10/1/10/10/1/1/
+> 10/10/1；Diagnostic:171 三目 6/4/6/4/4/6）。2026-10-01 的定性（结构性异常
+> 展开落地 pad；拆分前 171/373 死块的 objdump 背书——endbr64 + 构造完成
+> 标志 test/je + 条件 ~basic_string）原样沿用：同一批行、同一生成机制，
+> 只是坐标迁移。
 
-- 171-173/191-193/373-374/396/473/478/731/733/819/949/1010/1089/1167/
-  1241/1290-1292/1371-1372/1442-1443/1561-1562/1675-1676/1711-1712/
-  1743/1799/1842 [variant-noise / inline-noise]：log attr 行与三目/
-  字符串拼接汇合弧。【2026-09-30 重编】源文件在异步批量接线后行号
-  整体下移（171 起同值、362-363→373-374 与 385→396 为 +11、457 及
-  之后 +16），定性不变。【2026-10-01 复核】余 35 行全部满足噪声签名
-  （行已执行 + 存在 0 弧）；396 系 logInfo("machine.daemon.stopped")
-  行，其 0 弧对为 attr variant 未用替代的构造弧（字符串实参恒走
-  string 替代），stop() 守卫本身在 395 且 sink×身份四象限全测。
-   【2026-10-01 续轮指令级背书】gcov-14 -b -c 逐臂 taken 口径全 35 行
-   （74 弧）逐项甄别：全部存活非 throw 臂 taken 全 >0（无一条 taken 0
-   的语义真臂——无翻案候选，不硬造用例），全部零弧皆 never executed
-   死块。按死块来源拆分定类：variant-noise 60 弧——LogAttribute 单值
-   构造行（171/172/191/192/373/473/731/1290/1291/1371/1442/1561/1675：
-   branches 6/7 + call 8 死块，即未用 variant 替代构造）与 log 调用
-   行（173/193/374/396/478/733/819/1010/1089/1292/1372/1443/1562/
-   1676/1743/1799/1842：calls 14/15 + branches 16/17 + call 18 死块，
-   1712 为三目续行形态略异但同属死块）；inline-noise 14 弧——三目/
-   字符串拼接行（949/1167 各 2 弧为 to_string 侧 SSO/堆副本死块，
-   三目真/假语义臂 22/8 与 12/8 全走；1241 四弧为 key+"="+value 拼接
-   双死块，三目 20/2 全走；1711 四弧 + 1712 两弧为 draining 嵌套三目，
-   parsed 8/4 与 draining 6/2 全走）。行执行计数最低 2 次（1290/
-   1291），余皆 ≥6。
-   【2026-10-01 续轮复核：74 弧机制翻案，variant-noise/inline-noise →
-   structural】上款逐臂 taken 计数事实不变（语义臂全 >0、零弧全
-   never），"未用 variant 替代/SSO 副本"机制归因不成立——objdump
-   指令级实证 74 弧全部为异常展开落地 pad（EH landing pad 清理分派）：
-   attr 行 variant 转换构造系 out-of-line call（170→20b7a8、171→
-   20e78c），库体不归因本行，且转换构造编译期定型、未用替代不生成码；
-   log 调用行本行无任何 variant 构造，死块 calls 14/15/18 内容为
-   ~vector/~LogAttribute/~basic_string 条件析构、位于 endbr64 pad
-   入口区；三目/拼接行无 variant，SSO/拷贝判据若在正常流必产生
-   taken 0 弧对，实测行内零弧全为成对 never、无一条非 throw 的
-   taken 0（无守卫可挡）。171（1e5683）与 373（1e88cd）死块指令级
-   同构 = endbr64 + r12b 构造完成标志 test/je + 条件 ~basic_string，
-   仅当语句内抛出 bad_alloc 级异常、栈展开清理已构造临时量时执行，
-   测试不可注入。74 弧登记不变，类别改判 structural 异常路径；
-   同签名 variant-noise 行（TickDiagnostics 39 等）机制同疑，留待
-   下轮逐文件重审。
-【2026-10-01 翻案】原三条结构臂补测收口移出：25 toBytes 空串防御臂
-（空载荷剖面下载——EmptyPayloadProfiler 真 + 空串驱动 memcpy 跳过，
-响应合法零字节）、545 auditSink publish 空身份跳过臂（空 hostname 假
-agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0x00`
-假臂（假 agent 处置恒失败——ESRCH 竞态语义的确定性替身，0x00 响应
-可及；"恒竞态不可稳定注入"论断不成立）。
+拆分后坐标，按 TU [structural]：
+
+- `MachineDaemon.cpp` 43/44/45（logExecuteRejected attr + "machine.execute.rejected"
+  warn）、90/91（start "machine.daemon.started"）、113（stop
+  "machine.daemon.stopped"）、190/195（relayArtifacts "machine.profile.relayed"）、
+  456/458（execute 审计 "machine.execute"）、544（"machine.unknown_method"
+  warn）——22 弧 / 11 行。
+- `MachineDaemonProcess.cpp` 127（terminate args 三目
+  `parsed.ok ? std::to_string(...) : ""`）、188（"machine.terminate" 调用）
+  ——4 弧 / 2 行。
+- `MachineDaemonSession.cpp` 102/103（kick-session）、173/174（list-sessions）、
+  292/293（kick-sessions）、406/407（extend-sessions）attr+call 对、442/443
+  （draining 嵌套三目）、474（"machine.set-draining" 调用）、530
+  （"machine.shutdown" 调用）、573（"machine.session.notify.dropped" warn）
+  ——28 弧 / 13 行。
+- `MachineDaemonDiagnostic.cpp` 93（"machine.profile.trigger" 调用）、171
+  （profile-download args 三目）——4 弧 / 2 行。
+- `MachineDaemonConfig.cpp` 53（config.apply args 拼接 `parsed.key + "=" +
+  parsed.value`）、102/103/104（"machine.config.applied" attr + 调用）——
+  10 弧 / 4 行。
+- `MachineDaemonDetail.cpp` 67/68/69（rejectControlAction attr + 调用）——
+  6 弧 / 3 行。
+
+沿革：[2026-09-30 收割] 登记 77 弧；[2026-10-01 翻案轮] 三条结构臂补测收口
+移出（toBytes 空串防御臂；auditSink publish 空身份跳过臂；`ok ? 0x01 : 0x00`
+假臂——ESRCH 竞态语义的确定性替身），77→74；同日机制归因从 variant-noise/
+inline-noise 翻案为 structural EH 落地 pad（指令级实证），本轮在新坐标复核
+同一结论。
 
 ### OtlpTraceExporter.cpp
 【2026-09-30 第五批分支收割】21 条登记缺口中 3 条真臂已补测收口：
@@ -128,6 +121,15 @@ agent + 双 sink，发布跳过且中心环形保持空）、1011 `ok ? 0x01 : 0
 - 96 迭代中途 error 臂 [structural]：进程消失/权限竞态不可稳定注入
   （LCOV_EXCL 区）。【2026-10-01 续轮指令级背书】3,768,066 次迭代
   评估 error 臂 taken 0。
+- 105/106 fd 关闭竞态臂（`if (linkError)` 真臂及其 `continue`）
+  【2026-11-15 G2-B 轮补登，structural 平台窗口】：仅当被扫进程在扫描中途
+  关闭 fd 时 read_symlink 才失败——不可稳定注入；PID namespace 沙箱
+  /proc 安静，本地三轮全量真臂 taken 恒 0（每轮 4,151-8,836 次迭代），
+  CI 真机每轮至少命中一次（行门 12502/12502，run 43626120187）。本轮起
+  `continue;` 行加行内 LCOV_EXCL_LINE（与 96 中途出错臂同待遇，仅豁免
+  行门；取行内形态以固定 105/106 坐标）；105 真臂保持为在册活性分支
+  缺口。本轮之前本地行门读 12501/12502=99.9% 即本臂所致，非回归——
+  勿补测试。
 - 111 `native.back() != ']'` 真臂 [structural]：/proc fd 链接恒规范
   （socket:[inode]），畸形形态防御。【2026-10-01 续轮指令级背书】
   3,487,977 次读取评估真臂 2 弧 taken 0。
