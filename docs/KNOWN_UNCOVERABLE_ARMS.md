@@ -141,12 +141,15 @@ directly testing postViaTcp added) — after re-sweeping the remainder, it is re
   iteration-error arm, line gate only; inline so the 105/106 coordinates stay stable); the 105 true arm
   remains a live registered branch gap. A local gate reading 12501/12502 = 99.9% before this round was
   this arm, not a regression — do not pad tests.
-  [2026-11-15 endorsement boundary] The inline-marker endorsement above is empirical **for gcovr 8.6 only**
-  (the local two-round union gate). CI installs gcovr unpinned (`pipx install gcovr`, build.yml) and was at
-  **8.8** when the 12501/12501 baseline was produced (run 43671280096); the marker is not independently
-  exercised on CI, because on the real host the arm is taken and line 106 is covered regardless of the
-  exemption. If CI's gcovr ever stops honoring inline `LCOV_EXCL_LINE`, the local 8.6 gate stays green and
-  only the CI line count would move — pin the version before assuming parity.
+  [2026-11-15 endorsement boundary] CI installs gcovr unpinned (`pipx install gcovr`, build.yml:55) and was
+  at **8.8** when the 12501/12501 baseline was produced (run 43671280096), while the local gate is 8.6 — so
+  parity had to be checked, not assumed. It was: on the same gcc-coverage gcda, gcovr 8.8 and 8.6 both report
+  lines 12501/12501, functions 1721/1721, branches 9119/9347, GATE_EXIT=0 (2026-11-21 local cross-version
+  check). This is a genuine test of the marker, not a coincidence: under the PID-namespace sandbox the arm is
+  not taken, so `continue;` carries count 0, and had 8.8 ignored the inline `LCOV_EXCL_LINE` the line count
+  would have read 12501/12502 = 99.9%. Verified for 8.6 and 8.8; the version is still unpinned in CI, so a
+  future gcovr change could move only the CI line count — re-run the two-version comparison if the CI line
+  count ever drops by one.
 - 111 the `native.back() != ']'` true arm [structural]: /proc fd links are always well-formed
   (socket:[inode]), a malformed-form defense. [2026-10-01 follow-up round instruction-level endorsement]
   Across 3,487,977 reads the true arm's 2 arcs evaluated taken 0.
@@ -158,7 +161,7 @@ directly testing postViaTcp added) — after re-sweeping the remainder, it is re
   (setrlimit lowering RLIMIT_NOFILE to inject fd exhaustion; a 70KB loopback reply to inject read-loop out-of-bounds truncation —
   the total-size guard's semantics are precisely a fallback for abnormally large responses), with the two LCOV_EXCL regions in the source
   removed and the two lines converted to real tests, and subsequent line numbers shifted by -2 (this entry's line numbers are already calibrated to the new source).
-  The erratum that inline exemptions are effective for gcovr 8.6 (2026-09-30 batch, see todo.md for details)
+  The erratum that inline exemptions are effective for gcovr 8.6–8.8 (2026-09-30 batch, see todo.md for details)
   is unchanged: the registry remains a qualitative/endorsement ledger, not the sole basis for gcovr exclusion. [2026-10-01
   follow-up round instruction-level endorsement] Line 187 across 26 evaluations has 3 arcs, and 142/212/219/238 with 1 arc each
   all evaluated taken 0.
