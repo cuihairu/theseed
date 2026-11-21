@@ -141,6 +141,12 @@ directly testing postViaTcp added) — after re-sweeping the remainder, it is re
   iteration-error arm, line gate only; inline so the 105/106 coordinates stay stable); the 105 true arm
   remains a live registered branch gap. A local gate reading 12501/12502 = 99.9% before this round was
   this arm, not a regression — do not pad tests.
+  [2026-11-15 endorsement boundary] The inline-marker endorsement above is empirical **for gcovr 8.6 only**
+  (the local two-round union gate). CI installs gcovr unpinned (`pipx install gcovr`, build.yml) and was at
+  **8.8** when the 12501/12501 baseline was produced (run 43671280096); the marker is not independently
+  exercised on CI, because on the real host the arm is taken and line 106 is covered regardless of the
+  exemption. If CI's gcovr ever stops honoring inline `LCOV_EXCL_LINE`, the local 8.6 gate stays green and
+  only the CI line count would move — pin the version before assuming parity.
 - 111 the `native.back() != ']'` true arm [structural]: /proc fd links are always well-formed
   (socket:[inode]), a malformed-form defense. [2026-10-01 follow-up round instruction-level endorsement]
   Across 3,487,977 reads the true arm's 2 arcs evaluated taken 0.
