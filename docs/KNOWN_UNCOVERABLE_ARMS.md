@@ -36,6 +36,17 @@ sweep — the current two-round union gate actually measures those 12 line arc p
 the gap; the total gap stays at 192 (gate branches 8826/9018, lines 12215/functions 1689
 double 100%, GATE_EXIT=0).
 
+[2026-11-15 G2-B re-baseline] Gate denominators as of the 2026-11-09 daemon split plus this round's
+ProcessPortScanner 105/106 inline exclusion: **lines 12501/12501 and functions 1721/1721, double 100%
+(GATE_EXIT=0)**; branches informational at 9119/9347 (local two-round union; gcc-coverage tree configured
+at CI parity: gcc-14 + CMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON). Reproduced on CI at run 43671280096
+(12501/12501, 1721/1721, branches 9116/9343). The 4-arc branch-denominator delta between local (9347) and
+CI (9343) is pre-existing (also present at baee29a) and was not chased — branch is informational. Scope note
+for the figures above: only the six MachineDaemon family TUs were re-measured this round, so the other
+entries keep their 2026-10-01 coordinates and arc counts un-re-measured; and the gcda snapshots were not
+retained, so the "total gap 192" figure above remains the 2026-10-01 basis and is **not** today's count —
+do not read it as current.
+
 Categories: `variant-noise` (the 0-pairs of LogAttribute::Value's four-way std::variant conversion construction
 attributed to the calling line, inlined by the gcc library); `inline-noise` (std-library inlined mechanical
 arcs: hash buckets / string SSO copies / ternary merge copies); `structural` (structurally

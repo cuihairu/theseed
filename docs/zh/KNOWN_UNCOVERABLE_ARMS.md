@@ -36,6 +36,16 @@ TickDiagnostics 39、TcpConnection 116、LoginApp 结构组、Scanner 平台
 缺口；总缺口维持 192（门禁 branches 8826/9018、行 12215/函数 1689
 双 100%、GATE_EXIT=0）。
 
+【2026-11-15 G2-B 重基】本轮（2026-11-09 daemon 拆分 + 本轮
+ProcessPortScanner 105/106 行内豁免）后的门禁分母：**行 12501/12501、
+函数 1721/1721 双 100%（GATE_EXIT=0）**；分支信息性口径 9119/9347（本地两轮并集；
+gcc-coverage 树按 CI parity 配置：gcc-14 +
+CMAKE_DISABLE_FIND_PACKAGE_PostgreSQL=ON）。CI run 43671280096 复现同值
+（12501/12501、1721/1721、分支 9116/9343）。本地 9347 与 CI 9343 的 4 弧分母差系
+既有偏差（baee29a 已见），本轮未追——分支为信息性口径。上方数字的口径范围：本轮
+仅重测 MachineDaemon 族六个 TU，其余条目仍为 2026-10-01 坐标与弧数、未重测；
+gcda 快照未留存，故上文「总缺口 192」仍是 2026-10-01 基线、**非今日计数**——勿当现值读。
+
 类别：`variant-noise`（LogAttribute::Value 四路 std::variant 转换构造
 被归因到调用行的 0-对，gcc 库内联）；`inline-noise`（std 库内联机械
 弧：hash 桶/字符串 SSO 副本/三目汇合副本）；`structural`（结构性不
